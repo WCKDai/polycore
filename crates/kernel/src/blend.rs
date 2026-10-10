@@ -785,6 +785,14 @@ pub fn chamfer(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
             return Ok(r);
         }
     }
+    // At a pocket rim the cutters cannot extend beyond the selected edges. Rebuild
+    // the corners locally, allowing adjacent chamfers to reach different depths
+    // on their common wall seam.
+    if edges.len() > 1
+        && let Ok(result) = crate::blend_corner::chamfer(body, edges, distance)
+    {
+        return Ok(result);
+    }
     // Coplanar neighbours as one face (as after a join), so corners look as they should.
     let mut cur = Body::new(crate::heal::heal_keep(body.deep_copy(), body.size(), body.split_keep()))?;
     if let Some(groups) = loop_groups(&cur, edges)? {

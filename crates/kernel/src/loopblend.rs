@@ -270,7 +270,7 @@ fn build(
         if !(phi > 1e-3 && phi < std::f64::consts::PI - 1e-3) {
             return None;
         }
-        let sb = r / (phi / 2.0).tan();
+        let sb = if round { r / (phi / 2.0).tan() } else { r };
         Some((m, t, sb, r / (phi / 2.0).sin()))
     };
     // The straight seam between the walls at a sharp joint (direction away from the face).
@@ -327,6 +327,19 @@ fn build(
             return Err(unsupported("a sharp corner whose walls meet the blend differently"));
         }
         pb.push(p + e * (sb / h1));
+    }
+    // Sharp joints between straight rim edges can extend beyond the old corner.
+    // Equal wall slopes reach this path instead of the corner builder, and must
+    // also reject an extension through the outer wall or another hole.
+    for (i, q) in pa.iter().enumerate() {
+        // Smooth arc transitions and open-run ends retain their existing checks.
+        if !mitre.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let p = joint_point(i).ok_or_else(|| unsupported("degenerate loop joint"))?;
+        if !crate::blend::extension_fits(f, p, *q, size * 1e-7) {
+            return Err(unsupported("the blend is larger than the neighbouring faces"));
+        }
     }
     // The offset arcs must not turn inside out; an arc of exactly the blend's radius shrinks
     // to a point (a rounded corner rounded again: the blend there is a sphere).
