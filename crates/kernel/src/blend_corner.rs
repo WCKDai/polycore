@@ -1,7 +1,7 @@
 //! Fillets with a radius per edge, and the corners where filleted edges meet.
 //!
 //! The edges are straight and convex, and every face at their end vertices is planar with three
-//! edges meeting at each such vertex (box-like corners). The faces there are rebuilt around the
+//! edges meeting at each such vertex, including reflex corners of pocket rims. The faces there are rebuilt around the
 //! blends, faces away from them are kept. At a vertex:
 //! - one filleted edge ends on the third face: the blend ends in that face's section of the
 //!   cylinder (an exact arc or ellipse);
@@ -112,7 +112,7 @@ fn edge(a: &mt::Vertex, b: &mt::Vertex, c: mt::Curve) -> Result<mt::Edge> {
 /// along `u`.
 fn hit(v: Vec3, u: Vec3, t: Vec3, s: f64) -> Result<Vec3> {
     let k = u.dot(t);
-    if k < 1e-6 {
+    if k.abs() < 1e-6 {
         return Err(unsupported("a fillet that runs along its neighbouring edge"));
     }
     Ok(v + u * (s / k))
@@ -122,8 +122,8 @@ fn hit(v: Vec3, u: Vec3, t: Vec3, s: f64) -> Result<Vec3> {
 /// directions `t1`, `t2`, setbacks `s1`, `s2`) cross.
 fn meet(v: Vec3, (u1, t1, s1): (Vec3, Vec3, f64), (u2, t2, s2): (Vec3, Vec3, f64)) -> Result<Vec3> {
     let (k1, k2) = (u1.dot(t2), u2.dot(t1));
-    if k1 < 1e-6 || k2 < 1e-6 {
-        return Err(unsupported("fillets of edges that meet at a reflex corner"));
+    if k1.abs() < 1e-6 || k2.abs() < 1e-6 {
+        return Err(unsupported("fillets of nearly parallel edges at a corner"));
     }
     Ok(v + u1 * (s2 / k1) + u2 * (s1 / k2))
 }
@@ -311,14 +311,27 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
             let rest: Vec<(mt::EdgeID, Vec3)> = ar.edges.iter().filter(|(id, _)| !sels.contains_key(id)).copied().collect();
             chosen.sort_by_key(|(id, _)| order.iter().position(|x| x == id));
             let sel = |id: mt::EdgeID| sels.get(&id).ok_or_else(|| KernelError::Failed("fillet".into()));
+            // At an inner rim a contact line can extend the next edge backwards.
+            // Its new endpoint must remain in the trimmed face, including its holes.
+            let check_extension = |q: Vec3, fi: usize| -> Result<Vec3> {
+                let face = faces.get(fi).ok_or_else(|| KernelError::Failed("face".into()))?;
+                if !crate::blend::extension_fits(face, v, q, size * 1e-7) {
+                    return Err(unsupported("a fillet larger than the faces next to it"));
+                }
+                Ok(q)
+            };
+            let hit = |u: Vec3, t: Vec3, s: f64, fi: usize| -> Result<Vec3> {
+                let q = hit(v, u, t, s)?;
+                if u.dot(t) < 0.0 { check_extension(q, fi) } else { Ok(q) }
+            };
             let list = pool.entry(*vid).or_default();
             match (&chosen[..], &rest[..]) {
                 ([(e1, _)], [(e2, u2), (e3, u3)]) => {
                     let s1 = sel(*e1)?;
                     let (f12, f31) = (face_with(*e1, *e2)?, face_with(*e1, *e3)?);
                     let f23 = face_with(*e2, *e3)?;
-                    let p2 = hit(v, *u2, s1.t(f12), s1.s)?;
-                    let p3_ = hit(v, *u3, s1.t(f31), s1.s)?;
+                    let p2 = hit(*u2, s1.t(f12), s1.s, f12)?;
+                    let p3_ = hit(*u3, s1.t(f31), s1.s, f31)?;
                     let (a, b) = (builder::vertex(p3(p2)), builder::vertex(p3(p3_)));
                     endpt.insert((*e2, *vid, None), a.clone());
                     endpt.insert((*e1, *vid, Some(f12)), a.clone());
@@ -332,9 +345,12 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
                     let fab = face_with(*ea, *eb)?;
                     let (fb3, fa3) = (face_with(*eb, *e3)?, face_with(*ea, *e3)?);
                     let q = meet(v, (*ua, sa.t(fab), sa.s), (*ub, sb.t(fab), sb.s))?;
+                    if ua.dot(sb.t(fab)) < 0.0 || ub.dot(sa.t(fab)) < 0.0 {
+                        check_extension(q, fab)?;
+                    }
                     // Where each cylinder touches the third edge.
-                    let xb = hit(v, *u3, sb.t(fb3), sb.s)?;
-                    let xa = hit(v, *u3, sa.t(fa3), sa.s)?;
+                    let xb = hit(*u3, sb.t(fb3), sb.s, fb3)?;
+                    let xa = hit(*u3, sa.t(fa3), sa.s, fa3)?;
                     let qv = builder::vertex(p3(q));
                     endpt.insert((*ea, *vid, Some(fab)), qv.clone());
                     endpt.insert((*eb, *vid, Some(fab)), qv.clone());
@@ -354,7 +370,7 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)]) -> Result<Body> {
                             if lb > la { (sb, sa, *ua, fb3, fa3, *eb, *ea, xb) } else { (sa, sb, *ub, fa3, fb3, *ea, *eb, xa) };
                         // The big cylinder's section by the small one's end face: from the third
                         // edge to the small edge's line, where it crosses the small contact line.
-                        let z = hit(v, us, big.t(fab), big.s)?;
+                        let z = hit(us, big.t(fab), big.s, fab)?;
                         let mut sec = conic(x, v, z, big.w);
                         let tt = small.t(fsmall3);
                         let c0 = (x - v).dot(tt) - small.s;
@@ -1085,5 +1101,53 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(fillet_radii(&l, &[(Vec3::new(10.0, 10.0, 10.0), 1.0), (c, 2.0)]).is_err());
+    }
+
+    #[test]
+    fn sloped_basin_rim_fillets() {
+        use solvecraft_geom::{Loop2, Plane, Vec2};
+        let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+        let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
+        let pocket =
+            crate::loft(&[(Plane::XY.offset(30.0), rectangle(20.0, 4.0, 80.0, 50.0)), (Plane::XY.offset(10.0), rectangle(30.0, 20.0, 70.0, 40.0))])
+                .unwrap();
+        let basin = crate::boolean(&slab, &pocket, crate::BoolOp::Cut).unwrap().unwrap();
+        let picks = [Vec3::new(50.0, 4.0, 30.0), Vec3::new(80.0, 27.0, 30.0), Vec3::new(50.0, 50.0, 30.0), Vec3::new(20.0, 27.0, 30.0)];
+        for count in 1..=4 {
+            let result = fillet(&basin, &picks[..count], 2.0).unwrap();
+            assert!(result.validity().is_empty());
+            assert_eq!(result.unmeshed_faces(), 0);
+            assert!(vol(&result) < vol(&basin));
+            let mesh = result.tessellate(0.01).unwrap();
+            assert!(mesh.contains(Vec3::new(50.0, 2.0, 27.0)));
+            assert!(!mesh.contains(Vec3::new(50.0, 3.9, 29.99)));
+            // The small blend removes only a strip at the rim, and never escapes
+            // the slab. Topology checks alone do not catch crossed faces.
+            assert!(vol(&basin) - vol(&result) < 2.0_f64.powi(2) * (60.0 + 46.0) * 2.0);
+            for v in result.solid.vertex_iter() {
+                let p = vtx(&v);
+                assert!(p.x >= 0.0 && p.x <= 100.0 && p.y >= 0.0 && p.y <= 60.0 && p.z >= 0.0 && p.z <= 30.0 + 1e-8);
+            }
+        }
+    }
+
+    #[test]
+    fn sloped_rim_fillets_cannot_extend_outside_the_material() {
+        use solvecraft_geom::{Loop2, Plane, Vec2};
+        for margin in [0.5, 1.0] {
+            let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+            let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
+            let pocket = crate::loft(&[
+                (Plane::XY.offset(30.0), rectangle(20.0, margin, 80.0, 50.0)),
+                (Plane::XY.offset(10.0), rectangle(30.0, 20.0, 70.0, 40.0)),
+            ])
+            .unwrap();
+            let basin = crate::boolean(&slab, &pocket, crate::BoolOp::Cut).unwrap().unwrap();
+            let picks = [Vec3::new(50.0, margin, 30.0), Vec3::new(80.0, 27.0, 30.0), Vec3::new(50.0, 50.0, 30.0), Vec3::new(20.0, 27.0, 30.0)];
+            for count in [1, 2, 4] {
+                assert!(fillet(&basin, &picks[..count], 4.0).is_err());
+                assert!(fillet(&basin, &picks[..count], margin * 0.5).is_ok());
+            }
+        }
     }
 }

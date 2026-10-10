@@ -134,7 +134,7 @@ fn setback(r: f64, phi: f64, shape: Shape) -> f64 {
 /// An extended corner edge must stay in the trimmed side face, not just its infinite
 /// supporting plane. Reject crossings and contact with any boundary after the old corner,
 /// including holes. Curved boundaries are sampled more finely than the clearance tolerance.
-fn chamfer_extension_fits(face: &mt::Face, p: Vec3, q: Vec3, tol: f64) -> bool {
+pub(crate) fn extension_fits(face: &mt::Face, p: Vec3, q: Vec3, tol: f64) -> bool {
     use mt::{BoundedCurve, ParameterDivision1D};
     // truck requires a curve sampling tolerance of at least 1e-6. Keep the
     // boundary clearance four times larger than the chord approximation error.
@@ -260,7 +260,7 @@ fn blend_geometry(
             // vertex. This is valid only within the trimmed side face.
             if (q - p - dir * along).len() > tol * 100.0 + 1e-7
                 || along >= len - tol
-                || (along < 0.0 && !faces.get(fi).is_some_and(|f| chamfer_extension_fits(f, p, q, tol)))
+                || (along < 0.0 && !faces.get(fi).is_some_and(|f| extension_fits(f, p, q, tol)))
             {
                 return Err(unsupported("the blend is larger than the neighbouring faces"));
             }
@@ -961,7 +961,7 @@ mod tests {
         for plane in [Plane::XY, Plane::XZ] {
             let face = crate::build::face(&plane, &region).unwrap();
             let p = plane.to_world(Vec2::new(4.0, 4.0));
-            let fits = |y| chamfer_extension_fits(&face, p, plane.to_world(Vec2::new(4.0, y)), 1e-6);
+            let fits = |y| extension_fits(&face, p, plane.to_world(Vec2::new(4.0, y)), 1e-6);
             assert!(fits(2.0));
             assert!(!fits(1.5)); // endpoint in the circular hole
             assert!(!fits(0.5)); // endpoint in material, but the extension crossed the hole
