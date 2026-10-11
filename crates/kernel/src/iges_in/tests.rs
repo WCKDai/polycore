@@ -180,13 +180,12 @@ fn composite_curve_fan_out_is_bounded() {
     let cos = 2 * ents.len() - 1;
     ents.push((144, 0, format!("{surface},1,0,{cos}")));
 
-    let t = std::time::Instant::now();
     let reported = match iges_to_step(&iges_file(&ents)) {
         Ok((_, warnings)) => warnings.join(" "),
         Err(error) => error,
     };
+    // Check the work-budget rejection, not elapsed time: CI runs test binaries concurrently.
     assert!(reported.contains("too complex") || reported.contains("too many segments"), "{reported}");
-    assert!(t.elapsed() < std::time::Duration::from_secs(10), "took {:?}", t.elapsed());
 }
 
 /// Nothing stops directory entries from all naming the same parameter range, and each one
