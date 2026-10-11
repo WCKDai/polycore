@@ -1,3 +1,4 @@
+use super::history::{History, Lineage};
 use super::*;
 use truck_geometry::prelude::IntersectionCurve;
 use truck_meshalgo::prelude::*;
@@ -51,6 +52,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     shell0: &Shell<Point3, C, S>,
     shell1: &Shell<Point3, C, S>,
     tol: f64,
+    lineage: &mut Lineage<C, S>,
 ) -> Option<[Shell<Point3, C, S>; 2]> {
     nonpositive_tolerance!(tol);
     // SolveCraft: robust meshing (boundaries from earlier operations lie on surfaces only
@@ -61,10 +63,10 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         geom_loops_store0: loops_store0,
         geom_loops_store1: loops_store1,
         ..
-    } = crate::tr!(loops_store::create_loops_stores(shell0, &poly_shell0, shell1, &poly_shell1, tol), "loops stores");
-    let mut cls0 = crate::tr!(divide_face::divide_faces(shell0, &loops_store0, tol), "divide faces 0");
+    } = crate::tr!(loops_store::create_loops_stores(shell0, &poly_shell0, shell1, &poly_shell1, tol, lineage), "loops stores");
+    let mut cls0 = crate::tr!(divide_face::divide_faces(shell0, &loops_store0, tol, lineage), "divide faces 0");
     cls0.integrate_by_component();
-    let mut cls1 = crate::tr!(divide_face::divide_faces(shell1, &loops_store1, tol), "divide faces 1");
+    let mut cls1 = crate::tr!(divide_face::divide_faces(shell1, &loops_store1, tol, lineage), "divide faces 1");
     cls1.integrate_by_component();
     let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
     unknown0.into_iter().try_for_each(|face| {
@@ -109,21 +111,7 @@ pub fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<Solid<Point3, C, S>> {
-    let mut iter0 = solid0.boundaries().iter();
-    let mut iter1 = solid1.boundaries().iter();
-    let shell0 = iter0.next()?;
-    let shell1 = iter1.next()?;
-    let [mut and_shell, _] = process_one_pair_of_shells(shell0, shell1, tol)?;
-    for shell in iter0 {
-        let [res, _] = process_one_pair_of_shells(&and_shell, shell, tol)?;
-        and_shell = res;
-    }
-    for shell in iter1 {
-        let [res, _] = process_one_pair_of_shells(&and_shell, shell, tol)?;
-        and_shell = res;
-    }
-    let boundaries = components_in_order(&and_shell);
-    Solid::try_new(boundaries).ok()
+    boolean(solid0, solid1, tol, |[and, _]| and).map(|(solid, _)| solid)
 }
 
 /// OR operation between two solids.
@@ -132,21 +120,54 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<Solid<Point3, C, S>> {
+    boolean(solid0, solid1, tol, |[_, or]| or).map(|(solid, _)| solid)
+}
+
+/// SolveCraft: AND operation between two solids, with where each face and edge of the result
+/// came from (operand 0 is `solid0`, operand 1 is `solid1`). The operands must not share faces
+/// or edges.
+pub fn and_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    solid0: &Solid<Point3, C, S>,
+    solid1: &Solid<Point3, C, S>,
+    tol: f64,
+) -> Option<(Solid<Point3, C, S>, History)> {
+    let (solid, history) = boolean(solid0, solid1, tol, |[and, _]| and)?;
+    Some((solid, history?))
+}
+
+/// SolveCraft: OR operation between two solids, with where each face and edge of the result
+/// came from (operand 0 is `solid0`, operand 1 is `solid1`). The operands must not share faces
+/// or edges.
+pub fn or_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    solid0: &Solid<Point3, C, S>,
+    solid1: &Solid<Point3, C, S>,
+    tol: f64,
+) -> Option<(Solid<Point3, C, S>, History)> {
+    let (solid, history) = boolean(solid0, solid1, tol, |[_, or]| or)?;
+    Some((solid, history?))
+}
+
+/// Combines the operands' first shells, then folds in their other shells one at a time
+/// (`pick` chooses the AND or the OR shell of each pass). The history is `None` when a face or
+/// edge of the result was not recorded; the result stands without it.
+fn boolean<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+    solid0: &Solid<Point3, C, S>,
+    solid1: &Solid<Point3, C, S>,
+    tol: f64,
+    pick: fn([Shell<Point3, C, S>; 2]) -> Shell<Point3, C, S>,
+) -> Option<(Solid<Point3, C, S>, Option<History>)> {
+    let mut lineage = Lineage::new([solid0, solid1]);
     let mut iter0 = solid0.boundaries().iter();
     let mut iter1 = solid1.boundaries().iter();
     let shell0 = iter0.next()?;
     let shell1 = iter1.next()?;
-    let [_, mut or_shell] = process_one_pair_of_shells(shell0, shell1, tol)?;
-    for shell in iter0 {
-        let [_, res] = process_one_pair_of_shells(&or_shell, shell, tol)?;
-        or_shell = res;
+    let mut shell = pick(crate::tr!(process_one_pair_of_shells(shell0, shell1, tol, &mut lineage), "first shells"));
+    for other in iter0.chain(iter1) {
+        shell = pick(crate::tr!(process_one_pair_of_shells(&shell, other, tol, &mut lineage), "another shell"));
     }
-    for shell in iter1 {
-        let [_, res] = process_one_pair_of_shells(&or_shell, shell, tol)?;
-        or_shell = res;
-    }
-    let boundaries = components_in_order(&or_shell);
-    Solid::try_new(boundaries).ok()
+    let solid = crate::tr!(Solid::try_new(components_in_order(&shell)).ok(), "result solid");
+    let history = lineage.history(&solid);
+    Some((solid, history))
 }
 
 // SolveCraft: truck's connected components come out in hash order of face addresses, so the

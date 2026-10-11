@@ -33,7 +33,10 @@ pub(crate) use tr;
 mod healing;
 pub use healing::{RobustSplitClosedEdgesAndFaces, SplitClosedEdgesAndFaces};
 mod transversal;
-pub use transversal::{and, or, ShapeOpsCurve, ShapeOpsSurface};
+pub use transversal::{
+    and, and_with_history, or, or_with_history, EdgeOrigin, FaceIndex, FaceOrigin, History, ShapeOpsCurve,
+    ShapeOpsSurface,
+};
 // SolveCraft: exercised by kernel regressions in the workspace CI.
 #[doc(hidden)]
 pub use transversal::IntersectionCurveWithParameters;
