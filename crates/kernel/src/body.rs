@@ -33,9 +33,25 @@ pub struct Body {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FaceSource {
-    ExtrudeSide { segment: solvecraft_geom::Seg2 },
-    CertifiedExtrudeSide { producer: u64, sketch: u64, curve: String },
+    ExtrudeSide { segment: solvecraft_geom::Seg2, plane: Option<solvecraft_geom::Plane> },
+    CertifiedExtrudeSide { producer: u64, sketch: u64, curve: String, plane: Option<solvecraft_geom::Plane> },
+    ExtrudeCap { high: bool, region: solvecraft_geom::Region2, plane: solvecraft_geom::Plane },
+    CertifiedExtrudeCap { producer: u64, sketch: u64, high: bool, outer: Vec<String>, holes: Vec<Vec<String>>, plane: solvecraft_geom::Plane },
+    Box { producer: Option<u64>, axis: u8, high: bool, plane: solvecraft_geom::Plane },
     Imported { item: u64, face: u64, payload_sha256: Option<String>, producer: Option<u64> },
+}
+
+pub type CapSignature = (Vec<String>, Vec<Vec<String>>);
+type FaceSources = std::sync::Arc<Vec<Option<FaceSource>>>;
+
+impl FaceSource {
+    fn plane_mut(&mut self) -> Option<&mut solvecraft_geom::Plane> {
+        match self {
+            Self::ExtrudeSide { plane, .. } | Self::CertifiedExtrudeSide { plane, .. } => plane.as_mut(),
+            Self::ExtrudeCap { plane, .. } | Self::CertifiedExtrudeCap { plane, .. } | Self::Box { plane, .. } => Some(plane),
+            Self::Imported { .. } => None,
+        }
+    }
 }
 
 /// How a body looks beyond its colour, for export: its opacity and its faces' own colours.
@@ -342,6 +358,131 @@ impl Body {
         self.face_sources.as_deref().map(Vec::as_slice)
     }
 
+    /// An exact construction/import plane; never inferred from tessellation.
+    pub fn face_plane(&self, index: usize) -> Option<solvecraft_geom::Plane> {
+        if index >= 50_000 {
+            return None;
+        }
+        let source = self.face_sources()?.get(index)?.as_ref()?;
+        match source {
+            FaceSource::ExtrudeSide { plane, .. } | FaceSource::CertifiedExtrudeSide { plane, .. } => *plane,
+            FaceSource::ExtrudeCap { plane, .. } | FaceSource::CertifiedExtrudeCap { plane, .. } | FaceSource::Box { plane, .. } => Some(*plane),
+            FaceSource::Imported { .. } => self.planar_face(index),
+        }
+    }
+
+    /// Exact current planar surface for an explicitly fixed snapshot, without source lineage.
+    pub fn planar_face(&self, index: usize) -> Option<solvecraft_geom::Plane> {
+        if index >= 50_000 {
+            return None;
+        }
+        guard("exact planar face", || {
+            let plane = self.solid.face_iter().nth(index).and_then(|face| match face.oriented_surface() {
+                mt::Surface::Plane(plane) => {
+                    let u = plane.u_axis();
+                    let v = plane.v_axis();
+                    solvecraft_geom::Plane::new(from_p3(plane.origin()), Vec3::new(u.x, u.y, u.z), Vec3::new(v.x, v.y, v.z))
+                }
+                _ => None,
+            });
+            Ok(plane)
+        })
+        .ok()
+        .flatten()
+    }
+
+    pub fn with_box_certificate(mut self, producer: u64) -> Result<Self> {
+        if producer == 0 {
+            return Err(KernelError::Invalid("invalid box producer".into()));
+        }
+        if let Some(sources) = &self.face_sources {
+            let mut sources = sources.as_ref().clone();
+            for source in sources.iter_mut().flatten() {
+                if let FaceSource::Box { producer: id, .. } = source {
+                    *id = Some(producer);
+                }
+            }
+            self.face_sources = Some(std::sync::Arc::new(sources));
+        }
+        Ok(self)
+    }
+
+    /// Cap signatures are in face order; unknown or ambiguous source curves stay uncertified.
+    pub fn with_extrude_cap_certificates(mut self, producer: u64, sketch: u64, signatures: &[Option<CapSignature>]) -> Result<Self> {
+        if producer == 0 || sketch == 0 {
+            return Err(KernelError::Invalid("invalid cap producer".into()));
+        }
+        if let Some(sources) = &self.face_sources {
+            if sources.len() != signatures.len() {
+                return Err(KernelError::Invalid("cap certificate count mismatch".into()));
+            }
+            let mut sources = sources.as_ref().clone();
+            for (source, signature) in sources.iter_mut().zip(signatures) {
+                if let Some(FaceSource::ExtrudeCap { high, plane, .. }) = source {
+                    let Some((outer, holes)) = signature else {
+                        *source = None;
+                        continue;
+                    };
+                    if outer.len() > 4096 || holes.len() > 4096 || holes.iter().any(|hole| hole.len() > 4096) {
+                        return Err(KernelError::Invalid("oversized cap curve signature".into()));
+                    }
+                    let count = outer.len() + holes.iter().map(Vec::len).sum::<usize>();
+                    if outer.is_empty()
+                        || count > 4096
+                        || holes.len() > 4096
+                        || outer.iter().chain(holes.iter().flatten()).map(String::len).sum::<usize>() > 65_536
+                        || outer.iter().chain(holes.iter().flatten()).any(|id| id.is_empty() || id.len() > 128)
+                    {
+                        return Err(KernelError::Invalid("invalid cap curve signature".into()));
+                    }
+                    let mut outer = outer.clone();
+                    outer.sort();
+                    outer.dedup();
+                    let mut holes = holes.clone();
+                    for hole in &mut holes {
+                        if hole.is_empty() {
+                            return Err(KernelError::Invalid("empty cap hole signature".into()));
+                        }
+                        hole.sort();
+                        hole.dedup();
+                    }
+                    holes.sort();
+                    if holes.windows(2).any(|pair| pair[0] == pair[1]) || holes.iter().flatten().any(|id| outer.binary_search(id).is_ok()) {
+                        return Err(KernelError::Invalid("ambiguous cap hole signature".into()));
+                    }
+                    *source = Some(FaceSource::CertifiedExtrudeCap { producer, sketch, high: *high, outer, holes, plane: *plane });
+                }
+            }
+            self.face_sources = Some(std::sync::Arc::new(sources));
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn transformed_sources(&self, m: [[f64; 4]; 4]) -> Result<Option<FaceSources>> {
+        let Some(sources) = &self.face_sources else { return Ok(None) };
+        let vector = |p: Vec3| {
+            Vec3::new(
+                m[0][0] * p.x + m[1][0] * p.y + m[2][0] * p.z,
+                m[0][1] * p.x + m[1][1] * p.y + m[2][1] * p.z,
+                m[0][2] * p.x + m[1][2] * p.y + m[2][2] * p.z,
+            )
+        };
+        let translation = Vec3::new(m[3][0], m[3][1], m[3][2]);
+        let reflected = vector(Vec3::X).dot(vector(Vec3::Y).cross(vector(Vec3::Z))) < 0.;
+        let mut sources = sources.as_ref().clone();
+        for source in sources.iter_mut().flatten() {
+            if let Some(plane) = source.plane_mut() {
+                *plane = solvecraft_geom::Plane::new(
+                    vector(plane.origin) + translation,
+                    vector(plane.x),
+                    vector(plane.y) * if reflected { -1. } else { 1. },
+                )
+                .ok_or_else(|| KernelError::Invalid("degenerate transformed face plane".into()))?;
+            }
+        }
+        Ok(Some(std::sync::Arc::new(sources)))
+    }
+
     /// Bind constructed edges to uniquely proven source curves without changing face names.
     pub fn with_extrude_certificates(mut self, producer: u64, sketch: u64, curves: &[Option<String>]) -> Result<Self> {
         if producer == 0 || sketch == 0 || curves.iter().flatten().any(|curve| curve.is_empty() || curve.len() > 128) {
@@ -355,8 +496,8 @@ impl Body {
                 .iter()
                 .zip(curves)
                 .map(|(source, curve)| match (source, curve) {
-                    (Some(FaceSource::ExtrudeSide { .. }), Some(curve)) => {
-                        Some(FaceSource::CertifiedExtrudeSide { producer, sketch, curve: curve.clone() })
+                    (Some(FaceSource::ExtrudeSide { plane, .. }), Some(curve)) => {
+                        Some(FaceSource::CertifiedExtrudeSide { producer, sketch, curve: curve.clone(), plane: *plane })
                     }
                     (Some(FaceSource::ExtrudeSide { .. }), None) => None,
                     _ => source.clone(),
