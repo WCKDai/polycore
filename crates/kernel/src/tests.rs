@@ -317,6 +317,38 @@ fn planar_booleans_with_coincident_faces() {
     assert!(rel(measure(&i).unwrap().volume, 250.0) < 1e-9);
 }
 
+/// The planar fallback runs after any failed B-rep boolean, not only on coincident faces; when
+/// it can't run it says which body has which curved faces (it used to blame "coincident faces
+/// on curved bodies" whatever the cause).
+#[test]
+fn planar_fallback_names_the_curved_faces() {
+    let slab = box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 10.0)).unwrap();
+    let pad = cylinder(Vec3::new(20.0, 15.0, 5.0), Vec3::Z, 8.0, 10.0).unwrap();
+    let e = planar_boolean(&slab, &pad, BoolOp::Union).unwrap_err().to_string();
+    assert!(e.contains("not supported yet"), "{e}");
+    assert!(e.contains("the tool has 2 curved faces (cylinder)"), "{e}");
+    assert!(!e.contains("target"), "{e}");
+    assert!(!e.contains("coincident faces on curved bodies"), "{e}");
+    let ball = sphere(Vec3::new(20.0, 15.0, 10.0), 5.0).unwrap();
+    let e = planar_boolean(&ball, &pad, BoolOp::Cut).unwrap_err().to_string();
+    assert!(e.contains("the target has 6 curved faces (sphere) and the tool has 2 curved faces (cylinder)"), "{e}");
+    // All-planar bodies, a face of one at a shallow angle (1°): the fallback takes them.
+    let slope = Vec3::new(-1f64.to_radians().tan(), 0.0, 1.0).normalized().unwrap();
+    let wedge = convex_polyhedron(&[
+        HalfSpace { n: Vec3::X, d: 30.0 },
+        HalfSpace { n: -Vec3::X, d: -10.0 },
+        HalfSpace { n: Vec3::Y, d: 20.0 },
+        HalfSpace { n: -Vec3::Y, d: -10.0 },
+        HalfSpace { n: -Vec3::Z, d: -5.0 },
+        HalfSpace { n: slope, d: slope.dot(Vec3::new(10.0, 0.0, 11.0)) },
+    ])
+    .unwrap();
+    let u = planar_boolean(&slab, &wedge, BoolOp::Union).unwrap().unwrap();
+    let above = box_solid(Vec3::new(0.0, 0.0, 10.0), Vec3::new(40.0, 30.0, 20.0)).unwrap();
+    let expect = 40.0 * 30.0 * 10.0 + measure(&boolean(&wedge, &above, BoolOp::Intersect).unwrap().unwrap()).unwrap().volume;
+    assert!(rel(measure(&u).unwrap().volume, expect) < 1e-6, "{} vs {expect}", measure(&u).unwrap().volume);
+}
+
 #[test]
 fn connected_logo_join_preserves_exact_faces_at_edge_contact() {
     let mut body = box_solid(Vec3::ZERO, Vec3::new(10.0, 20.0, 10.0)).unwrap();
