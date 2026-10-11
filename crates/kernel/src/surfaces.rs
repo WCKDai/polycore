@@ -29,6 +29,7 @@ fn surface_body(faces: Vec<mt::Face>) -> Body {
         color: None,
         paint: None,
         splits: None,
+        face_sources: None,
     }
 }
 
@@ -45,6 +46,7 @@ fn body_of(faces: Vec<mt::Face>) -> Result<Body> {
             color: None,
             paint: None,
             splits: None,
+            face_sources: None,
         })
     }
 }

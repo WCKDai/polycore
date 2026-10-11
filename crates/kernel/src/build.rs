@@ -15,6 +15,10 @@ fn finite(x: f64, what: &str) -> Result<f64> {
 
 /// A closed wire in 3D from a sketch loop.
 pub(crate) fn wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
+    wire_sources(plane, lp).map(|(wire, _)| wire)
+}
+
+fn wire_sources(plane: &Plane, lp: &Loop2) -> Result<(mt::Wire, Vec<(mt::Edge, Seg2)>)> {
     let n = lp.segs.len();
     if n == 0 || n > MAX_SEGS {
         return Err(KernelError::Invalid(format!("loop with {n} segments")));
@@ -24,6 +28,7 @@ pub(crate) fn wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
     }
     let verts: Vec<mt::Vertex> = lp.segs.iter().map(|s| builder::vertex(p3(plane.to_world(s.start())))).collect();
     let mut edges = Vec::with_capacity(n);
+    let mut sources = Vec::with_capacity(n);
     for (i, s) in lp.segs.iter().enumerate() {
         let (Some(a), Some(b)) = (verts.get(i), verts.get((i + 1) % n)) else { continue };
         let e: mt::Edge = match *s {
@@ -35,7 +40,9 @@ pub(crate) fn wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
                 // Split big arcs so every piece is well conditioned.
                 if sweep.abs() > std::f64::consts::PI * 1.5 {
                     let vm = builder::vertex(p3(plane.to_world(s.mid())));
-                    edges.push(builder::circle_arc(a, &vm, p3(plane.to_world(s.point_at(0.25)))));
+                    let first = builder::circle_arc(a, &vm, p3(plane.to_world(s.point_at(0.25))));
+                    sources.push((first.clone(), *s));
+                    edges.push(first);
                     builder::circle_arc(&vm, b, p3(plane.to_world(s.point_at(0.75))))
                 } else {
                     builder::circle_arc(a, b, p3(plane.to_world(s.mid())))
@@ -45,9 +52,10 @@ pub(crate) fn wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
                 crate::freeform::edge(plane, s, a, b).ok_or_else(|| KernelError::Invalid("profile curve".into()))?
             }
         };
+        sources.push((e.clone(), *s));
         edges.push(e);
     }
-    Ok(edges.into())
+    Ok((edges.into(), sources))
 }
 
 /// A planar face from a region (outer loop with holes).
@@ -82,6 +90,15 @@ fn region_ok(r: &Region2) -> Result<()> {
 
 /// Extrude each region from `start` to `end` along the plane normal (offsets in mm, `end > start`).
 pub fn extrude(plane: &Plane, regions: &[Region2], start: f64, end: f64) -> Result<Vec<Body>> {
+    if !plane.origin.is_finite()
+        || !plane.x.is_finite()
+        || !plane.y.is_finite()
+        || (plane.x.len2() - 1.).abs() > 1e-8
+        || (plane.y.len2() - 1.).abs() > 1e-8
+        || plane.x.dot(plane.y).abs() > 1e-8
+    {
+        return Err(KernelError::Invalid("extrude frame is not finite and orthonormal".into()));
+    }
     let (start, end) = (finite(start, "start")?, finite(end, "end")?);
     let (lo, hi) = if end >= start { (start, end) } else { (end, start) };
     if hi - lo < 1e-6 {
@@ -95,15 +112,105 @@ pub fn extrude(plane: &Plane, regions: &[Region2], start: f64, end: f64) -> Resu
     for r in regions {
         region_ok(r)?;
         let base = plane.offset(lo);
-        let f = face(&base, r)?;
+        let (outer, mut sources) = wire_sources(&base, &r.outer.ccw())?;
+        let mut wires = vec![outer];
+        for hole in &r.holes {
+            let (wire, mut hole_sources) = wire_sources(&base, &hole.ccw().reversed())?;
+            wires.push(wire);
+            sources.append(&mut hole_sources);
+        }
+        let f = guard("extrude profile", || builder::try_attach_plane(&wires).map_err(|e| KernelError::Invalid(format!("profile: {e}"))))?;
         let solid: Solid = guard("extrude", || Ok(builder::tsweep(&f, v3(n * (hi - lo)))))?;
-        out.push(Body::new(solid)?);
+        let upper = guard("extrude cap identities", || {
+            let inputs: std::collections::HashSet<_> = sources.iter().map(|(edge, _)| edge.id()).collect();
+            let mut visits = 0usize;
+            let mut candidate = None;
+            for (index, generated) in solid.face_iter().enumerate() {
+                if index >= 50_000 {
+                    return Ok(None);
+                }
+                let mut side = false;
+                for edge in generated.absolute_boundaries().iter().flatten() {
+                    visits += 1;
+                    if visits > 200_000 {
+                        return Ok(None);
+                    }
+                    side |= inputs.contains(&edge.id());
+                }
+                if generated.id() != f.id() && !side {
+                    if candidate.is_some() {
+                        return Ok(None);
+                    }
+                    candidate = Some(generated.id());
+                }
+            }
+            Ok(candidate)
+        })?;
+        let body = Body::new(solid)?;
+        // tsweep retains each actual input boundary edge on its generated side.
+        // Match topology identity, never face order, surface samples or centroids.
+        let provenance = guard("extrude source identities", || {
+            let source_edges: std::collections::HashMap<_, _> = sources.iter().map(|(edge, segment)| (edge.id(), *segment)).collect();
+            let mut result = Vec::new();
+            for generated in body.solid.face_iter() {
+                let matching: Vec<_> = generated.absolute_boundaries().iter().flatten().filter_map(|edge| source_edges.get(&edge.id())).collect();
+                let source =
+                    if generated.id() == f.id() {
+                        upper.and_then(|_| {
+                            (r.outer.segs.len() + r.holes.iter().map(|hole| hole.segs.len()).sum::<usize>() <= 4096).then(|| {
+                                crate::FaceSource::ExtrudeCap {
+                                    high: false,
+                                    region: r.clone(),
+                                    plane: Plane { origin: base.origin, x: plane.x, y: -plane.y },
+                                }
+                            })
+                        })
+                    } else if Some(generated.id()) == upper {
+                        (r.outer.segs.len() + r.holes.iter().map(|hole| hole.segs.len()).sum::<usize>() <= 4096)
+                            .then(|| crate::FaceSource::ExtrudeCap { high: true, region: r.clone(), plane: plane.offset(hi) })
+                    } else if let [segment] = matching.as_slice() {
+                        let basis = match **segment {
+                            Seg2::Line { a, b } => {
+                                let d = b - a;
+                                d.normalized().and_then(|direction| {
+                                    let foot = a - direction * a.dot(direction);
+                                    Plane::new(plane.to_world(foot), plane.dir_to_world(direction), n)
+                                })
+                            }
+                            _ => None,
+                        };
+                        Some(crate::FaceSource::ExtrudeSide { segment: **segment, plane: basis })
+                    } else {
+                        None
+                    };
+                result.push(source);
+            }
+            Ok(result)
+        })?;
+        out.push(body.with_face_sources(Some(std::sync::Arc::new(provenance))));
     }
     Ok(out)
 }
 
-/// Revolve each region about the axis through sketch point `axis_origin` with sketch direction
-/// `axis_dir` by `angle` radians (|angle| ≥ 2π = full revolution).
+/// Choose the per-profile axis sign whose positive rotation follows the sketch normal.
+pub fn canonical_revolve_axis(plane: &Plane, region: &Region2, axis_origin: Vec2, axis_dir: Vec2) -> Result<Vec3> {
+    if !axis_origin.is_finite() || !axis_dir.is_finite() || !plane.origin.is_finite() || !plane.x.is_finite() || !plane.y.is_finite() {
+        return Err(KernelError::Invalid("non-finite revolve frame".into()));
+    }
+    if (plane.x.len2() - 1.).abs() > 1e-8 || (plane.y.len2() - 1.).abs() > 1e-8 || plane.x.dot(plane.y).abs() > 1e-8 {
+        return Err(KernelError::Invalid("revolve frame is not orthonormal".into()));
+    }
+    region_ok(region)?;
+    let direction = axis_dir.normalized().ok_or_else(|| KernelError::Invalid("revolve axis has no direction".into()))?;
+    let axis = plane.dir_to_world(direction).normalized().ok_or_else(|| KernelError::Invalid("revolve frame has no axis".into()))?;
+    let origin = plane.to_world(axis_origin);
+    let center = plane.to_world(region.centroid());
+    let radial = center - origin - axis * (center - origin).dot(axis);
+    Ok(if axis.cross(radial).dot(plane.normal()) < 0. { -axis } else { axis })
+}
+
+/// Revolve each region about the sketch axis by `angle` radians.
+/// This legacy API preserves its historical sweep sign behavior.
 pub fn revolve(plane: &Plane, regions: &[Region2], axis_origin: Vec2, axis_dir: Vec2, angle: f64) -> Result<Vec<Body>> {
     let angle = finite(angle, "angle")?;
     if angle.abs() < 1e-6 {
@@ -230,7 +337,36 @@ pub fn box_solid(a: Vec3, b: Vec3) -> Result<Body> {
         holes: vec![],
     };
     let mut v = extrude(&Plane::XY, &[r], lo.z, hi.z)?;
-    v.pop().ok_or_else(|| KernelError::Failed("box".into()))
+    let body = v.pop().ok_or_else(|| KernelError::Failed("box".into()))?;
+    let sources = body.face_sources().ok_or_else(|| KernelError::Failed("box construction source".into()))?;
+    let mut roles = std::collections::HashSet::new();
+    let mut certified = Vec::new();
+    for source in sources {
+        let role = match source {
+            Some(crate::FaceSource::ExtrudeCap { high, .. }) => Some((2u8, *high)),
+            Some(crate::FaceSource::ExtrudeSide { segment: Seg2::Line { a, b }, .. }) if a.x == b.x && a.x == lo.x => Some((0, false)),
+            Some(crate::FaceSource::ExtrudeSide { segment: Seg2::Line { a, b }, .. }) if a.x == b.x && a.x == hi.x => Some((0, true)),
+            Some(crate::FaceSource::ExtrudeSide { segment: Seg2::Line { a, b }, .. }) if a.y == b.y && a.y == lo.y => Some((1, false)),
+            Some(crate::FaceSource::ExtrudeSide { segment: Seg2::Line { a, b }, .. }) if a.y == b.y && a.y == hi.y => Some((1, true)),
+            _ => None,
+        }
+        .ok_or_else(|| KernelError::Failed("box role correspondence".into()))?;
+        if !roles.insert(role) {
+            return Err(KernelError::Failed("duplicate box role".into()));
+        }
+        let (axis, high) = role;
+        let sign = if high { 1. } else { -1. };
+        let plane = match axis {
+            0 => Plane { origin: Vec3::X * if high { hi.x } else { lo.x }, x: Vec3::Y, y: Vec3::Z * sign },
+            1 => Plane { origin: Vec3::Y * if high { hi.y } else { lo.y }, x: Vec3::X, y: -Vec3::Z * sign },
+            _ => Plane { origin: Vec3::Z * if high { hi.z } else { lo.z }, x: Vec3::X, y: Vec3::Y * sign },
+        };
+        certified.push(Some(crate::FaceSource::Box { producer: None, axis, high, plane }));
+    }
+    if roles.len() != 6 {
+        return Err(KernelError::Failed("box role count".into()));
+    }
+    Ok(body.with_face_sources(Some(std::sync::Arc::new(certified))))
 }
 
 /// Where primitives start their circles (radians from the frame's x axis).

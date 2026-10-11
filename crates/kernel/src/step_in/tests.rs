@@ -76,6 +76,106 @@ fn imported_bodies_take_features() {
 const HEAD: &str = "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','hand','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n";
 const TAIL: &str = "ENDSEC;\nEND-ISO-10303-21;\n";
 
+/// Original fixtures: elementary basis surfaces plus offsets, with no external CAD files.
+fn offset_geometry(definition: &str, offset: &str, len: f64, sense: bool, points: &[mt::Point3]) -> crate::Result<mt::Surface> {
+    let text = format!(
+        "{HEAD}#1=CARTESIAN_POINT('',(0.,0.,0.));\n#2=AXIS2_PLACEMENT_3D('',#1,$,$);\n#3={definition};\n#4=OFFSET_SURFACE('',#3,{offset},.U.);\n{TAIL}"
+    );
+    let ex = p21::parse(&text).unwrap();
+    let cx = Ctx { ex: &ex, len, ang: 1.0, tol: 1e-6 };
+    crate::guard("test offset surface", || geom::surface(&cx, 4, points, &[], sense, 0).map_err(KernelError::Failed))
+}
+
+#[test]
+fn offset_surface_analytic_geometry_and_orientation() {
+    use mt::{InnerSpace, MetricSpace, ParametricSurface, ParametricSurface3D, SearchNearestParameter};
+    let angle: f64 = 0.4;
+    let cases = [
+        ("PLANE('',#2)".to_string(), mt::Point3::new(2.0, 3.0, 1.0), mt::Vector3::unit_z()),
+        ("CYLINDRICAL_SURFACE('',#2,5.)".to_string(), mt::Point3::new(6.0, 0.0, 2.0), mt::Vector3::unit_x()),
+        ("SPHERICAL_SURFACE('',#2,5.)".to_string(), mt::Point3::new(6.0, 0.0, 0.0), mt::Vector3::unit_x()),
+        ("TOROIDAL_SURFACE('',#2,10.,2.)".to_string(), mt::Point3::new(13.0, 0.0, 0.0), mt::Vector3::unit_x()),
+        (
+            format!("CONICAL_SURFACE('',#2,5.,{angle})"),
+            mt::Point3::new(5.0 + 1.0 / angle.cos() + 2.0 * angle.tan(), 0.0, 2.0),
+            mt::Vector3::new(angle.cos(), 0.0, -angle.sin()),
+        ),
+    ];
+    for (definition, point, normal) in cases {
+        for sense in [true, false] {
+            let extent = [point, point + mt::Vector3::unit_z()];
+            let surface = offset_geometry(&definition, "1.", 1.0, sense, &extent).unwrap();
+            let uv = surface.search_nearest_parameter(point, None, 100).unwrap();
+            assert!(surface.subs(uv.0, uv.1).distance(point) < 1e-6, "{definition}");
+            assert!(surface.normal(uv.0, uv.1).dot(normal) * if sense { 1.0 } else { -1.0 } > 0.99, "{definition}, sense {sense}");
+        }
+    }
+    let p = mt::Point3::new(40.0, 0.0, 2.0);
+    let surface = offset_geometry("CYLINDRICAL_SURFACE('',#2,5.)", "-1.", 10.0, true, &[p, p + mt::Vector3::unit_z()]).unwrap();
+    let uv = surface.search_nearest_parameter(p, None, 100).unwrap();
+    assert!(surface.subs(uv.0, uv.1).distance(p) < 1e-6);
+}
+
+#[test]
+fn offset_surfaces_nested_and_hostile() {
+    let points = [mt::Point3::new(0.0, 0.0, 0.0), mt::Point3::new(0.0, 0.0, 1.0)];
+    for (basis, offset) in [
+        ("CYLINDRICAL_SURFACE('',#2,5.)", "-5."),
+        ("SPHERICAL_SURFACE('',#2,5.)", "-6."),
+        ("TOROIDAL_SURFACE('',#2,10.,2.)", "8."),
+        ("TOROIDAL_SURFACE('',#2,10.,2.)", "-2."),
+        ("CONICAL_SURFACE('',#2,5.,0.4)", "-10."),
+        ("PLANE('',#2)", "1.E100"),
+        ("PLANE('',#2)", "$"),
+    ] {
+        assert!(offset_geometry(basis, offset, 1.0, true, &points).is_err(), "{basis}, {offset}");
+    }
+    let text = format!("{HEAD}#1=OFFSET_SURFACE('',#1,1.,.F.);{TAIL}");
+    let ex = p21::parse(&text).unwrap();
+    let cx = Ctx { ex: &ex, len: 1.0, ang: 1.0, tol: 1e-6 };
+    assert!(geom::surface(&cx, 1, &points, &[], true, 0).unwrap_err().contains("nested too deeply"));
+    let text = format!(
+        "{HEAD}#1=CARTESIAN_POINT('',(0.,0.,0.));#2=AXIS2_PLACEMENT_3D('',#1,$,$);#3=CYLINDRICAL_SURFACE('',#2,5.);#4=OFFSET_SURFACE('',#3,-6.,.F.);#5=OFFSET_SURFACE('',#4,6.,.F.);{TAIL}"
+    );
+    let ex = p21::parse(&text).unwrap();
+    let cx = Ctx { ex: &ex, len: 1.0, ang: 1.0, tol: 1e-6 };
+    assert!(geom::surface(&cx, 5, &points, &[], true, 0).is_err());
+}
+
+#[test]
+fn offset_surface_cube_import_is_closed_and_editable() {
+    // Move each basis plane half a file unit inward; nested quarter-unit offsets
+    // bring its supporting surface back to the original unit cube boundary.
+    let mut entities = cube_entities();
+    let origins = [(0.0, 0.0, 0.5), (0.0, 0.0, 0.5), (0.0, 0.5, 0.0), (0.5, 0.0, 0.0), (1.0, 0.5, 0.0), (0.5, 1.0, 0.0)];
+    for (f, (x, y, z)) in origins.into_iter().enumerate() {
+        let base = 400 + f * 20;
+        let extra = 1000 + f * 10;
+        entities = entities
+            .replace(&format!("#{}=PLANE('',#{});", base + 10, base + 9), &format!("#{}=OFFSET_SURFACE('',#{},0.25,.F.);", base + 10, extra + 3));
+        entities += &format!(
+            "#{extra}=CARTESIAN_POINT('',({x},{y},{z}));\n#{}=AXIS2_PLACEMENT_3D('',#{extra},#{},$);\n#{}=PLANE('',#{});\n#{}=OFFSET_SURFACE('',#{},0.25,.F.);\n",
+            extra + 1,
+            base + 8,
+            extra + 2,
+            extra + 1,
+            extra + 3,
+            extra + 2
+        );
+    }
+    entities += &context(10, "(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.CENTI.,.METRE.))");
+    entities += "#9=ADVANCED_BREP_SHAPE_REPRESENTATION('Offsets',(#101),#10);\n";
+    let import = step_import(&format!("{HEAD}{entities}{TAIL}")).unwrap();
+    assert!(import.warnings.is_empty(), "{:?}", import.warnings);
+    assert!(import.bodies[0].closed);
+    assert_eq!(import.bodies[0].file_faces, 6);
+    let body = &import.bodies[0].body;
+    assert!(rel(measure(body).unwrap().volume, 1000.0) < 1e-6);
+    let cut = cylinder(Vec3::new(5.0, 5.0, -1.0), Vec3::Z, 2.0, 12.0).unwrap();
+    let result = boolean(body, &cut, BoolOp::Cut).unwrap().unwrap();
+    assert!(rel(measure(&result).unwrap().volume, 1000.0 - 40.0 * std::f64::consts::PI) < 1e-3);
+}
+
 /// A hand-written unit cube brep (`#100`…) in a representation with the given unit and items.
 fn cube_entities() -> String {
     let mut s = String::new();

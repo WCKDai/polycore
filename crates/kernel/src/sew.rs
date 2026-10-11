@@ -193,6 +193,72 @@ fn faces_connected(faces: &[mt::Face]) -> bool {
     seen.len() == faces.len()
 }
 
+/// Keep disconnected closed boundaries as distinct shells, preserving orientation.
+fn closed_components(faces: Vec<mt::Face>) -> Result<Vec<mt::Shell>> {
+    const MAX_EDGE_USES: usize = 500_000;
+    const MAX_COMPONENTS: usize = 1024;
+    let fail = |s: &str| KernelError::Invalid(format!("sew: {s}"));
+    let mut by_edge: HashMap<mt::EdgeID, Vec<usize>> = HashMap::new();
+    let mut edge_uses = 0usize;
+    for (i, face) in faces.iter().enumerate() {
+        for edge in face.edge_iter() {
+            edge_uses = edge_uses.saturating_add(1);
+            if edge_uses > MAX_EDGE_USES {
+                return Err(fail("edge budget exceeded"));
+            }
+            let uses = by_edge.entry(edge.id()).or_default();
+            if uses.len() >= 2 {
+                return Err(fail("nonmanifold edge contact"));
+            }
+            uses.push(i);
+        }
+    }
+    if by_edge.values().any(|uses| uses.len() != 2) {
+        return Err(fail("the faces do not close"));
+    }
+    let mut seen = vec![false; faces.len()];
+    let mut vertices = HashMap::new();
+    let mut components = Vec::new();
+    for first in 0..faces.len() {
+        if seen.get(first).copied().unwrap_or(true) {
+            continue;
+        }
+        if components.len() >= MAX_COMPONENTS {
+            return Err(fail("component budget exceeded"));
+        }
+        let component = components.len();
+        let mut todo = vec![first];
+        if let Some(slot) = seen.get_mut(first) {
+            *slot = true;
+        }
+        let mut indices = Vec::new();
+        while let Some(i) = todo.pop() {
+            let face = faces.get(i).ok_or_else(|| fail("missing component face"))?;
+            indices.push(i);
+            for vertex in face.vertex_iter() {
+                if vertices.insert(vertex.id(), component).is_some_and(|previous| previous != component) {
+                    return Err(fail("bodies touch only at a vertex"));
+                }
+            }
+            for edge in face.edge_iter() {
+                let adjacent = by_edge.get(&edge.id()).ok_or_else(|| fail("missing component edge"))?;
+                for j in adjacent {
+                    let slot = seen.get_mut(*j).ok_or_else(|| fail("missing adjacent face"))?;
+                    if !*slot {
+                        *slot = true;
+                        todo.push(*j);
+                    }
+                }
+            }
+        }
+        indices.sort_unstable();
+        let component_faces =
+            indices.into_iter().map(|i| faces.get(i).cloned().ok_or_else(|| fail("missing component face"))).collect::<Result<Vec<_>>>()?;
+        components.push(component_faces.into());
+    }
+    Ok(components)
+}
+
 /// A contact's edge sheets can terminate in separate vertex fans. Give each fan
 /// its own vertex at the same coordinates so the boundary remains a manifold.
 fn split_vertex_fans(faces: Vec<mt::Face>) -> Result<Vec<mt::Face>> {
@@ -285,8 +351,13 @@ fn sew_impl(faces: &[FaceSpec], touching: bool) -> Result<Body> {
     if faces.len() < 4 || faces.len() > 200_000 {
         return Err(KernelError::Invalid("a solid needs 4…200000 faces".into()));
     }
+    let mut edge_uses = 0usize;
     for f in faces {
         for l in &f.loops {
+            edge_uses = edge_uses.saturating_add(l.len().max(1));
+            if edge_uses > 500_000 {
+                return Err(KernelError::Invalid("sew: edge budget exceeded".into()));
+            }
             for e in l {
                 let (a, b) = e.ends();
                 if !a.is_finite() || !b.is_finite() || a.dist(b) < 1e-9 {
@@ -331,8 +402,8 @@ fn sew_impl(faces: &[FaceSpec], touching: bool) -> Result<Body> {
         if !sheets.is_empty() {
             out = split_vertex_fans(out)?;
         }
-        let shell: mt::Shell = out.into();
-        let solid = Solid::try_new(vec![shell]).map_err(|e| KernelError::Failed(format!("sew: the faces do not close: {e}")))?;
+        let shells = closed_components(out)?;
+        let solid = Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("sew: the faces do not close: {e}")))?;
         Body::new(solid)
     })
 }
@@ -361,6 +432,65 @@ mod tests {
             surface: SurfSpec::Plane,
             probe: None,
         }
+    }
+
+    fn box_faces(origin: Vec3, size: Vec3) -> Vec<FaceSpec> {
+        let p = |x: f64, y: f64, z: f64| origin + Vec3::new(x * size.x, y * size.y, z * size.z);
+        let (a, b, c, d) = (p(0., 0., 0.), p(1., 0., 0.), p(1., 1., 0.), p(0., 1., 0.));
+        let (e, f, g, h) = (p(0., 0., 1.), p(1., 0., 1.), p(1., 1., 1.), p(0., 1., 1.));
+        vec![quad(a, d, c, b), quad(e, f, g, h), quad(a, b, f, e), quad(b, c, g, f), quad(c, d, h, g), quad(d, a, e, h)]
+    }
+
+    #[test]
+    fn disconnected_closed_faces_keep_every_material_component() {
+        let mut faces = box_faces(Vec3::ZERO, Vec3::new(2.0, 3.0, 4.0));
+        faces.extend(box_faces(Vec3::X * 10.0, Vec3::new(2.0, 3.0, 4.0)));
+        for reverse in [false, true] {
+            if reverse {
+                faces.reverse();
+            }
+            let body = sew(&faces).unwrap();
+            assert_eq!(body.shell_count(), 2);
+            assert!(body.validity().is_empty());
+            assert!((crate::measure(&body).unwrap().volume - 48.0).abs() < 1e-9);
+            let lumps = body.lumps().unwrap();
+            assert_eq!(lumps.len(), 2);
+            assert!(lumps.iter().all(|b| (crate::measure(b).unwrap().volume - 24.0).abs() < 1e-9));
+            let mesh = body.tessellate(0.01).unwrap();
+            assert!(mesh.contains(Vec3::new(1.0, 1.0, 1.0)));
+            assert!(mesh.contains(Vec3::new(11.0, 1.0, 1.0)));
+            assert!(!mesh.contains(Vec3::new(5.0, 1.0, 1.0)));
+            let imported = crate::step_import(&crate::step_export(&[&body], "sewn pieces").unwrap()).unwrap();
+            assert!(imported.warnings.is_empty());
+            let volume: f64 = imported.bodies.iter().map(|b| crate::measure(&b.body).unwrap().volume).sum();
+            assert!((volume - 48.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn sewing_preserves_inward_cavity_orientation_and_refuses_vertex_contact() {
+        let outer = box_faces(Vec3::ZERO, Vec3::new(2.0, 3.0, 4.0));
+        let mut inner = box_faces(Vec3::new(0.5, 0.75, 1.0), Vec3::new(1.0, 1.5, 2.0));
+        for face in &mut inner {
+            for lp in &mut face.loops {
+                lp.reverse();
+                for edge in lp {
+                    if let EdgeSpec::Line { a, b } = edge {
+                        std::mem::swap(a, b);
+                    }
+                }
+            }
+        }
+        let cavity = sew(&outer.iter().chain(&inner).cloned().collect::<Vec<_>>()).unwrap();
+        assert_eq!(cavity.shell_count(), 2);
+        assert_eq!(cavity.lumps().unwrap().len(), 1);
+        assert!((crate::measure(&cavity).unwrap().volume - 21.0).abs() < 1e-9);
+        assert!(!cavity.tessellate(0.01).unwrap().contains(Vec3::new(1.0, 1.5, 2.0)));
+        let touching = box_faces(Vec3::new(2.0, 3.0, 4.0), Vec3::new(2.0, 3.0, 4.0));
+        assert!(sew(&outer.iter().chain(&touching).cloned().collect::<Vec<_>>()).unwrap_err().to_string().contains("vertex"));
+        let mut hostile = outer.clone();
+        hostile[0].loops = vec![Vec::new(); 500_001];
+        assert!(sew(&hostile).unwrap_err().to_string().contains("budget"));
     }
 
     #[test]

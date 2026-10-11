@@ -878,7 +878,15 @@ pub(crate) fn split_any(body: &Body, faces: &[usize], tool: &SplitTool) -> Resul
         let shells = std::mem::take(&mut imp.shells);
         let solid = mt::Solid::new_unchecked(shells.into_iter().map(mt::Shell::from).collect());
         Ok((
-            Body { solid: std::sync::Arc::new(solid), coarse_missing: None, mesh: None, color: body.color, paint: None, splits: body.splits.clone() },
+            Body {
+                solid: std::sync::Arc::new(solid),
+                coarse_missing: None,
+                mesh: None,
+                color: body.color,
+                paint: None,
+                splits: body.splits.clone(),
+                face_sources: None,
+            },
             imp,
         ))
     })
