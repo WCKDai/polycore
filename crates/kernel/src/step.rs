@@ -7,8 +7,8 @@ use crate::{KernelError, Result, guard};
 /// Intersection-curve edges (from booleans) as cubic B-splines through the exact curve: STEP
 /// readers get plain 3D geometry that lies on both faces, and the file does not repeat the two
 /// surfaces for every such edge.
-fn plain_curves(b: &Body) -> mt::Solid {
-    let s = b.deep_copy();
+fn plain_curves(b: &Body) -> Result<mt::Solid> {
+    let s = crate::ops::placed_topology(&b.solid, mt::Matrix4::from_scale(1.0))?;
     let size = b.size();
     let mut seen = std::collections::HashSet::new();
     for e in s.edge_iter() {
@@ -21,7 +21,7 @@ fn plain_curves(b: &Body) -> mt::Solid {
             e.set_curve(mt::Curve::BSplineCurve(c));
         }
     }
-    s
+    Ok(s)
 }
 
 /// A C¹ cubic B-spline through exact points of `c` spaced so that chords deviate at most `tol`
@@ -71,7 +71,7 @@ pub(crate) fn truck_step(bodies: &[&Body], system: &str) -> Result<String> {
         b.require_brep("STEP export")?;
     }
     guard("step export", || {
-        let cs: Vec<_> = bodies.iter().map(|b| plain_curves(b).compress()).collect();
+        let cs: Vec<_> = bodies.iter().map(|b| plain_curves(b).map(|solid| solid.compress())).collect::<Result<_>>()?;
         let models: out::StepModels<_, _, _> = cs.iter().collect();
         let header = out::StepHeaderDescriptor { organization_system: system.to_owned(), ..Default::default() };
         Ok(out::CompleteStepDisplay::new(models, header).to_string())

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use solvecraft_geom::Vec3;
 use truck_modeling as mt;
 
-use crate::body::{Body, Solid, from_p3, p3, v3};
+use crate::body::{Body, Solid, from_p3};
 use crate::{KernelError, Result, guard};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -530,8 +530,85 @@ pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
             m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2],
             m[3][3],
         );
-        Body::new(mt::builder::transformed(&body.deep_copy(), mat))
+        // An affine placement retains face order and appearance metadata.
+        Body::new(placed_topology(&body.solid, mat)?).map(|placed| placed.with_color(body.color()).with_paint(body.paint().cloned()))
     })
+}
+
+// A STEP periodic face may traverse a seam edge twice. Generic topology builders
+// reject that wire while cloning, even though placement preserves its topology.
+pub(crate) fn placed_topology(source: &Solid, matrix: mt::Matrix4) -> Result<Solid> {
+    use mt::{Transform, Transformed};
+    use std::collections::HashMap;
+    let mut vertices = HashMap::new();
+    let mut edges = HashMap::new();
+    let mut shells = Vec::new();
+    let mut face_count = 0usize;
+    let mut edge_visits = 0usize;
+    for shell in source.boundaries() {
+        let mut faces = Vec::new();
+        for face in shell {
+            face_count = face_count.saturating_add(1);
+            if face_count > 500_000 {
+                return Err(KernelError::Invalid("placement exceeds face work limit".into()));
+            }
+            let mut wires = Vec::new();
+            for wire in face.absolute_boundaries() {
+                let mut mapped = Vec::new();
+                for edge in wire {
+                    edge_visits = edge_visits.saturating_add(1);
+                    if edge_visits > 4_000_000 {
+                        return Err(KernelError::Invalid("placement exceeds edge work limit".into()));
+                    }
+                    if let std::collections::hash_map::Entry::Vacant(entry) = edges.entry(edge.id()) {
+                        for vertex in [edge.absolute_front(), edge.absolute_back()] {
+                            if let std::collections::hash_map::Entry::Vacant(entry) = vertices.entry(vertex.id()) {
+                                let point = matrix.transform_point(vertex.point());
+                                if !from_p3(point).is_finite() {
+                                    return Err(KernelError::Invalid("placement produced nonfinite geometry".into()));
+                                }
+                                entry.insert(mt::Vertex::new(point));
+                            }
+                        }
+                        let front =
+                            vertices.get(&edge.absolute_front().id()).ok_or_else(|| KernelError::Failed("placement vertex missing".into()))?;
+                        let back = vertices.get(&edge.absolute_back().id()).ok_or_else(|| KernelError::Failed("placement vertex missing".into()))?;
+                        entry.insert(mt::Edge::new_unchecked(front, back, edge.curve().transformed(matrix)));
+                    }
+                    let copied = edges.get(&edge.id()).ok_or_else(|| KernelError::Failed("placement edge missing".into()))?;
+                    mapped.push(if edge.orientation() { copied.clone() } else { copied.inverse() });
+                }
+                wires.push(mt::Wire::from(mapped));
+            }
+            // Wire connectivity, seam sharing and orientation are copied exactly;
+            // no new topology is introduced by this geometry-only operation.
+            let mut copied = mt::Face::new_unchecked(wires, face.surface().transformed(matrix));
+            if !face.orientation() {
+                copied.invert();
+            }
+            faces.push(copied);
+        }
+        shells.push(mt::Shell::from(faces));
+    }
+    Ok(Solid::new_unchecked(shells))
+}
+
+#[cfg(test)]
+#[test]
+fn affine_placement_keeps_body_and_face_paint_attached() {
+    let paint = crate::Paint { opacity: 0.4, faces: vec![crate::FacePaint { face: 0, color: [0.8, 0.2, 0.1], opacity: 0.3 }] };
+    let body = crate::box_solid(Vec3::ZERO, Vec3::new(10.0, 20.0, 30.0)).unwrap().with_color(Some([0.2, 0.6, 0.8])).with_paint(Some(paint.clone()));
+    let source_faces = body.faces(0.01).unwrap();
+    let transform = [[0.0, 2.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.5, 0.0], [30.0, 40.0, 50.0, 1.0]];
+    let placed = transform_matrix(&body, transform).unwrap();
+    assert_eq!(placed.color(), body.color());
+    assert_eq!(placed.paint(), Some(&paint));
+    let faces = placed.faces(0.01).unwrap();
+    for source in source_faces {
+        let target = faces.iter().find(|f| f.index == source.index).unwrap();
+        let p = source.centroid;
+        assert!(target.centroid.dist(Vec3::new(30.0 - p.y, 40.0 + 2.0 * p.x, 50.0 + 0.5 * p.z)) < 1e-6);
+    }
 }
 
 /// Rigid transform: rotate about `axis` through `origin` by `angle` radians, then translate.
@@ -539,7 +616,7 @@ pub fn transform(body: &Body, translate: Vec3, origin: Vec3, axis: Vec3, angle: 
     if !(translate.is_finite() && origin.is_finite() && angle.is_finite()) {
         return Err(KernelError::Invalid("non-finite transform".into()));
     }
-    if body.is_mesh() {
+    {
         // Same motion as a matrix: rotate about the line through `origin`, then translate.
         let ax = if angle.abs() > 1e-12 { axis.normalized().ok_or_else(|| KernelError::Invalid("rotation axis".into()))? } else { Vec3::Z };
         let (c, s) = (angle.cos(), angle.sin());
@@ -556,19 +633,8 @@ pub fn transform(body: &Body, translate: Vec3, origin: Vec3, axis: Vec3, angle: 
         );
         let tr = origin - ro + translate;
         let m = [[r[0][0], r[0][1], r[0][2], 0.0], [r[1][0], r[1][1], r[1][2], 0.0], [r[2][0], r[2][1], r[2][2], 0.0], [tr.x, tr.y, tr.z, 1.0]];
-        return body.mesh_transformed(&m).ok_or_else(|| KernelError::Failed("mesh transform".into()));
+        transform_matrix(body, m)
     }
-    guard("transform", || {
-        let mut s = body.deep_copy();
-        if angle.abs() > 1e-12 {
-            let ax = axis.normalized().ok_or_else(|| KernelError::Invalid("rotation axis".into()))?;
-            s = mt::builder::rotated(&s, p3(origin), v3(ax), mt::Rad(angle));
-        }
-        if translate.len() > 0.0 {
-            s = mt::builder::translated(&s, v3(translate));
-        }
-        Body::new(s)
-    })
 }
 
 /// Split a body with a plane: the parts on the positive and the negative side of the plane
@@ -604,3 +670,7 @@ pub(crate) fn half_space(body: &Body, plane: &solvecraft_geom::Plane, positive: 
     let half = crate::build::extrude(plane, std::slice::from_ref(&sq), lo, hi)?.pop().ok_or_else(|| KernelError::Failed("half space".into()))?;
     boolean(body, &half, BoolOp::Intersect)
 }
+
+#[cfg(test)]
+#[path = "placement_tests.rs"]
+mod placement_tests;
