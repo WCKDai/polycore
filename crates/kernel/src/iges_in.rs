@@ -1164,7 +1164,7 @@ fn translate(text: &str) -> std::result::Result<(String, Vec<String>), String> {
         t.o.add(format!("STYLED_ITEM('color',(#{psa}),#{item})"));
     }
     let mut s = String::from(
-        "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('IGES import'),'2;1');\nFILE_NAME('','',(''),(''),'SolveCraft IGES','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n",
+        "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('IGES import'),'2;1');\nFILE_NAME('','',(''),(''),'SolidCraft IGES','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n",
     );
     for (i, l) in t.o.lines.iter().enumerate() {
         let _ = writeln!(s, "#{}={l};", i + 1);
