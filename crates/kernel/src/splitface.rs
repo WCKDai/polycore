@@ -887,6 +887,7 @@ pub(crate) fn split_any(body: &Body, faces: &[usize], tool: &SplitTool) -> Resul
                 splits: body.splits.clone(),
                 face_sources: None,
                 regularization_protected: true,
+                history: None,
             },
             imp,
         ))

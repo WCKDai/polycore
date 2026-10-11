@@ -35,6 +35,9 @@ pub struct Body {
     pub(crate) face_sources: Option<std::sync::Arc<Vec<Option<FaceSource>>>>,
     /// Sticky transient veto: authored face boundaries must survive later rebuilds.
     pub(crate) regularization_protected: bool,
+    /// Exact history of the operation that made this body, relative to that operation's
+    /// operands; `None` when the operation does not report one.
+    pub(crate) history: Option<std::sync::Arc<crate::history::History>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -334,6 +337,31 @@ pub(crate) fn from_p3(p: mt::Point3) -> Vec3 {
     Vec3::new(p.x, p.y, p.z)
 }
 
+/// The distinct edges of `faces` in order of first use, and the faces (by position) each one
+/// bounds: the one edge order of a body, used by [`Body::edges`], tessellations and
+/// [`crate::history`].
+pub(crate) fn edge_order<'a, P: 'a, C: 'a, S: 'a>(
+    faces: impl IntoIterator<Item = &'a truck_topology::Face<P, C, S>>,
+) -> (Vec<truck_topology::Edge<P, C>>, Vec<Vec<usize>>) {
+    let mut index = std::collections::HashMap::new();
+    let (mut edges, mut bounds): (Vec<truck_topology::Edge<P, C>>, Vec<Vec<usize>>) = (Vec::new(), Vec::new());
+    for (fi, f) in faces.into_iter().enumerate() {
+        for e in f.edge_iter() {
+            let i = *index.entry(e.id()).or_insert_with(|| {
+                edges.push(e.clone());
+                bounds.push(Vec::new());
+                edges.len() - 1
+            });
+            if let Some(slot) = bounds.get_mut(i)
+                && !slot.contains(&fi)
+            {
+                slot.push(fi);
+            }
+        }
+    }
+    (edges, bounds)
+}
+
 fn polyline_mid(pts: &[Vec3]) -> (Vec3, f64) {
     let len: f64 = pts.windows(2).map(|w| w.first().zip(w.get(1)).map(|(a, b)| a.dist(*b)).unwrap_or(0.0)).sum();
     let mut acc = 0.0;
@@ -363,6 +391,11 @@ impl Body {
             && self.splits == other.splits
             && self.face_sources == other.face_sources
             && self.regularization_protected == other.regularization_protected
+            && match (&self.history, &other.history) {
+                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
     }
 
     pub(crate) fn new(solid: Solid) -> Result<Body> {
@@ -402,12 +435,27 @@ impl Body {
             splits: None,
             face_sources: None,
             regularization_protected: false,
+            history: None,
         })
     }
 
     pub(crate) fn inherit_regularization_protection(mut self, input: &Body) -> Self {
         self.regularization_protected |= input.regularization_protected;
         self
+    }
+
+    /// Exact history of the operation that made this body, relative to that operation's
+    /// operands (see [`crate::history`]); `None` when the operation does not report one.
+    pub fn history(&self) -> Option<&crate::history::History> {
+        self.history.as_deref()
+    }
+
+    /// Attach the history of the operation that made this body from `operands`, after checking
+    /// it describes this body.
+    pub(crate) fn with_history(mut self, history: crate::history::History, operands: &[&Body]) -> Result<Self> {
+        history.check(&self, operands)?;
+        self.history = Some(std::sync::Arc::new(history));
+        Ok(self)
     }
 
     pub fn face_sources(&self) -> Option<&[Option<FaceSource>]> {
@@ -768,27 +816,9 @@ impl Body {
                     }
                 }
             }
-            let mut seen = std::collections::HashMap::new();
-            for e in meshed.iter().flat_map(|s| s.edge_iter()) {
-                if seen.contains_key(&e.id()) {
-                    continue;
-                }
-                seen.insert(e.id(), out.edges.len());
-                let c = e.oriented_curve();
-                out.edges.push(c.0.iter().map(|p| Vec3::new(p.x, p.y, p.z)).collect());
-            }
-            // Which faces each edge bounds.
-            out.edge_faces = vec![Vec::new(); out.edges.len()];
-            for (fi, face) in meshed.iter().flat_map(|s| s.face_iter()).enumerate() {
-                for e in face.edge_iter() {
-                    if let Some(slot) = seen.get(&e.id()).and_then(|i| out.edge_faces.get_mut(*i)) {
-                        let f = u32::try_from(fi).unwrap_or(u32::MAX);
-                        if !slot.contains(&f) {
-                            slot.push(f);
-                        }
-                    }
-                }
-            }
+            let (edges, faces) = edge_order(meshed.iter().flat_map(|s| s.face_iter()));
+            out.edges = edges.iter().map(|e| e.oriented_curve().0.iter().map(|p| Vec3::new(p.x, p.y, p.z)).collect()).collect();
+            out.edge_faces = faces.into_iter().map(|fs| fs.into_iter().map(|f| u32::try_from(f).unwrap_or(u32::MAX)).collect()).collect();
             Ok(out)
         })
     }

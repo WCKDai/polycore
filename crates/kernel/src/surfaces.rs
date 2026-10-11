@@ -31,6 +31,7 @@ fn surface_body(faces: Vec<mt::Face>) -> Body {
         splits: None,
         face_sources: None,
         regularization_protected: false,
+        history: None,
     }
 }
 
@@ -49,6 +50,7 @@ fn body_of(faces: Vec<mt::Face>) -> Result<Body> {
             splits: None,
             face_sources: None,
             regularization_protected: false,
+            history: None,
         })
     }
 }

@@ -647,24 +647,28 @@ pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
     if m.iter().flatten().any(|x| !x.is_finite()) {
         return Err(KernelError::Invalid("non-finite transform".into()));
     }
-    if let Some(b) = body.mesh_transformed(&m) {
-        return Ok(b);
-    }
-    guard("transform", || {
-        let mat = mt::Matrix4::new(
-            m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2],
-            m[3][3],
-        );
-        // An affine placement retains face order and appearance metadata.
-        let sources = body.transformed_sources(m)?;
-        Body::new(placed_topology(&body.solid, mat)?).map(|placed| {
-            placed.with_color(body.color()).with_paint(body.paint().cloned()).with_face_sources(sources).inherit_regularization_protection(body)
-        })
-    })
+    let placed = match body.mesh_transformed(&m) {
+        Some(b) => b,
+        None => guard("transform", || {
+            let mat = mt::Matrix4::new(
+                m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3], m[3][0], m[3][1],
+                m[3][2], m[3][3],
+            );
+            // An affine placement retains face order and appearance metadata.
+            let sources = body.transformed_sources(m)?;
+            Body::new(placed_topology(&body.solid, mat)?).map(|b| {
+                b.with_color(body.color()).with_paint(body.paint().cloned()).with_face_sources(sources).inherit_regularization_protection(body)
+            })
+        })?,
+    };
+    let history = crate::history::History::identity(&placed);
+    placed.with_history(history, &[body])
 }
 
-// A STEP periodic face may traverse a seam edge twice. Generic topology builders
-// reject that wire while cloning, even though placement preserves its topology.
+/// `source` moved by `matrix`, keeping its face and edge order (transforms report an identity
+/// [`crate::history::History`] on that basis). Built here rather than by generic topology
+/// builders: a STEP periodic face may traverse a seam edge twice, and those reject that wire
+/// while cloning even though placement preserves its topology.
 pub(crate) fn placed_topology(source: &Solid, matrix: mt::Matrix4) -> Result<Solid> {
     use mt::{Transform, Transformed};
     use std::collections::HashMap;

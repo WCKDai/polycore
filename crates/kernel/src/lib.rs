@@ -29,6 +29,7 @@ mod freeform;
 pub mod fuzz;
 mod heal;
 mod helix;
+pub mod history;
 mod iges_in;
 mod iges_out;
 #[cfg(test)]
