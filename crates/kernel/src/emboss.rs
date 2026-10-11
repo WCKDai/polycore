@@ -17,6 +17,21 @@ fn unwrap(a: f64, around: f64) -> f64 {
     around + (a - around + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
 }
 
+fn wall_angles(face: &mt::Face, o: Vec3, axis: Vec3, radial: Vec3, tangent: Vec3, tol: f64) -> Option<(f64, f64)> {
+    if face.boundaries().len() != 1 || face.edge_iter().count() != 4 {
+        return None;
+    }
+    for edge in face.edge_iter() {
+        if let Some(Some(mid)) = crate::offset::arc_mid(&edge, tol * 10.) {
+            let am = angle(mid, o, axis, radial, tangent);
+            let aa = unwrap(angle(from_p3(edge.front().point()), o, axis, radial, tangent), am);
+            let ab = unwrap(angle(from_p3(edge.back().point()), o, axis, radial, tangent), am);
+            return Some((aa.min(ab), aa.max(ab)));
+        }
+    }
+    None
+}
+
 /// Certify a tessellated pick and project it onto the cylinder used by emboss.
 pub fn cylinder_emboss_anchor(body: &Body, face: usize, at: Vec3) -> Result<Vec3> {
     if !at.is_finite() || at.len() > 1e9 {
@@ -40,7 +55,7 @@ pub fn cylinder_emboss_anchor(body: &Body, face: usize, at: Vec3) -> Result<Vec3
 /// Wrap sketch arc length around an exterior cylinder, retaining exact radial depth.
 /// Profiles must contain orthogonal lines and lie inside one uninterrupted wall face.
 pub fn emboss_cylinder(body: &Body, plane: &Plane, regions: &[Region2], depth: f64) -> Result<Body> {
-    emboss_impl(body, None, plane, regions, depth)
+    emboss_impl(body, None, plane, regions, depth, false).and_then(EmbossOutcome::body)
 }
 
 /// As [`emboss_cylinder`], requiring the saved selected point to identify that wall.
@@ -48,10 +63,101 @@ pub fn emboss_cylinder_at(body: &Body, at: Vec3, plane: &Plane, regions: &[Regio
     if !at.is_finite() || at.len() > 1e9 {
         return Err(fail("invalid selected face point"));
     }
-    emboss_impl(body, Some(at), plane, regions, depth)
+    emboss_impl(body, Some(at), plane, regions, depth, false).and_then(EmbossOutcome::body)
 }
 
-fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Region2], depth: f64) -> Result<Body> {
+enum EmbossOutcome {
+    Body(Body),
+    Anchor(usize, Vec3),
+    NoMatch,
+}
+impl EmbossOutcome {
+    fn body(self) -> Result<Body> {
+        match self {
+            Self::Body(body) => Ok(body),
+            Self::Anchor(..) | Self::NoMatch => Err(fail("unexpected qualification result")),
+        }
+    }
+}
+
+/// Qualify a tangent cylindrical target without changing it. A tangent exterior
+/// cylinder with an unsupported profile or depth returns an explicit error;
+/// a body without such a tangent wall returns `None` for planar compatibility.
+/// The anchor lies on a validated profile boundary, clear of seams and endcaps.
+pub fn infer_cylinder_emboss(body: &Body, plane: &Plane, regions: &[Region2], depth: f64) -> Result<Option<(usize, Vec3)>> {
+    if body.is_mesh() {
+        return Ok(None);
+    }
+    guard("cylinder emboss inference", || {
+        let tol = (body.size() * 1e-8).max(1e-8);
+        let mut tangent = false;
+        for (index, face) in body.solid.face_iter().enumerate() {
+            if index >= 50_000 {
+                return Err(fail("target search exceeds face work limit"));
+            }
+            if let Some(Surf::Cylinder { o, a, r, convex: true }) = surf_of(face, tol) {
+                let w = plane.origin - o;
+                let normal = plane.normal();
+                let signed = w.dot(normal);
+                if normal.dot(a).abs() < 1e-8 && (signed.abs() - r).abs() <= tol * 10.0 {
+                    let radial = if signed < 0.0 { -normal } else { normal };
+                    // Every supported uninterrupted wall uses one angle interval
+                    // around this tangent normal, contained in (-pi,pi). A remote
+                    // footprint entirely outside even that global interval cannot
+                    // select this body, regardless of other unsupported faces.
+                    if !profile_interval_overlaps(plane, regions, o, a.cross(radial), -std::f64::consts::PI * r, std::f64::consts::PI * r)? {
+                        continue;
+                    }
+                    if let Some((lo, hi)) = wall_angles(face, o, a, radial, a.cross(radial), tol) {
+                        if lo >= -tol / r || hi <= tol / r {
+                            continue;
+                        }
+                        if !profile_interval_overlaps(plane, regions, o, a.cross(radial), lo * r, hi * r)? {
+                            continue;
+                        }
+                    }
+                    let relevant = match face_axial_bounds(face, o, a)? {
+                        Some((lo, hi)) => profile_interval_overlaps(plane, regions, o, a, lo, hi)?,
+                        None => true,
+                    };
+                    if relevant && signed < 0.0 {
+                        return Err(fail("sketch normal must point outwards from the exterior wall"));
+                    }
+                    tangent |= relevant;
+                }
+            }
+        }
+        if !tangent {
+            return Ok(None);
+        }
+        match emboss_impl(body, None, plane, regions, depth, true)? {
+            EmbossOutcome::Anchor(index, at) => Ok(Some((index, at))),
+            EmbossOutcome::NoMatch => Ok(None),
+            EmbossOutcome::Body(_) => Err(fail("unexpected construction result")),
+        }
+    })
+}
+
+/// Whether a body contains an analytic exterior cylindrical wall. This bounded
+/// preflight avoids resolving cylinder placement context for ordinary planar targets.
+pub fn has_cylinder_emboss_wall(body: &Body) -> Result<bool> {
+    if body.is_mesh() {
+        return Ok(false);
+    }
+    guard("cylinder emboss target", || {
+        let tol = (body.size() * 1e-8).max(1e-8);
+        for (index, face) in body.solid.face_iter().enumerate() {
+            if index >= 50_000 {
+                return Err(fail("target search exceeds face work limit"));
+            }
+            if matches!(surf_of(face, tol), Some(Surf::Cylinder { convex: true, .. })) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+}
+fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Region2], depth: f64, qualify: bool) -> Result<EmbossOutcome> {
     body.require_brep("cylinder emboss")?;
     if !depth.is_finite() || depth.abs() < 1e-6 || depth.abs() > 1e6 || regions.is_empty() || regions.len() > 64 {
         return Err(fail("needs finite nonzero depth and 1..64 profiles"));
@@ -77,8 +183,8 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         for (fi, s) in surfaces.iter().enumerate() {
             let Surf::Cylinder { o, a, r, convex: true } = *s else { continue };
             let w = plane.origin - o;
-            let radial = w - a * w.dot(a);
-            if (radial.len() - r).abs() > tol * 10.0 || plane.normal().dot(radial / r) < 1.0 - 1e-8 {
+            let radial = plane.normal();
+            if radial.dot(a).abs() > 1e-8 || (w.dot(radial) - r).abs() > tol * 10.0 {
                 continue;
             }
             let radial = radial.normalized().ok_or_else(|| fail("radial frame"))?;
@@ -87,17 +193,9 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
             if f.boundaries().len() != 1 || f.edge_iter().count() != 4 {
                 continue;
             }
-            let mut angular = None;
-            for e in f.edge_iter() {
-                if let Some(Some(mid)) = crate::offset::arc_mid(&e, tol * 10.0) {
-                    let am = angle(mid, o, a, radial, tangent);
-                    let aa = unwrap(angle(from_p3(e.front().point()), o, a, radial, tangent), am);
-                    let ab = unwrap(angle(from_p3(e.back().point()), o, a, radial, tangent), am);
-                    angular = Some((aa.min(ab), aa.max(ab)));
-                    break;
-                }
-            }
-            let Some((alo, ahi)) = angular else { continue };
+            let Some((alo, ahi)) = wall_angles(f, o, a, radial, tangent, tol) else {
+                continue;
+            };
             if alo >= -tol / r || ahi <= tol / r {
                 continue;
             }
@@ -108,6 +206,9 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         }
         let (fi, o, axis, r, radial, tangent, alo, ahi) =
             chosen.ok_or_else(|| fail("sketch must be tangent to one complete exterior cylindrical wall, clear of its seam"))?;
+        if qualify && !profile_interval_overlaps(plane, regions, o, tangent, alo * r, ahi * r)? {
+            return Ok(EmbossOutcome::NoMatch);
+        }
         let mut caps = Vec::new();
         let mut inner: f64 = 0.0;
         for s in &surfaces {
@@ -131,6 +232,12 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         }
         let lo = caps.iter().copied().fold(f64::INFINITY, f64::min);
         let hi = caps.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        // An infinite cylinder can be tangent while its finite wall is far from
+        // the selected footprint. Conservative analytic/control-polygon bounds
+        // exclude that body before unsupported-profile or depth diagnostics.
+        if qualify && !profile_interval_overlaps(plane, regions, o, axis, lo, hi)? {
+            return Ok(EmbossOutcome::NoMatch);
+        }
         let rr = r + depth;
         if rr <= inner + tol * 10.0 {
             return Err(fail("depth reaches the axis or inner wall"));
@@ -144,14 +251,21 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
             }
         }
         let z0 = (plane.origin - o).dot(axis);
-        let map2 = |p: Vec2| Vec2::new(plane.dir_to_world(p).dot(tangent), z0 + plane.dir_to_world(p).dot(axis));
+        let s0 = (plane.origin - o).dot(tangent);
+        let map2 = |p: Vec2| Vec2::new(s0 + plane.dir_to_world(p).dot(tangent), z0 + plane.dir_to_world(p).dot(axis));
         let mut count = 0usize;
         let mut mapped = Vec::new();
         for reg in regions {
             let mut loops = Vec::new();
             for lp in std::iter::once(&reg.outer).chain(&reg.holes) {
                 count = count.saturating_add(lp.segs.len());
-                if count > 4096 || lp.segs.len() < 4 || !lp.is_closed(tol) {
+                if count > 4096 {
+                    return Err(fail("profile geometry budget"));
+                }
+                if lp.segs.iter().any(|segment| !matches!(segment, Seg2::Line { .. })) {
+                    return Err(fail("only orthogonal line profiles are supported on cylinders"));
+                }
+                if lp.segs.len() < 4 || !lp.is_closed(tol) {
                     return Err(fail("profile geometry budget or open loop"));
                 }
                 let mut segs = Vec::new();
@@ -181,6 +295,12 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
             mapped.push(Region2 { outer, holes });
         }
         validate_profiles(&mapped, tol)?;
+        if qualify {
+            let segment = mapped.first().and_then(|region| region.outer.segs.first()).ok_or_else(|| fail("empty profile"))?;
+            let p = (segment.start() + segment.end()) * 0.5;
+            let at = o + axis * p.y + (radial * (p.x / r).cos() + tangent * (p.x / r).sin()) * r;
+            return Ok(EmbossOutcome::Anchor(fi, at));
+        }
         let at = |p: Vec2, radius: f64| o + axis * p.y + (radial * (p.x / r).cos() + tangent * (p.x / r).sin()) * radius;
         let selected = faces.get(fi).ok_or_else(|| fail("face"))?;
         let mut base_patches = vec![selected.absolute_boundaries().clone()];
@@ -252,8 +372,106 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         if !result.validity().is_empty() {
             return Err(fail("rebuilt cylinder is not a closed manifold"));
         }
-        Ok(result)
+        Ok(EmbossOutcome::Body(result))
     })
+}
+
+fn profile_interval_overlaps(plane: &Plane, regions: &[Region2], o: Vec3, axis: Vec3, lo: f64, hi: f64) -> Result<bool> {
+    let z0 = (plane.origin - o).dot(axis);
+    let direction = Vec2::new(plane.x.dot(axis), plane.y.dot(axis));
+    let mut count = 0usize;
+    let mut overlaps = false;
+    for region in regions {
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for segment in &region.outer.segs {
+            count = count.saturating_add(1);
+            if count > 4096 {
+                return Err(fail("profile geometry budget"));
+            }
+            let mut add = |p: Vec2| -> Result<()> {
+                if !p.is_finite() || p.len() > 1e7 {
+                    return Err(fail("nonfinite or excessive profile coordinates"));
+                }
+                let z = z0 + p.dot(direction);
+                min = min.min(z);
+                max = max.max(z);
+                Ok(())
+            };
+            match *segment {
+                Seg2::Line { a, b } => {
+                    add(a)?;
+                    add(b)?;
+                }
+                Seg2::Arc { center, radius, .. } => {
+                    add(center)?;
+                    if !radius.is_finite() || radius <= 0.0 || radius > 1e7 {
+                        return Err(fail("invalid profile radius"));
+                    }
+                    let z = z0 + center.dot(direction);
+                    min = min.min(z - radius * direction.len());
+                    max = max.max(z + radius * direction.len());
+                }
+                Seg2::Cubic { p0, p1, p2, p3 } => {
+                    for p in [p0, p1, p2, p3] {
+                        add(p)?;
+                    }
+                }
+                Seg2::Conic { a, apex, b, w } if w.is_finite() && w > 0.0 => {
+                    for p in [a, apex, b] {
+                        add(p)?;
+                    }
+                }
+                Seg2::Bezier { n, p } if (1..=7).contains(&n) => {
+                    for p in p.iter().take(usize::from(n) + 1) {
+                        add(*p)?;
+                    }
+                }
+                _ => return Err(fail("unsupported profile geometry")),
+            }
+        }
+        overlaps |= min < hi && max > lo;
+    }
+    Ok(overlaps)
+}
+
+fn face_axial_bounds(face: &mt::Face, o: Vec3, axis: Vec3) -> Result<Option<(f64, f64)>> {
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    let mut count = 0usize;
+    let mut add = |point: Vec3| -> Result<()> {
+        count = count.saturating_add(1);
+        if count > 100_000 || !point.is_finite() {
+            return Err(fail("target boundary work limit or nonfinite geometry"));
+        }
+        let z = (point - o).dot(axis);
+        lo = lo.min(z);
+        hi = hi.max(z);
+        Ok(())
+    };
+    for edge in face.edge_iter() {
+        match edge.curve() {
+            mt::Curve::Line(_) => {
+                add(from_p3(edge.front().point()))?;
+                add(from_p3(edge.back().point()))?;
+            }
+            mt::Curve::BSplineCurve(curve) => {
+                for point in curve.control_points() {
+                    add(from_p3(*point))?;
+                }
+            }
+            mt::Curve::NurbsCurve(curve) => {
+                for point in curve.control_points() {
+                    if !point.w.is_finite() || point.w <= 0.0 {
+                        return Ok(None);
+                    }
+                    add(Vec3::new(point.x / point.w, point.y / point.w, point.z / point.w))?;
+                }
+            }
+            mt::Curve::IntersectionCurve(_) => return Ok(None),
+        }
+    }
+    Ok((lo.is_finite() && hi.is_finite()).then_some((lo, hi)))
 }
 
 fn wrapped_loop(lp: &Loop2, r: f64, rr: f64, at: &impl Fn(Vec2, f64) -> Vec3) -> Result<(mt::Wire, mt::Wire, Vec<mt::Face>)> {
@@ -344,6 +562,45 @@ mod tests {
     }
     fn plane() -> Plane {
         Plane::new(Vec3::Y * 10., -Vec3::X, Vec3::Z).unwrap()
+    }
+    #[test]
+    fn inference_uses_finite_wall_footprint_and_an_interior_profile_anchor() {
+        let near = crate::cylinder(Vec3::ZERO, Vec3::Z, 10., 20.).unwrap();
+        let far = crate::cylinder(Vec3::Z * 100., Vec3::Z, 10., 20.).unwrap();
+        let other = crate::cylinder(Vec3::Z * 120., Vec3::Z, 8., 10.).unwrap();
+        let unsupported = crate::ops::join_pieces(vec![far.clone(), other]).unwrap().unwrap();
+        let regions = [profile()];
+        for body in [&far, &unsupported] {
+            assert!(infer_cylinder_emboss(body, &plane(), &regions, 1.).unwrap().is_none());
+        }
+        for x in [20., 80.] {
+            let base = crate::cylinder(Vec3::X * x, Vec3::Z, 10., 20.).unwrap();
+            let step = crate::cylinder(Vec3::X * x + Vec3::Z * 20., Vec3::Z, 8., 10.).unwrap();
+            let remote = crate::ops::join_pieces(vec![base, step]).unwrap().unwrap();
+            let inferred = infer_cylinder_emboss(&remote, &plane(), &regions, 1.);
+            if x == 20. {
+                // The offset maps this footprint across the remote wall's seam;
+                // partial relevance must retain conservative unsupported refusal.
+                assert!(inferred.is_err());
+            } else {
+                assert!(inferred.unwrap().is_none());
+            }
+        }
+        let (index, anchor) = infer_cylinder_emboss(&near, &plane(), &regions, 1.).unwrap().unwrap();
+        assert!(anchor.z > 0. && anchor.z < 20.);
+        assert!((anchor.x.hypot(anchor.y) - 10.).abs() < 1e-9);
+        assert!(cylinder_emboss_anchor(&near, index, anchor).unwrap().dist(anchor) < 1e-10);
+        let shifted = Plane::new(Vec3::new(-3., 10., 0.), -Vec3::X, Vec3::Z).unwrap();
+        let shifted_profile =
+            Region2 { outer: Loop2::polygon(&[Vec2::new(-5., 5.), Vec2::new(-1., 5.), Vec2::new(-1., 10.), Vec2::new(-5., 10.)]), holes: vec![] };
+        let (_, other_anchor) = infer_cylinder_emboss(&near, &shifted, std::slice::from_ref(&shifted_profile), 1.).unwrap().unwrap();
+        assert!(other_anchor.dist(anchor) < 1e-10);
+        let before = near.tessellate_with(1e-4, true).unwrap().measure().volume;
+        let result = emboss_cylinder_at(&near, other_anchor, &shifted, &[shifted_profile], 1.).unwrap();
+        assert!((result.tessellate_with(1e-4, true).unwrap().measure().volume - before - 21.).abs() < 0.02);
+        assert!(infer_cylinder_emboss(&near, &plane(), &regions, -10.).is_err());
+        let inward = Plane::new(Vec3::Y * 10., Vec3::X, Vec3::Z).unwrap();
+        assert!(infer_cylinder_emboss(&near, &inward, &regions, 1.).unwrap_err().to_string().contains("outwards"));
     }
     #[test]
     fn wrapped_nested_island_uses_its_enclosing_hole_patch() {

@@ -531,7 +531,8 @@ pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
             m[3][3],
         );
         // An affine placement retains face order and appearance metadata.
-        Body::new(placed_topology(&body.solid, mat)?).map(|placed| placed.with_color(body.color()).with_paint(body.paint().cloned()))
+        Body::new(placed_topology(&body.solid, mat)?)
+            .map(|placed| placed.with_color(body.color()).with_paint(body.paint().cloned()).with_face_sources(body.face_sources.clone()))
     })
 }
 

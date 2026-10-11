@@ -15,6 +15,10 @@ fn finite(x: f64, what: &str) -> Result<f64> {
 
 /// A closed wire in 3D from a sketch loop.
 pub(crate) fn wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
+    wire_sources(plane, lp).map(|(wire, _)| wire)
+}
+
+fn wire_sources(plane: &Plane, lp: &Loop2) -> Result<(mt::Wire, Vec<(mt::Edge, Seg2)>)> {
     let n = lp.segs.len();
     if n == 0 || n > MAX_SEGS {
         return Err(KernelError::Invalid(format!("loop with {n} segments")));
@@ -24,6 +28,7 @@ pub(crate) fn wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
     }
     let verts: Vec<mt::Vertex> = lp.segs.iter().map(|s| builder::vertex(p3(plane.to_world(s.start())))).collect();
     let mut edges = Vec::with_capacity(n);
+    let mut sources = Vec::with_capacity(n);
     for (i, s) in lp.segs.iter().enumerate() {
         let (Some(a), Some(b)) = (verts.get(i), verts.get((i + 1) % n)) else { continue };
         let e: mt::Edge = match *s {
@@ -35,7 +40,9 @@ pub(crate) fn wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
                 // Split big arcs so every piece is well conditioned.
                 if sweep.abs() > std::f64::consts::PI * 1.5 {
                     let vm = builder::vertex(p3(plane.to_world(s.mid())));
-                    edges.push(builder::circle_arc(a, &vm, p3(plane.to_world(s.point_at(0.25)))));
+                    let first = builder::circle_arc(a, &vm, p3(plane.to_world(s.point_at(0.25))));
+                    sources.push((first.clone(), *s));
+                    edges.push(first);
                     builder::circle_arc(&vm, b, p3(plane.to_world(s.point_at(0.75))))
                 } else {
                     builder::circle_arc(a, b, p3(plane.to_world(s.mid())))
@@ -45,9 +52,10 @@ pub(crate) fn wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
                 crate::freeform::edge(plane, s, a, b).ok_or_else(|| KernelError::Invalid("profile curve".into()))?
             }
         };
+        sources.push((e.clone(), *s));
         edges.push(e);
     }
-    Ok(edges.into())
+    Ok((edges.into(), sources))
 }
 
 /// A planar face from a region (outer loop with holes).
@@ -95,9 +103,35 @@ pub fn extrude(plane: &Plane, regions: &[Region2], start: f64, end: f64) -> Resu
     for r in regions {
         region_ok(r)?;
         let base = plane.offset(lo);
-        let f = face(&base, r)?;
+        let (outer, mut sources) = wire_sources(&base, &r.outer.ccw())?;
+        let mut wires = vec![outer];
+        for hole in &r.holes {
+            let (wire, mut hole_sources) = wire_sources(&base, &hole.ccw().reversed())?;
+            wires.push(wire);
+            sources.append(&mut hole_sources);
+        }
+        let f = guard("extrude profile", || builder::try_attach_plane(&wires).map_err(|e| KernelError::Invalid(format!("profile: {e}"))))?;
         let solid: Solid = guard("extrude", || Ok(builder::tsweep(&f, v3(n * (hi - lo)))))?;
-        out.push(Body::new(solid)?);
+        let body = Body::new(solid)?;
+        // tsweep retains each actual input boundary edge on its generated side.
+        // Match topology identity, never face order, surface samples or centroids.
+        let provenance = guard("extrude source identities", || {
+            let source_edges: std::collections::HashMap<_, _> = sources.iter().map(|(edge, segment)| (edge.id(), *segment)).collect();
+            let mut result = Vec::new();
+            for generated in body.solid.face_iter() {
+                let matching: Vec<_> = generated.absolute_boundaries().iter().flatten().filter_map(|edge| source_edges.get(&edge.id())).collect();
+                let source = if generated.id() == f.id() {
+                    None
+                } else if let [segment] = matching.as_slice() {
+                    Some(crate::FaceSource::ExtrudeSide { segment: **segment })
+                } else {
+                    None
+                };
+                result.push(source);
+            }
+            Ok(result)
+        })?;
+        out.push(body.with_face_sources(Some(std::sync::Arc::new(provenance))));
     }
     Ok(out)
 }

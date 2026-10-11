@@ -862,9 +862,13 @@ fn stack_of(b: &Body, d: Vec3, plane: &Plane, tol: f64) -> Option<Vec<Prism>> {
 }
 
 fn stack_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
-    // This path repairs joins with a common outer cap (a boss flush with a rim).
-    // Other extents and subtractive operations retain their existing B-rep path.
-    if op != BoolOp::Union {
+    // Common-cap joins and partial-depth cuts of aligned stepped prisms can
+    // retain their exact section boundaries instead of intersecting meshes.
+    // Other extents retain their existing B-rep path.
+    if !matches!(op, BoolOp::Union | BoolOp::Cut) {
+        return None;
+    }
+    if op == BoolOp::Cut && a.face_count().saturating_add(b.face_count()) > 2048 {
         return None;
     }
     fn section(ps: &[Prism], lo: f64, hi: f64, tol: f64) -> &[Region2] {
@@ -882,28 +886,46 @@ fn stack_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>>
             }
         }
     }
+    let ends = |ps: &[Prism]| ps.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.lo), hi.max(p.hi)));
     let (d, plane, pa, pb) = dirs.into_iter().take(8).find_map(|d| {
         let plane = Plane::from_normal(Vec3::ZERO, d)?;
-        Some((d, plane, stack_of(a, d, &plane, tol)?, stack_of(b, d, &plane, tol)?))
+        let pa = stack_of(a, d, &plane, tol)?;
+        let pb = stack_of(b, d, &plane, tol)?;
+        let (ea, eb) = (ends(&pa), ends(&pb));
+        if (ea.0 - eb.0).abs() >= tol && (ea.1 - eb.1).abs() >= tol {
+            return None;
+        }
+        Some((d, plane, pa, pb))
     })?;
-    let ends = |ps: &[Prism]| ps.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.lo), hi.max(p.hi)));
-    let (ea, eb) = (ends(&pa), ends(&pb));
-    if (ea.0 - eb.0).abs() >= tol && (ea.1 - eb.1).abs() >= tol {
-        return None;
-    }
     let mut levels: Vec<f64> = pa.iter().chain(&pb).flat_map(|p| [p.lo, p.hi]).collect();
     levels.sort_by(f64::total_cmp);
     levels.dedup_by(|x, y| (*x - *y).abs() < tol);
     let mut slabs = Vec::new();
+    let mut work = 0usize;
+    let mut output_edges = 0usize;
+    let edges = |regions: &[Region2]| regions.iter().flat_map(|r| std::iter::once(&r.outer).chain(&r.holes)).map(|l| l.segs.len()).sum::<usize>();
     for w in levels.windows(2) {
         let (lo, hi) = (*w.first()?, *w.get(1)?);
         let (x, y) = (section(&pa, lo, hi, tol), section(&pb, lo, hi, tol));
+        if op == BoolOp::Cut {
+            let count = edges(x).saturating_add(edges(y));
+            work = work.saturating_add(count.saturating_mul(count));
+            if work > 32_000_000 {
+                return None;
+            }
+        }
         let s = match (x.is_empty(), y.is_empty(), op) {
             (true, _, BoolOp::Cut | BoolOp::Intersect) | (_, true, BoolOp::Intersect) => Vec::new(),
             (true, _, BoolOp::Union) => y.to_vec(),
             (_, true, _) => x.to_vec(),
             _ => boolean2d(x, y, op, tol)?,
         };
+        if op == BoolOp::Cut {
+            output_edges = output_edges.saturating_add(edges(&s));
+            if output_edges > 8192 {
+                return None;
+            }
+        }
         slabs.push(oriented(&s));
     }
     if slabs.iter().all(Vec::is_empty) {
@@ -921,6 +943,42 @@ mod planar_tests {
     use super::*;
     fn rectangle(a: Vec2, b: Vec2) -> Region2 {
         Region2 { outer: Loop2::polygon(&[a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)]), holes: vec![] }
+    }
+    #[test]
+    fn partial_depth_cuts_touching_a_through_hole_use_exact_stacked_sections() {
+        let plane = Plane::named("XY").unwrap();
+        let mut plate = rectangle(Vec2::ZERO, Vec2::new(100., 60.));
+        plate.holes.push(rectangle(Vec2::new(25., 20.), Vec2::new(30., 30.)).outer);
+        let stock = crate::extrude(&plane, &[plate], 0., 2.5).unwrap().pop().unwrap();
+        let low = crate::extrude(&plane, &[rectangle(Vec2::new(20., 20.), Vec2::new(30., 30.))], 0., 1.5).unwrap().pop().unwrap();
+        let high = crate::extrude(&plane, &[rectangle(Vec2::new(25., 20.), Vec2::new(35., 30.))], 1., 2.5).unwrap().pop().unwrap();
+        for tools in [[&low, &high], [&high, &low]] {
+            let mut result = stock.clone();
+            for tool in tools {
+                result = stack_boolean(&result, tool, BoolOp::Cut).expect("exact stack path").unwrap().unwrap();
+            }
+            assert!(result.validity().is_empty());
+            assert_eq!(result.shell_count(), 1);
+            assert!((crate::measure(&result).unwrap().volume - 14_725.).abs() < 1e-6);
+            let mesh = result.tessellate(1e-4).unwrap();
+            for (point, material) in [
+                (Vec3::new(22.5, 25., 0.5), false),
+                (Vec3::new(22.5, 25., 2.), true),
+                (Vec3::new(32.5, 25., 0.5), true),
+                (Vec3::new(32.5, 25., 2.), false),
+                (Vec3::new(27.5, 25., 1.25), false),
+                (Vec3::new(10., 10., 1.25), true),
+            ] {
+                assert_eq!(mesh.contains(point), material, "{point:?}");
+            }
+            let imported = crate::step_import(&crate::step_export(&[&result], "layered cut").unwrap()).unwrap();
+            assert!(imported.warnings.is_empty());
+            assert!((crate::measure(&imported.bodies.first().unwrap().body).unwrap().volume - 14_725.).abs() < 1e-6);
+            let next = crate::extrude(&plane, &[rectangle(Vec2::new(20., 20.), Vec2::new(25., 30.))], 1.5, 2.5).unwrap().pop().unwrap();
+            let opened = crate::boolean(&imported.bodies.first().unwrap().body, &next, BoolOp::Cut).unwrap().unwrap();
+            assert!((crate::measure(&opened).unwrap().volume - 14_675.).abs() < 1e-6);
+            assert!(opened.validity().is_empty());
+        }
     }
     #[test]
     fn compound_planar_extrusion_normalizes_overlap_and_retains_islands() {

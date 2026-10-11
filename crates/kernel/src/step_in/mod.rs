@@ -34,6 +34,10 @@ const MAX_VISITS: usize = 100_000;
 /// A body read from a STEP file.
 #[derive(Clone, Debug)]
 pub struct ImportedBody {
+    /// Immutable STEP source item, scoped to its embedded payload.
+    pub source_item: u64,
+    /// Original STEP face entity of each kernel face, including seam pieces.
+    pub face_origin: Vec<u64>,
     /// Solid name (the brep's label), else the product name.
     pub name: String,
     pub body: Body,
@@ -510,7 +514,21 @@ impl<'a> Reader<'a> {
                                 .collect();
                             let paint = crate::Paint { opacity: self.opacity.get(&item).copied().unwrap_or(1.0), faces };
                             let body = body.with_color(color).with_paint(Some(paint));
-                            self.bodies.push(ImportedBody { name, body, color, path: path.to_vec(), closed, file_faces });
+                            let identities = face_origin
+                                .iter()
+                                .map(|face| Some(crate::FaceSource::Imported { item, face: *face, payload_sha256: None, producer: None }))
+                                .collect();
+                            let body = body.with_face_sources(Some(std::sync::Arc::new(identities)));
+                            self.bodies.push(ImportedBody {
+                                name,
+                                body,
+                                color,
+                                path: path.to_vec(),
+                                closed,
+                                file_faces,
+                                source_item: item,
+                                face_origin,
+                            });
                         }
                         Err(err) => {
                             let label = self.label(item);

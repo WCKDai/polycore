@@ -27,6 +27,15 @@ pub struct Body {
     /// Lines the user split faces along (Split Face), as polylines: export keeps the faces on
     /// either side apart where it would otherwise join pieces of one surface.
     pub(crate) splits: Option<std::sync::Arc<Vec<Vec<Vec3>>>>,
+    /// Exact construction/import source identities, in this body's face order.
+    pub(crate) face_sources: Option<std::sync::Arc<Vec<Option<FaceSource>>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FaceSource {
+    ExtrudeSide { segment: solvecraft_geom::Seg2 },
+    CertifiedExtrudeSide { producer: u64, sketch: u64, curve: String },
+    Imported { item: u64, face: u64, payload_sha256: Option<String>, producer: Option<u64> },
 }
 
 /// How a body looks beyond its colour, for export: its opacity and its faces' own colours.
@@ -287,6 +296,7 @@ impl Body {
             && self.color == other.color
             && self.paint == other.paint
             && self.splits == other.splits
+            && self.face_sources == other.face_sources
     }
 
     pub(crate) fn new(solid: Solid) -> Result<Body> {
@@ -324,7 +334,59 @@ impl Body {
             color: None,
             paint: None,
             splits: None,
+            face_sources: None,
         })
+    }
+
+    pub fn face_sources(&self) -> Option<&[Option<FaceSource>]> {
+        self.face_sources.as_deref().map(Vec::as_slice)
+    }
+
+    /// Bind constructed edges to uniquely proven source curves without changing face names.
+    pub fn with_extrude_certificates(mut self, producer: u64, sketch: u64, curves: &[Option<String>]) -> Result<Self> {
+        if producer == 0 || sketch == 0 || curves.iter().flatten().any(|curve| curve.is_empty() || curve.len() > 128) {
+            return Err(KernelError::Invalid("invalid constructed side certificate".into()));
+        }
+        if let Some(sources) = &self.face_sources {
+            if sources.len() != curves.len() {
+                return Err(KernelError::Invalid("side certificate count mismatch".into()));
+            }
+            let sources = sources
+                .iter()
+                .zip(curves)
+                .map(|(source, curve)| match (source, curve) {
+                    (Some(FaceSource::ExtrudeSide { .. }), Some(curve)) => {
+                        Some(FaceSource::CertifiedExtrudeSide { producer, sketch, curve: curve.clone() })
+                    }
+                    (Some(FaceSource::ExtrudeSide { .. }), None) => None,
+                    _ => source.clone(),
+                })
+                .collect();
+            self.face_sources = Some(std::sync::Arc::new(sources));
+        }
+        Ok(self)
+    }
+
+    pub fn with_import_certificate(mut self, digest: &str, producer: u64) -> Result<Self> {
+        if producer == 0 || digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+            return Err(KernelError::Invalid("invalid immutable import certificate".into()));
+        }
+        if let Some(sources) = &self.face_sources {
+            let mut sources = sources.as_ref().clone();
+            for source in sources.iter_mut().flatten() {
+                if let FaceSource::Imported { payload_sha256, producer: origin, .. } = source {
+                    *payload_sha256 = Some(digest.into());
+                    *origin = Some(producer);
+                }
+            }
+            self.face_sources = Some(std::sync::Arc::new(sources));
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn with_face_sources(mut self, sources: Option<std::sync::Arc<Vec<Option<FaceSource>>>>) -> Self {
+        self.face_sources = sources;
+        self
     }
 
     /// A deep copy of the solid that can be mutated without affecting other bodies.
