@@ -38,6 +38,7 @@ mod ops;
 mod polybool;
 mod polyhedron;
 mod prism;
+mod prism_curve;
 pub mod provenance;
 mod sew;
 mod splitface;
