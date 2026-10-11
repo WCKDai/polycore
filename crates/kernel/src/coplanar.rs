@@ -43,7 +43,7 @@ fn planes(b: &Body) -> Vec<(usize, PlaneFace)> {
 
 /// Push the planar faces of `b` lying in the plane (n, d) — n their outward normal — along n
 /// by `delta` (negative: inward). Their neighbours must stand perpendicular to the plane. The
-/// result's history is over `[b]` (none where the faces had to be offset instead).
+/// result's history is over `[b]`.
 pub(crate) fn push_faces(b: &Body, n: Vec3, d: f64, delta: f64) -> Result<Body> {
     // The exact rebuild, unless it came out unsound (a curved side it couldn't re-sweep).
     match push_faces_exact(b, n, d, delta)
@@ -66,7 +66,6 @@ pub(crate) fn push_faces(b: &Body, n: Vec3, d: f64, delta: f64) -> Result<Body> 
                     _ => false,
                 })
                 .collect();
-            // An offset reports no history yet.
             crate::offset::offset_body(b, |i, _| if planes.get(i).copied().unwrap_or(false) { delta } else { 0.0 }).map_err(|_| e)
         }
     }
@@ -539,6 +538,29 @@ fn same_cylinder(x: &CylFace, y: &CylFace, tol: f64) -> bool {
     x.axis.dot(y.axis).abs() > 1.0 - 1e-9 && (x.radius - y.radius).abs() < tol && (off - x.axis * off.dot(x.axis)).len() < tol
 }
 
+/// The history over `[a, b]` of `r`, made in [`bore_union`]: `joined` (the target joined with
+/// `narrowed`, the tool with its bore narrowed) less `cut`, the cylinder whose wall restores the
+/// tool's bore faces `bore` (the tool is operand `tool_operand`). Nothing of the cylinder but its
+/// wall may be left.
+fn recut(r: &Body, joined: &Body, narrowed: &Body, cut: &Body, bore: &[usize], tool_operand: usize) -> Option<History> {
+    // Over [target, tool].
+    let joined = crate::boolean_record::through(joined, 1, narrowed.history())?;
+    let wall = || record::region(bore.iter().map(|&face| FaceOrigin::Face { operand: 1, face }).collect(), false);
+    let faces = cut
+        .history()?
+        .faces
+        .iter()
+        .map(|f| match f.origins.first() {
+            Some(FaceOrigin::Profile { .. }) => wall(),
+            _ => record::generated(Vec::new()),
+        })
+        .collect();
+    let cut = record::from_faces(&cut.solid, 2, faces);
+    let h = crate::boolean_record::of_pair(r, &Some(joined), &Some(cut))?;
+    let map = if tool_operand == 1 { [Some(0), Some(1)] } else { [Some(1), Some(0)] };
+    crate::boolean_record::composed(h.renumbered(&map, 2))
+}
+
 /// Do the bodies have cylindrical faces on a common cylinder?
 pub(crate) fn has_coincident_cylinders(a: &Body, b: &Body) -> bool {
     let tol = (a.size().max(b.size()) * 1e-7).max(1e-9) * 10.0;
@@ -554,7 +576,8 @@ pub(crate) fn has_coincident_cylinders(a: &Body, b: &Body) -> bool {
 /// samples are plausibility checks; a whole-boundary guard rejects additional boundaries
 /// crossing the recut. Original common-bore trims retain the legacy eligibility policy.
 /// This is not a general emptiness or Boolean-equivalence certificate. Each direction
-/// returns a result only when `accept` takes it; otherwise this returns `None`.
+/// returns a result only when `accept` takes it; otherwise this returns `None`. The result's
+/// history is over `[a, b]`.
 pub(crate) fn bore_union(a: &Body, b: &Body, accept: &dyn Fn(&Body) -> bool) -> Option<Body> {
     let size = a.size().max(b.size());
     let tol = (size * 1e-7).max(1e-9) * 10.0;
@@ -563,9 +586,10 @@ pub(crate) fn bore_union(a: &Body, b: &Body, accept: &dyn Fn(&Body) -> bool) -> 
     let (ia, ib) = (ma.inside_index(), mb.inside_index());
     let empty = |p: Vec3| !ia.contains(p) && !ib.contains(p);
     let (ca, cb) = (cylinders(a), cylinders(b));
-    // (body to narrow, its mesh and inside test, the other body, their faces on the cylinder).
-    let ways = [(b, &mb, &ib, a, &cb, &ca), (a, &ma, &ia, b, &ca, &cb)];
-    for (tool, mesh, inside, target, ct, co) in ways {
+    // (body to narrow, its operand number, its mesh and inside test, the other body, their faces
+    // on the cylinder).
+    let ways = [(b, 1, &mb, &ib, a, &cb, &ca), (a, 0, &ma, &ia, b, &ca, &cb)];
+    for (tool, tool_operand, mesh, inside, target, ct, co) in ways {
         for c in ct {
             if !co.iter().any(|o| same_cylinder(c, o, tol)) {
                 continue;
@@ -644,7 +668,9 @@ pub(crate) fn bore_union(a: &Body, b: &Body, accept: &dyn Fn(&Body) -> bool) -> 
                 }
                 let Some(joined) = crate::ops::boolean(target, &narrowed, BoolOp::Union)? else { return Ok(None) };
                 let cut = crate::build::cylinder(at(lo, 0.0, 0.0), c.axis, c.radius, hi - lo)?;
-                crate::ops::boolean(&joined, &cut, BoolOp::Cut)
+                let Some(r) = crate::ops::boolean(&joined, &cut, BoolOp::Cut)? else { return Ok(None) };
+                let h = recut(&r, &joined, &narrowed, &cut, &bore, tool_operand);
+                Ok(Some(r.with_checked_history(h, &record::counts(&[a, b]))))
             };
             let (result, diagnostics) = crate::capture_boolean_diagnostics(run);
             match result {

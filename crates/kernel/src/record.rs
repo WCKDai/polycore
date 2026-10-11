@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, HashMap};
 use truck_modeling as mt;
 
 use crate::Result;
-use crate::body::{Body, edge_order};
+use crate::body::{Body, Solid, edge_order};
 use crate::history::{Change, EdgeOrigin, EdgeProv, FaceOrigin, FaceProv, History};
 
 /// A face as built, with its provenance (`None` where the construction could not be followed).
@@ -51,20 +51,21 @@ pub(crate) fn generated(origins: Vec<FaceOrigin>) -> FaceProv {
 /// origins; Split when its one origin lies under other result faces too; Modified otherwise;
 /// Generated with no origin.
 pub(crate) fn regions(faces: Vec<(BTreeSet<FaceOrigin>, bool)>) -> Vec<FaceProv> {
-    let mut faces: Vec<FaceProv> = faces
-        .into_iter()
-        .map(|(origins, whole)| {
-            let change = match origins.len() {
-                0 => Change::Generated,
-                1 if whole => Change::Kept,
-                1 => Change::Modified,
-                _ => Change::Merged,
-            };
-            FaceProv { origins: origins.into_iter().collect(), change }
-        })
-        .collect();
+    let mut faces: Vec<FaceProv> = faces.into_iter().map(|(origins, whole)| region(origins, whole)).collect();
     mark_shared_split(&mut faces);
     faces
+}
+
+/// A result face that is a region of the input faces `origins` (see [`regions`]), before
+/// faces sharing an origin are marked Split.
+pub(crate) fn region(origins: BTreeSet<FaceOrigin>, whole: bool) -> FaceProv {
+    let change = match origins.len() {
+        0 => Change::Generated,
+        1 if whole => Change::Kept,
+        1 => Change::Modified,
+        _ => Change::Merged,
+    };
+    FaceProv { origins: origins.into_iter().collect(), change }
 }
 
 /// Faces of one origin that is under other faces too, and that still say Kept or Modified,
@@ -169,6 +170,190 @@ pub(crate) fn attach(body: Body, operands: &[Operand], faces: Option<Vec<FacePro
     let history = History { operands: operands.len(), faces, edges };
     let counts: Vec<(usize, usize)> = operands.iter().map(|o| (o.body.face_count(), o.edges.len())).collect();
     body.with_history_counts(history, &counts)
+}
+
+/// `step`, made from `prev` (the step's one operand), with its history carried back to what
+/// `prev` was made from: the operation's operands, with `counts` faces and edges. A multi-step
+/// operation starts from its operand with [`crate::boolean_record::operand`] (or healed, see
+/// [`crate::boolean_record::healed`]) and takes each step's result through this.
+pub(crate) fn after(mut step: Body, prev: &Body, counts: &[(usize, usize)]) -> Body {
+    let own = step.history.take().map(std::sync::Arc::unwrap_or_clone);
+    let h = own.zip(prev.history()).and_then(|(h, inner)| crate::boolean_record::composed(h.substituted(0, inner)));
+    step.with_checked_history(h, counts)
+}
+
+/// The history over `operands` operands of a body made by building `solid`, whose faces (in its
+/// face order) come from `faces`: each edge new, where its two faces meet ([`meeting`]).
+pub(crate) fn from_faces(solid: &Solid, operands: usize, faces: Vec<FaceProv>) -> History {
+    let edges = edge_order(solid.face_iter()).1.into_iter().map(|between| EdgeProv { origins: meeting(&between, &faces), faces: between }).collect();
+    History { operands, faces, edges }
+}
+
+/// What a result face of a local rebuild was made from, by identity: an operand face it was
+/// rebuilt from, or an operand edge it was made in place of (a blend).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Was {
+    Face(mt::FaceID),
+    Edge(mt::EdgeID),
+}
+
+/// What an operation built from its operands' topology, recorded by identity while the
+/// operands and the result are both alive: the faces it made (each from what [`Was`], and
+/// whether it is the whole of the one operand face it was rebuilt from: the same region) and
+/// the edges it made as (parts of, or joins of) operand edges. A result face or edge that is an
+/// operand's own (the very same topology, kept by the building code) is that, whatever was
+/// recorded for it. Every
+/// other edge is new, and comes from the meeting of the two faces it separates
+/// ([`Rebuild::history`]). The record holds what it names, so that no identity it was given is
+/// reused by later topology while it lives.
+#[derive(Debug, Default)]
+pub(crate) struct Rebuild {
+    faces: HashMap<mt::FaceID, (mt::Face, Vec<Was>, bool)>,
+    edges: HashMap<mt::EdgeID, (mt::Edge, Vec<mt::EdgeID>)>,
+}
+
+impl Rebuild {
+    /// `new` is `from` rebuilt (trimmed differently, moved).
+    pub(crate) fn face(&mut self, new: &mt::Face, from: &mt::Face) {
+        self.made(new, vec![Was::Face(from.id())]);
+    }
+
+    /// `new` is `from` rebuilt over the same region (its boundary edges cut or re-made).
+    pub(crate) fn whole(&mut self, new: &mt::Face, from: &mt::Face) {
+        self.faces.insert(new.id(), (new.clone(), vec![Was::Face(from.id())], true));
+    }
+
+    /// `new` is made in place of the operand edges `edges` (a blend; a corner patch lists the
+    /// edges meeting at its corner).
+    pub(crate) fn blend(&mut self, new: &mt::Face, edges: impl IntoIterator<Item = mt::EdgeID>) {
+        self.made(new, edges.into_iter().map(Was::Edge).collect());
+    }
+
+    /// `new` is made from what `was` says (nothing: new to the operation).
+    pub(crate) fn made(&mut self, new: &mt::Face, was: Vec<Was>) {
+        self.faces.insert(new.id(), (new.clone(), was, false));
+    }
+
+    /// `new` is (a piece of, or the moved) edge `of`: an operand edge, or an edge recorded as
+    /// made from operand edges (a piece of a piece is a piece of the operand edge).
+    pub(crate) fn piece(&mut self, new: &mt::Edge, of: &mt::Edge) {
+        self.piece_of(new, of.id());
+    }
+
+    /// Every piece in `subst` (edge → the edge made in its place).
+    pub(crate) fn pieces<'a>(&mut self, subst: impl IntoIterator<Item = (&'a mt::EdgeID, &'a mt::Edge)>) {
+        for (old, new) in subst {
+            self.piece_of(new, *old);
+        }
+    }
+
+    fn piece_of(&mut self, new: &mt::Edge, of: mt::EdgeID) {
+        let roots = self.edges.get(&of).map_or_else(|| vec![of], |(_, roots)| roots.clone());
+        let (_, slot) = self.edges.entry(new.id()).or_insert_with(|| (new.clone(), Vec::new()));
+        for root in roots {
+            if !slot.contains(&root) {
+                slot.push(root);
+            }
+        }
+    }
+
+    /// The history of `result` (in its face order; edges by identity) made from `operands`
+    /// (their solids, in the operation's operand order): faces and edges that are an operand's
+    /// own by identity (several operands' when they share it), the rest as recorded; an edge
+    /// recorded nowhere separates two faces that met nowhere before, so it comes from their
+    /// meeting ([`meeting`]). `None` when a face is neither an operand's nor recorded, or a record
+    /// names topology no operand has.
+    pub(crate) fn history(&self, result: &Solid, operands: &[&Solid]) -> Option<(Vec<FaceProv>, HashMap<mt::EdgeID, Vec<EdgeOrigin>>)> {
+        let mut face_at: HashMap<mt::FaceID, Vec<FaceOrigin>> = HashMap::new();
+        let mut edge_at: HashMap<mt::EdgeID, Vec<(usize, usize)>> = HashMap::new();
+        for (operand, s) in operands.iter().enumerate() {
+            for (id, face) in face_index(s) {
+                face_at.entry(id).or_default().push(FaceOrigin::Face { operand, face });
+            }
+            for (id, edge) in edge_index(s) {
+                edge_at.entry(id).or_default().push((operand, edge));
+            }
+        }
+        let was = |w: &Was| -> Option<Vec<FaceOrigin>> {
+            Some(match *w {
+                Was::Face(id) => face_at.get(&id)?.clone(),
+                Was::Edge(id) => edge_at.get(&id)?.iter().map(|&(operand, edge)| FaceOrigin::Edge { operand, edge }).collect(),
+            })
+        };
+        let mut faces = result
+            .face_iter()
+            .map(|f| {
+                let (origins, whole): (BTreeSet<FaceOrigin>, bool) = match face_at.get(&f.id()) {
+                    Some(own) => (own.iter().copied().collect(), true),
+                    None => {
+                        let (_, made, whole) = self.faces.get(&f.id())?;
+                        (made.iter().map(was).collect::<Option<Vec<_>>>()?.into_iter().flatten().collect(), *whole)
+                    }
+                };
+                let on_faces = origins.iter().filter(|o| matches!(o, FaceOrigin::Face { .. })).count();
+                let change = match on_faces {
+                    0 => Change::Generated,
+                    1 if origins.len() == 1 && whole => Change::Kept,
+                    1 if origins.len() == 1 => Change::Modified,
+                    _ => Change::Merged,
+                };
+                Some(FaceProv { origins: origins.into_iter().collect(), change })
+            })
+            .collect::<Option<Vec<FaceProv>>>()?;
+        mark_shared_split(&mut faces);
+        let edge_origins = |id: &mt::EdgeID| edge_at.get(id).map(|at| at.iter().map(|&(operand, edge)| EdgeOrigin::Edge { operand, edge }));
+        let (edges, bounds) = edge_order(result.face_iter());
+        let mut origins = HashMap::with_capacity(edges.len());
+        for (e, between) in edges.iter().zip(bounds) {
+            let of: Vec<EdgeOrigin> = if let Some(own) = edge_origins(&e.id()) {
+                own.collect()
+            } else if let Some((_, roots)) = self.edges.get(&e.id()) {
+                let mut set = BTreeSet::new();
+                for root in roots {
+                    set.extend(edge_origins(root)?);
+                }
+                set.into_iter().collect()
+            } else {
+                meeting(&between, &faces)
+            };
+            origins.insert(e.id(), of);
+        }
+        Some((faces, origins))
+    }
+}
+
+/// The origins of a new edge between the result faces `between` (whose provenance is in
+/// `faces`): the meeting of the two faces, when each comes from one origin and they differ;
+/// else none (a seam, an edge between pieces of one face).
+pub(crate) fn meeting(between: &[usize], faces: &[FaceProv]) -> Vec<EdgeOrigin> {
+    let side = |k: usize| match between.get(k).and_then(|f| faces.get(*f)).map(|p| p.origins.as_slice()) {
+        Some([o]) => Some(*o),
+        _ => None,
+    };
+    match (between.len(), side(0), side(1)) {
+        (2, Some(a), Some(b)) if a != b => vec![EdgeOrigin::Meet { a: a.min(b), b: a.max(b) }],
+        _ => Vec::new(),
+    }
+}
+
+/// The face and edge counts of the solids `operands`, for [`traced`].
+pub(crate) fn solid_counts(operands: &[&Solid]) -> Vec<(usize, usize)> {
+    operands.iter().map(|s| (s.face_iter().count(), edge_order(s.face_iter()).0.len())).collect()
+}
+
+/// The body `Body::new` makes of `result`, which an operation built from `operands` (their
+/// solids) as `rec` records, with that history (none where it could not be recorded).
+pub(crate) fn rebuilt(result: Solid, operands: &[&Solid], rec: &Rebuild) -> Result<Body> {
+    let (faces, edges) = rec.history(&result, operands).unzip();
+    build(result, &solid_counts(operands), faces, edges.as_ref())
+}
+
+/// [`rebuilt`] for a body made as it is (a surface, which `Body::new` does not take): its
+/// solid is the one the operation built.
+pub(crate) fn rebuilt_body(body: Body, operands: &[&Solid], rec: &Rebuild) -> Body {
+    let (faces, edges) = rec.history(&body.solid, operands).unzip();
+    let counts = solid_counts(operands);
+    traced(body, &counts, faces, edges.as_ref())
 }
 
 /// Ruled faces (truck's `try_wire_homotopy` of wires `a` and `b`), each with the provenance of

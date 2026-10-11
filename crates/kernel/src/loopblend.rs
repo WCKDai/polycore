@@ -11,6 +11,7 @@ use solvecraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Solid, from_p3, p3, v3};
+use crate::record::Rebuild;
 use crate::{KernelError, Result};
 
 fn unsupported(msg: &str) -> KernelError {
@@ -141,8 +142,9 @@ fn face_normal(f: &mt::Face, p: Vec3) -> Option<Vec3> {
 }
 
 /// Blend the loop of `edges` (by id) if it is a whole smooth boundary loop of a planar face with
-/// perpendicular walls. `None` when the edges are not such a loop.
-pub(crate) fn loop_blend(solid: &Solid, edge_ids: &[mt::EdgeID], size: f64, r: f64, round: bool) -> Option<Result<Solid>> {
+/// perpendicular walls, with what it built from `solid` (each blend face in place of its loop
+/// edge). `None` when the edges are not such a loop.
+pub(crate) fn loop_blend(solid: &Solid, edge_ids: &[mt::EdgeID], size: f64, r: f64, round: bool) -> Option<Result<(Solid, Rebuild)>> {
     let tol = (size * 1e-6).max(1e-7);
     for (si, shell) in solid.boundaries().iter().enumerate() {
         let faces: Vec<&mt::Face> = shell.face_iter().collect();
@@ -184,7 +186,7 @@ fn build(
     r: f64,
     round: bool,
     run: Option<(usize, usize)>,
-) -> Result<Solid> {
+) -> Result<(Solid, Rebuild)> {
     let f = faces.get(fi).ok_or_else(|| KernelError::Failed("face".into()))?;
     let wire = f.boundaries().get(wi).cloned().ok_or_else(|| KernelError::Failed("loop".into()))?;
     let all_edges: Vec<mt::Edge> = wire.edge_iter().cloned().collect();
@@ -550,17 +552,21 @@ fn build(
         crate::heal::absolute_face(g, wires).ok_or_else(|| KernelError::Failed("loop blend: a face could not be rebuilt".into()))
     };
     let mut out: Vec<mt::Face> = Vec::new();
+    let mut rec = Rebuild::default();
+    rec.pieces(&seam_subst);
     for (gi, g) in faces.iter().enumerate() {
-        if gi == fi {
-            out.push(rebuild(g, &face_rails)?);
+        let rebuilt = if gi == fi {
+            rebuild(g, &face_rails)?
         } else if walls.contains(&gi) {
             let wr: Vec<Option<mt::Edge>> = wall_rails.iter().cloned().map(Some).collect();
-            out.push(rebuild(g, &wr)?);
+            rebuild(g, &wr)?
         } else if g.edge_iter().any(|e| seam_subst.contains_key(&e.id())) {
-            out.push(rebuild(g, &[])?);
+            rebuild(g, &[])?
         } else {
-            out.push((*g).clone());
-        }
+            (*g).clone()
+        };
+        rec.face(&rebuilt, g);
+        out.push(rebuilt);
     }
     // Blend faces.
     use mt::{ParametricSurface3D, SearchNearestParameter};
@@ -612,11 +618,14 @@ fn build(
             None => vec![pr.clone(), wr.clone(), pr_next.inverse()].into(),
         };
         let face = mt::Face::try_new(vec![w.clone()], surf.clone()).map_err(|e| KernelError::Failed(format!("blend face: {e}")))?;
+        // In place of the loop edge this piece runs along (a full circle's two halves both).
+        rec.blend(&face, owner.get(i).and_then(|o| edges.get(*o)).map(|e| e.id()));
         out.push(face);
     }
     let mut shells = solid.boundaries().clone();
     if let Some(sh) = shells.get_mut(si) {
         *sh = out.into();
     }
-    Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("loop blend produced an invalid solid: {e}")))
+    let solid = Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("loop blend produced an invalid solid: {e}")))?;
+    Ok((solid, rec))
 }

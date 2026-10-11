@@ -40,6 +40,8 @@ mod loopblend;
 mod measure;
 mod mesh_convert;
 mod meshbody;
+#[cfg(test)]
+mod modify_history_tests;
 mod numbered;
 mod offset;
 mod ops;

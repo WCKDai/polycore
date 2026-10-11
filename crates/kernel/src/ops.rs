@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use solvecraft_geom::Vec3;
 use truck_modeling as mt;
 
+use std::collections::HashMap;
+
 use crate::body::{Body, Solid, from_p3};
 use crate::boolean_diagnostics::{BooleanFallback, BooleanStrategy, capture_boolean_diagnostics, merge, record};
 use crate::boolean_record::{self as recorded, Traced};
@@ -401,8 +403,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         BORES.with(|c| c.set(false));
         if let Some(body) = r {
             merge(diagnostics);
-            // Narrowing a bore (an offset) reports no history yet.
-            return Ok(Some(body.with_checked_history(None, &counts)));
+            return Ok(Some(body));
         }
     }
     let mut empty_votes = 0;
@@ -696,22 +697,28 @@ pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
     if m.iter().flatten().any(|x| !x.is_finite()) {
         return Err(KernelError::Invalid("non-finite transform".into()));
     }
-    let placed = match body.mesh_transformed(&m) {
-        Some(b) => b,
-        None => guard("transform", || {
-            let mat = mt::Matrix4::new(
-                m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3], m[3][0], m[3][1],
-                m[3][2], m[3][3],
-            );
-            // An affine placement retains face order and appearance metadata.
-            let sources = body.transformed_sources(m)?;
-            Body::new(placed_topology(&body.solid, mat)?).map(|b| {
-                b.with_color(body.color()).with_paint(body.paint().cloned()).with_face_sources(sources).inherit_regularization_protection(body)
-            })
-        })?,
-    };
-    let history = crate::history::History::identity(&placed);
-    placed.with_history(history, &[body])
+    if let Some(placed) = body.mesh_transformed(&m) {
+        let history = crate::history::History::identity(&placed);
+        return placed.with_history(history, &[body]);
+    }
+    guard("transform", || {
+        let mat = mt::Matrix4::new(
+            m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3], m[3][0], m[3][1], m[3][2],
+            m[3][3],
+        );
+        // An affine placement retains face order and appearance metadata. Its edges are the
+        // body's by identity: a reflection turns the solid inside out, which walks each face's
+        // edges the other way and so changes the edge order.
+        let sources = body.transformed_sources(m)?;
+        let (solid, copies) = placed_topology_mapped(&body.solid, mat)?;
+        let mut rec = record::Rebuild::default();
+        rec.pieces(&copies);
+        for (copy, face) in solid.face_iter().zip(body.solid.face_iter()) {
+            rec.whole(copy, face);
+        }
+        let placed = record::rebuilt(solid, &[&body.solid], &rec)?;
+        Ok(placed.with_color(body.color()).with_paint(body.paint().cloned()).with_face_sources(sources).inherit_regularization_protection(body))
+    })
 }
 
 /// `source` moved by `matrix`, keeping its face and edge order (transforms report an identity
@@ -719,8 +726,12 @@ pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
 /// builders: a STEP periodic face may traverse a seam edge twice, and those reject that wire
 /// while cloning even though placement preserves its topology.
 pub(crate) fn placed_topology(source: &Solid, matrix: mt::Matrix4) -> Result<Solid> {
+    placed_topology_mapped(source, matrix).map(|(solid, _)| solid)
+}
+
+/// [`placed_topology`], with each edge of `source` (by identity) and its copy.
+fn placed_topology_mapped(source: &Solid, matrix: mt::Matrix4) -> Result<(Solid, HashMap<mt::EdgeID, mt::Edge>)> {
     use mt::{Transform, Transformed};
-    use std::collections::HashMap;
     let mut vertices = HashMap::new();
     let mut edges = HashMap::new();
     let mut shells = Vec::new();
@@ -771,7 +782,7 @@ pub(crate) fn placed_topology(source: &Solid, matrix: mt::Matrix4) -> Result<Sol
         }
         shells.push(mt::Shell::from(faces));
     }
-    Ok(Solid::new_unchecked(shells))
+    Ok((Solid::new_unchecked(shells), edges))
 }
 
 #[cfg(test)]

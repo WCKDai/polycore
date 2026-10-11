@@ -649,7 +649,9 @@ pub(crate) fn arc_mid(e: &mt::Edge, tol: f64) -> Option<Option<Vec3>> {
 }
 
 /// The body with each face moved along its outward normal by `shift(face index, normal at a
-/// face point)`, keeping the topology. Faces must be planes or cylinders.
+/// face point)`, keeping the topology. Faces must be planes or cylinders. The result's history
+/// is over `[b]`: each face is the face it was moved from, each edge the edge it was moved from;
+/// faces moved to nothing are gone, and their neighbours meet along new edges.
 pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Result<Body> {
     let faces: Vec<mt::Face> = b.solid.face_iter().cloned().collect();
     let size = b.size();
@@ -900,6 +902,8 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
         let mut links: HashMap<(mt::VertexID, usize, usize), mt::Edge> = HashMap::new();
         // Old edge → new edge, and whether it runs the other way (merged with its twin).
         let mut edges: HashMap<mt::EdgeID, (mt::Edge, bool)> = HashMap::new();
+        // Moved faces and edges; an edge where neighbours of a collapsed face meet is new.
+        let mut rec = crate::record::Rebuild::default();
         let mut merged: HashMap<(mt::VertexID, mt::VertexID), mt::Edge> = HashMap::new();
         for e in b.solid.edge_iter() {
             if edges.contains_key(&e.id()) {
@@ -949,7 +953,9 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
                 }
                 pts.push(from_p3(c.point()));
                 let curve = crate::build::interpolate_cubic(&pts).ok_or_else(|| fail("edge curve"))?;
-                edges.insert(e.id(), (mt::Edge::new(a, c, mt::Curve::BSplineCurve(curve)), false));
+                let ne = mt::Edge::new(a, c, mt::Curve::BSplineCurve(curve));
+                rec.piece(&ne, &e);
+                edges.insert(e.id(), (ne, false));
                 continue;
             };
             let ne = match kind {
@@ -962,6 +968,7 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
                     builder::circle_arc(a, c, p3(m2))
                 }
             };
+            rec.piece(&ne, &e);
             edges.insert(e.id(), (ne, false));
         }
         let mut out = Vec::new();
@@ -1027,6 +1034,7 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
             if !f.orientation() {
                 nf.invert();
             }
+            rec.face(&nf, f);
             out.push(nf);
         }
         // One shell per shell of the body (pieces, voids), less the collapsed faces.
@@ -1039,14 +1047,15 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
             shells.push(it.by_ref().take(keep).collect::<Vec<_>>().into());
         }
         let solid = Solid::try_new(shells).map_err(|e| fail(&e.to_string()))?;
-        Body::new(solid)
+        crate::record::rebuilt(solid, &[&b.solid], &rec)
     })
 }
 
 /// Draft walls parallel to `pull` (planes, and cylinders about axes along `pull`) by `angle`
 /// about their line on the neutral plane: at height h along `pull` a wall moves along its
 /// outward normal by −h·tan(angle), so planes tilt and cylinders become cones. The other
-/// faces must be caps square to `pull`; the topology is kept.
+/// faces must be caps square to `pull`; the topology is kept, and the result's history is over
+/// `[b]` (each face and edge the one it was moved from).
 pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solvecraft_geom::Plane, pull: Vec3, angle: f64) -> Result<Body> {
     let faces: Vec<mt::Face> = b.solid.face_iter().cloned().collect();
     let size = b.size();
@@ -1166,6 +1175,7 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solvecraft_geom:
     guard("draft", || {
         let verts: HashMap<mt::VertexID, mt::Vertex> = newpos.iter().map(|(k, p)| (*k, builder::vertex(p3(*p)))).collect();
         let mut edges: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
+        let mut rec = crate::record::Rebuild::default();
         for e in b.solid.edge_iter() {
             if edges.contains_key(&e.id()) {
                 continue;
@@ -1181,6 +1191,7 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solvecraft_geom:
                     builder::circle_arc(a, c, p3(m2))
                 }
             };
+            rec.piece(&ne, &e);
             edges.insert(e.id(), ne);
         }
         let mut out = Vec::new();
@@ -1234,11 +1245,12 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solvecraft_geom:
                     nf
                 }
             };
+            rec.face(&nf, f);
             out.push(nf);
         }
         let shell: mt::Shell = out.into();
         let solid = Solid::try_new(vec![shell]).map_err(|e| fail(&e.to_string()))?;
-        Body::new(solid)
+        crate::record::rebuilt(solid, &[&b.solid], &rec)
     })
 }
 

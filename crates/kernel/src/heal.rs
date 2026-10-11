@@ -407,12 +407,7 @@ fn planar_surfaces(shell: &mt::Shell, tol: f64) -> Option<mt::Shell> {
 /// Heal a solid; returns the input unchanged when nothing applies or healing fails.
 #[cfg(test)]
 pub fn heal(solid: Solid, size: f64) -> Solid {
-    heal_keep(solid, size, &[])
-}
-
-/// [`heal`], keeping faces apart along lines they were split along on purpose.
-pub(crate) fn heal_keep(solid: Solid, size: f64, keep: &[Vec<Vec3>]) -> Solid {
-    healed(solid, size, keep, false).0
+    healed(solid, size, &[], false).0
 }
 
 /// What healing made each face and edge of its result from.
@@ -467,8 +462,9 @@ impl HealMap {
     }
 }
 
-/// [`heal_keep`], with what each face and edge of the result was made from (`None` when that
-/// could not be followed).
+/// Heal a solid (the input unchanged when nothing applies or healing fails), keeping faces apart
+/// along lines they were split along on purpose (`keep`), with what each face and edge of the
+/// result was made from (`None` when that could not be followed).
 pub(crate) fn heal_traced(solid: Solid, size: f64, keep: &[Vec<Vec3>]) -> (Solid, Option<HealMap>) {
     healed(solid, size, keep, true)
 }

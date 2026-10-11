@@ -48,7 +48,7 @@ fn closest_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
 }
 
 /// Distance from `p` to face `f` of a mesh.
-fn to_face(m: &Mesh, f: usize, p: Vec3) -> f64 {
+pub(crate) fn to_face(m: &Mesh, f: usize, p: Vec3) -> f64 {
     m.triangles
         .iter()
         .zip(&m.tri_face)
@@ -61,8 +61,17 @@ fn to_face(m: &Mesh, f: usize, p: Vec3) -> f64 {
 }
 
 /// Distance from `p` to edge `e` of a mesh.
-fn to_edge(m: &Mesh, e: usize, p: Vec3) -> f64 {
+pub(crate) fn to_edge(m: &Mesh, e: usize, p: Vec3) -> f64 {
     m.edges[e].windows(2).map(|w| p.dist_to_segment(w[0], w[1])).fold(f64::INFINITY, f64::min)
+}
+
+/// How far, in a check, a face or edge may lie from what it came from.
+#[derive(Clone, Copy)]
+pub(crate) struct Reach {
+    /// A face made in place of an edge, or an offset of a face, lies within this of it.
+    pub made: f64,
+    /// A face or edge the operation moved lies within this of the one it came from.
+    pub moved: f64,
 }
 
 /// The result's history, checked against it and its operands, with every origin checked
@@ -70,25 +79,33 @@ fn to_edge(m: &Mesh, e: usize, p: Vec3) -> f64 {
 /// some of them; each edge lies along its origin edges, or on both faces of a meeting. `tol`:
 /// the meshes' tolerance.
 fn verified<'a>(r: &'a Body, operands: &[&Body], tol: f64) -> &'a History {
-    let h = r.history().expect("the boolean reports its history");
+    checked(r, operands, tol, Reach { made: 0.0, moved: 0.0 }, &|_| false)
+}
+
+/// [`verified`] for any operation: a face lies on its origin faces (within `at.moved` where the
+/// operation moves faces), within `at.made` of the edges it is made in place of and of the faces
+/// it is an offset of; an edge lies along its origin edges (within `at.moved`). Faces from
+/// nothing are allowed only where `generated` says.
+pub(crate) fn checked<'a>(r: &'a Body, operands: &[&Body], tol: f64, at: Reach, generated: &dyn Fn(usize) -> bool) -> &'a History {
+    let h = r.history().expect("the operation reports its history");
     h.check(r, operands).unwrap();
     let rm = r.tessellate(tol).unwrap();
     let ms: Vec<Mesh> = operands.iter().map(|b| b.tessellate(tol).unwrap()).collect();
     let near = 4.0 * tol + r.size() * 1e-6;
     let on = |o: &FaceOrigin, p: Vec3| match *o {
-        FaceOrigin::Face { operand, face } => to_face(&ms[operand], face, p) < near,
+        FaceOrigin::Face { operand, face } => to_face(&ms[operand], face, p) < near.max(at.moved),
+        FaceOrigin::Edge { operand, edge } => to_edge(&ms[operand], edge, p) < at.made + near,
+        FaceOrigin::Offset { operand, face } => to_face(&ms[operand], face, p) < at.made + near,
         _ => false,
     };
+    let along = |o: &EdgeOrigin, p: &Vec3| match *o {
+        EdgeOrigin::Edge { operand, edge } => to_edge(&ms[operand], edge, *p) < near.max(at.moved),
+        EdgeOrigin::Meet { a, b } => on(&a, *p) && on(&b, *p),
+    };
     for (i, f) in h.faces.iter().enumerate() {
-        assert!(!f.origins.is_empty(), "face {i} has no origin");
-        let centres: Vec<Vec3> = rm
-            .triangles
-            .iter()
-            .zip(&rm.tri_face)
-            .filter(|(_, x)| **x as usize == i)
-            .map(|(t, _)| t.map(|k| rm.positions[k as usize]).iter().fold(Vec3::ZERO, |s, p| s + *p) * (1.0 / 3.0))
-            .collect();
-        for c in &centres {
+        assert!(!f.origins.is_empty() || generated(i), "face {i} has no origin");
+        let centres = centres(&rm, i);
+        for c in centres.iter().filter(|_| !f.origins.is_empty()) {
             assert!(f.origins.iter().any(|o| on(o, *c)), "face {i} ({f:?}) at {c:?} lies on none of its origins");
         }
         for o in &f.origins {
@@ -98,33 +115,33 @@ fn verified<'a>(r: &'a Body, operands: &[&Body], tol: f64) -> &'a History {
     for (j, e) in h.edges.iter().enumerate() {
         let pts = &rm.edges[j];
         for o in &e.origins {
-            let ok = |p: &Vec3| match *o {
-                EdgeOrigin::Edge { operand, edge } => to_edge(&ms[operand], edge, *p) < near,
-                EdgeOrigin::Meet { a, b } => on(&a, *p) && on(&b, *p),
-            };
             match o {
                 // A joined edge runs along all of its origins, each along part of it.
-                EdgeOrigin::Edge { .. } if e.origins.len() > 1 => assert!(pts.iter().any(ok), "edge {j}: {o:?} is not along it"),
-                _ => assert!(pts.iter().all(ok), "edge {j} ({e:?}) does not lie along {o:?}"),
+                EdgeOrigin::Edge { .. } if e.origins.len() > 1 => assert!(pts.iter().any(|p| along(o, p)), "edge {j}: {o:?} is not along it"),
+                _ => assert!(pts.iter().all(|p| along(o, p)), "edge {j} ({e:?}) does not lie along {o:?}"),
             }
         }
         if e.origins.len() > 1 {
             for p in pts {
-                assert!(
-                    e.origins.iter().any(|o| match *o {
-                        EdgeOrigin::Edge { operand, edge } => to_edge(&ms[operand], edge, *p) < near,
-                        EdgeOrigin::Meet { a, b } => on(&a, *p) && on(&b, *p),
-                    }),
-                    "edge {j}: {p:?} lies along none of {e:?}"
-                );
+                assert!(e.origins.iter().any(|o| along(o, p)), "edge {j}: {p:?} lies along none of {e:?}");
             }
         }
     }
     h
 }
 
+/// The centres of face `f`'s triangles.
+pub(crate) fn centres(m: &Mesh, f: usize) -> Vec<Vec3> {
+    m.triangles
+        .iter()
+        .zip(&m.tri_face)
+        .filter(|(_, x)| **x as usize == f)
+        .map(|(t, _)| t.map(|k| m.positions[k as usize]).iter().fold(Vec3::ZERO, |s, p| s + *p) * (1.0 / 3.0))
+        .collect()
+}
+
 /// How many faces of each change.
-fn changes(h: &History) -> [usize; 5] {
+pub(crate) fn changes(h: &History) -> [usize; 5] {
     let mut n = [0; 5];
     for f in &h.faces {
         n[match f.change {

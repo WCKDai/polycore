@@ -12,6 +12,7 @@ use solvecraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Solid, from_p3, p3};
+use crate::record::Rebuild;
 use crate::{KernelError, Result};
 
 fn unsupported(msg: &str) -> KernelError {
@@ -316,12 +317,13 @@ fn trim_curved_seam(seam: &mt::Edge, a: Option<mt::Vertex>, b: Option<mt::Vertex
     mt::Edge::try_new(&a, &b, piece).map_err(|e| KernelError::Failed(format!("curve blend: seam: {e}")))
 }
 
-/// Blend the closed chain of edges (ids in any order) with radius `r`.
-pub(crate) fn curve_blend(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, round: bool) -> Result<Solid> {
+/// Blend the closed chain of edges (ids in any order) with radius `r`; with what it built from
+/// `solid` (each blend face in place of its chain edge).
+pub(crate) fn curve_blend(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, round: bool) -> Result<(Solid, Rebuild)> {
     curve_blend_with_limit(solid, ids, size, r, round, MAX_SAMPLES)
 }
 
-fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, round: bool, max_samples: usize) -> Result<Solid> {
+fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, round: bool, max_samples: usize) -> Result<(Solid, Rebuild)> {
     if !(size.is_finite() && size > 0.0 && r.is_finite() && r > 0.0) {
         return Err(KernelError::Invalid("curve blend size and radius must be finite and positive".into()));
     }
@@ -696,6 +698,8 @@ fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, 
             seam_subst.insert(id, builder::line(&a, &b));
         }
         let mut out: Vec<mt::Face> = Vec::new();
+        let mut rec = Rebuild::default();
+        rec.pieces(&seam_subst);
         for (fi, f) in faces.iter().enumerate() {
             let corners: Vec<usize> = end_faces.iter().filter(|(_, g)| *g == fi).map(|(k, _)| *k).collect();
             if !corners.is_empty() {
@@ -734,7 +738,9 @@ fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, 
                     }
                     wires.push(mt::Wire::from(es));
                 }
-                out.push(crate::heal::absolute_face(f, wires).ok_or_else(|| fail("an end face could not be rebuilt"))?);
+                let rebuilt = crate::heal::absolute_face(f, wires).ok_or_else(|| fail("an end face could not be rebuilt"))?;
+                rec.face(&rebuilt, f);
+                out.push(rebuilt);
                 continue;
             }
             let on1 = side1.contains(&fi);
@@ -761,7 +767,9 @@ fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, 
                 }
                 wires.push(mt::Wire::from(es));
             }
-            out.push(crate::heal::absolute_face(f, wires).ok_or_else(|| fail("a side face could not be rebuilt"))?);
+            let rebuilt = crate::heal::absolute_face(f, wires).ok_or_else(|| fail("a side face could not be rebuilt"))?;
+            rec.face(&rebuilt, f);
+            out.push(rebuilt);
         }
         // Blend faces: each runs its side-1 contact the other way from side 1's face.
         for (k, bf) in blends.iter().enumerate() {
@@ -785,13 +793,14 @@ fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, 
                 vec![e1.clone(), ak1.clone(), e2.inverse(), ak.inverse()].into()
             };
             let face = mt::Face::try_new(vec![wire], bf.clone()).map_err(|e| fail(&e.to_string()))?;
+            rec.blend(&face, [chain_e.id()]);
             out.push(face);
         }
         let mut shells = solid.boundaries().clone();
         if let Some(sh) = shells.get_mut(si) {
             *sh = out.into();
         }
-        Solid::try_new(shells).map_err(|e| fail(&format!("invalid solid: {e}")))
+        Ok((Solid::try_new(shells).map_err(|e| fail(&format!("invalid solid: {e}")))?, rec))
     })
 }
 

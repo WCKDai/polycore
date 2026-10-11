@@ -148,6 +148,20 @@ pub(crate) fn heal_body(body: &Body, solid: Solid, size: f64, keep: &[Vec<Vec3>]
     heal_build(solid, size, keep, faces, edges, counts)
 }
 
+/// `body` healed as the local modifiers take it (coplanar neighbours as one face, as after a
+/// join; faces split on purpose kept apart), with its history over `[body]`.
+pub(crate) fn healed(body: &Body) -> Result<Body> {
+    let counts = record::counts(&[body]);
+    heal_body(&operand(body, 0, &counts), body.deep_copy(), body.size(), body.split_keep(), &counts)
+}
+
+/// `body` copied as it is, unhealed (`Body::deep_copy`, which keeps its face and edge order),
+/// with its history over `[body]`: every face and edge kept.
+pub(crate) fn copied(body: &Body) -> Result<Body> {
+    let copy = Body::new(body.deep_copy())?;
+    Ok(operand(&copy, 0, &record::counts(&[body])))
+}
+
 /// The faces and edges of `a`, then of the tool `b` turned inside out as a void (`inner`, a
 /// copy of `b`, with `inner_edges` its edges by identity before turning): the history of
 /// `a` with `b`'s inside taken out where `b` lies wholly within it.
@@ -167,4 +181,4 @@ pub(crate) fn void(
 
 #[cfg(test)]
 #[path = "boolean_history_tests.rs"]
-mod tests;
+pub(crate) mod tests;

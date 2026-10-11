@@ -480,6 +480,12 @@ impl Body {
         self
     }
 
+    /// This body with no history: an operation whose history is not known.
+    pub(crate) fn without_history(mut self) -> Self {
+        self.history = None;
+        self
+    }
+
     pub fn face_sources(&self) -> Option<&[Option<FaceSource>]> {
         self.face_sources.as_deref().map(Vec::as_slice)
     }
