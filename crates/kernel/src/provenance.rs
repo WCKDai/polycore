@@ -178,7 +178,7 @@ pub fn trace(result: &Body, inputs: &[&Body]) -> Result<History> {
 
 /// The profile segments of the loops, in [`FaceOrigin::Profile`] order (outer, then holes).
 fn segments(regions: &[Region2]) -> Vec<Seg2> {
-    regions.iter().flat_map(|r| std::iter::once(&r.outer).chain(r.holes.iter())).flat_map(|l| l.segs.iter().copied()).collect()
+    crate::numbered::profile_loops(regions).flat_map(|l| l.segs.iter().copied()).collect()
 }
 
 /// The segment nearest the 2D points (by mean distance).

@@ -39,6 +39,7 @@ mod loopblend;
 mod measure;
 mod mesh_convert;
 mod meshbody;
+mod numbered;
 mod offset;
 mod ops;
 mod polybool;

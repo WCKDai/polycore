@@ -78,24 +78,44 @@ fn rotated(l: &Loop2, k: usize) -> Loop2 {
     Loop2 { segs }
 }
 
-/// An extrusion (`h` up from `plane`): its caps by height, its sides by the profile segment
-/// under them.
-fn expected_extrusion(b: &Body, plane: &Plane, r: &Region2, h: f64) -> Vec<Vec<FaceOrigin>> {
+/// A body swept from `r`: each face from the profile segments it lies over (`to_2d` takes a
+/// point back into the profile's plane, within `tol`), or else the cap `cap` says its points
+/// lie on (if any).
+fn expected_swept(
+    b: &Body,
+    r: &Region2,
+    to_2d: impl Fn(Vec3) -> Vec2,
+    tol: f64,
+    cap: impl Fn(&[Vec3]) -> Option<FaceOrigin>,
+) -> Vec<Vec<FaceOrigin>> {
     let loops: Vec<&Loop2> = std::iter::once(&r.outer).chain(&r.holes).collect();
-    let sides = swept_from(b, &loops, |p| plane.to_local(p), 1e-7);
+    let swept = swept_from(b, &loops, to_2d, tol);
     points(b)
         .iter()
-        .zip(sides)
-        .map(|(pts, segs)| {
-            if pts.iter().all(|p| plane.height(*p).abs() < 1e-9) {
-                vec![START]
-            } else if pts.iter().all(|p| (plane.height(*p) - h).abs() < 1e-9) {
-                vec![END]
-            } else {
-                segs.into_iter().map(P).collect()
-            }
-        })
+        .zip(swept)
+        .map(|(pts, segs)| if segs.is_empty() { cap(pts).into_iter().collect() } else { segs.into_iter().map(P).collect() })
         .collect()
+}
+
+/// An extrusion (`h` up from `plane`): its sides by the profile segment under them, its caps
+/// by height.
+fn expected_extrusion(b: &Body, plane: &Plane, r: &Region2, h: f64) -> Vec<Vec<FaceOrigin>> {
+    let at = |pts: &[Vec3], z: f64| pts.iter().all(|p| (plane.height(*p) - z).abs() < 1e-9);
+    expected_swept(
+        b,
+        r,
+        |p| plane.to_local(p),
+        1e-7,
+        |pts| {
+            if at(pts, 0.0) {
+                Some(START)
+            } else if at(pts, h) {
+                Some(END)
+            } else {
+                None
+            }
+        },
+    )
 }
 
 /// Side k comes from segment k whatever order and direction the loops are given in.
@@ -176,21 +196,13 @@ const SIDE: Plane = Plane { origin: Vec3::ZERO, x: Vec3::X, y: Vec3::Z };
 /// A revolution's faces by the profile segment under each point turned back into the sketch,
 /// the angle caps by where they lie (the start in the sketch plane).
 fn expected_revolution(b: &Body, r: &Region2) -> Vec<Vec<FaceOrigin>> {
-    let loops: Vec<&Loop2> = std::iter::once(&r.outer).chain(&r.holes).collect();
-    let swept = swept_from(b, &loops, |p| Vec2::new(p.x.hypot(p.y), p.z), 1e-6);
-    points(b)
-        .iter()
-        .zip(swept)
-        .map(|(pts, segs)| {
-            if !segs.is_empty() {
-                segs.into_iter().map(P).collect()
-            } else if pts.iter().all(|p| p.y.abs() < 1e-9 && p.x > -1e-9) {
-                vec![START]
-            } else {
-                vec![END]
-            }
-        })
-        .collect()
+    expected_swept(
+        b,
+        r,
+        |p| Vec2::new(p.x.hypot(p.y), p.z),
+        1e-6,
+        |pts| Some(if pts.iter().all(|p| p.y.abs() < 1e-9 && p.x > -1e-9) { START } else { END }),
+    )
 }
 
 #[test]
@@ -205,6 +217,47 @@ fn revolve_partial_and_full() {
             assert_eq!(got.iter().filter(|o| **o == [P(k)]).count(), parts, "segment {k} at angle {angle}");
         }
         assert_eq!(got.iter().filter(|o| **o == [START] || **o == [END]).count(), caps);
+    }
+}
+
+/// Loops given clockwise, a hole that is a full circle of three arcs: extrude numbers every
+/// face by the segment as given; revolve re-seams the circle into two half circles, each from
+/// every given arc it runs over.
+#[test]
+fn clockwise_loops_and_a_reseamed_circle_keep_their_numbers() {
+    let (c, rad) = (Vec2::new(20.0, 10.0), 4.0);
+    let arcs = [(0.3, 2.0), (2.3, 2.5), (4.8, TAU - 4.5)];
+    let ccw = Loop2 { segs: arcs.iter().map(|&(start, sweep)| Seg2::Arc { center: c, radius: rad, start, sweep }).collect() };
+    // Clockwise: segment 4 is the third arc above, 5 the second, 6 the first.
+    let r = Region2 { outer: rect(10.0, 0.0, 30.0, 20.0).reversed(), holes: vec![ccw.reversed()] };
+    let b = crate::extrude(&Plane::XY, std::slice::from_ref(&r), 0.0, 10.0).unwrap().pop().unwrap();
+    let got = origins(&b);
+    assert_eq!(got, expected_extrusion(&b, &Plane::XY, &r, 10.0));
+    for k in 0..7 {
+        assert_eq!(got.iter().filter(|o| **o == [P(k)]).count(), 1, "segment {k}");
+    }
+    // Revolved, the circle restarts at 0.4142 rad: the half from there runs over the first two
+    // arcs (6, 5), the other half over all three (it ends past the first arc's start).
+    let first_half = |q: Vec2| (q - c).angle().rem_euclid(TAU);
+    for angle in [FRAC_PI_2, TAU] {
+        let b = crate::revolve(&SIDE, std::slice::from_ref(&r), Vec2::ZERO, Vec2::Y, angle).unwrap().pop().unwrap();
+        let got = origins(&b);
+        let want = expected_revolution(&b, &r);
+        let (_, centres) = mesh_points(&b);
+        let mut halves = [0, 0];
+        for ((g, w), centres) in got.iter().zip(&want).zip(&centres) {
+            let flat: Vec<Vec2> = centres.iter().map(|p| Vec2::new(p.x.hypot(p.y), p.z)).collect();
+            if flat.iter().all(|q| (q.dist(c) - rad).abs() < 0.1) {
+                let first = flat.iter().all(|q| (0.4142 - 1e-3..=0.4142 + PI + 1e-3).contains(&first_half(*q)));
+                assert_eq!(g, &if first { vec![P(5), P(6)] } else { vec![P(4), P(5), P(6)] }, "angle {angle}");
+                halves[usize::from(!first)] += 1;
+            } else {
+                assert_eq!(g, w, "angle {angle}");
+            }
+        }
+        // Truck turns each half in as many parts as each rectangle side.
+        let parts = got.iter().filter(|o| **o == [P(0)]).count();
+        assert_eq!(halves, [parts, parts], "angle {angle}");
     }
 }
 

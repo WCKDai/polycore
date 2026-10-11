@@ -433,7 +433,8 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
         let mut out = Vec::new();
         // History (one operand, the surface): a copy at no distance is the face itself, a copy
         // further out its offset, a wall is made along its free edge.
-        let edge_index = crate::record::edge_index(body);
+        let operand = crate::record::Operand::new(body);
+        let edge_index = &operand.edges;
         let mut history = Vec::new();
         let copy = |i: usize, d: f64| {
             if d == 0.0 {
@@ -499,7 +500,7 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
                 }
             }
         }
-        crate::record::attach_edges(Body::new(mt::Solid::new_unchecked(vec![shell]))?, &[body], history, copies)
+        crate::record::attach(Body::new(mt::Solid::new_unchecked(vec![shell]))?, &[operand], Some(history), copies)
     })
 }
 

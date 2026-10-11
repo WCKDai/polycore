@@ -6,6 +6,8 @@ use truck_modeling as mt;
 
 use crate::body::{Body, Solid, p3};
 use crate::build::{cap_and_close, uniform_wire};
+use crate::numbered::NumberedLoop;
+use crate::record::{self, Side};
 use crate::{KernelError, Result, guard};
 
 /// Rotate `v` about the unit axis `k` by `ang` (Rodrigues).
@@ -26,20 +28,19 @@ pub fn sweep_helix(plane: &Plane, region: &Region2, axis_origin: Vec3, axis: Vec
     if region.area().abs() < 1e-9 {
         return Err(KernelError::Invalid("profile has no area".into()));
     }
-    // The profile must clear itself after one turn.
-    let lp = region.outer.ccw();
+    // The profile must clear itself after one turn. (Only the outer loop is swept.)
+    let numbered = crate::numbered::number_regions(std::slice::from_ref(region)).pop().ok_or_else(|| KernelError::Invalid("profile".into()))?;
+    let profile = numbered.outer.oriented(false);
+    let lp = &profile.lp;
     let along: Vec<f64> =
         lp.segs.iter().flat_map(|s| (0..8).map(move |i| s.point_at(i as f64 / 8.0))).map(|q| (plane.to_world(q) - axis_origin).dot(k)).collect();
     let extent = along.iter().cloned().fold(f64::NEG_INFINITY, f64::max) - along.iter().cloned().fold(f64::INFINITY, f64::min);
     if turns > 1.0 && pitch.abs() <= extent {
         return Err(KernelError::Invalid(format!("the coil runs into itself: the pitch must exceed the section ({extent:.3} mm)")));
     }
-    // Profile numbering (only the outer loop is swept).
-    let origins = crate::record::loop_origins(std::slice::from_ref(region)).into_iter().next().unwrap_or_default();
     // One smooth B-spline wall per profile segment; the ruled walls below are the fallback.
-    if let Ok(b) = smooth_helix(plane, &lp, axis_origin, k, pitch, turns) {
-        // Its faces as built: one wall per segment, then the caps.
-        return crate::record::attach(b, &[], crate::record::walls_then_caps(origins));
+    if let Ok(b) = smooth_helix(plane, &profile, axis_origin, k, pitch, turns) {
+        return Ok(b);
     }
     let n = ((turns * 120.0).ceil() as usize).clamp(4, 24_000);
     let total = std::f64::consts::TAU * turns;
@@ -49,18 +50,18 @@ pub fn sweep_helix(plane: &Plane, region: &Region2, axis_origin: Vec3, axis: Vec
         let lift = k * (pitch * a / std::f64::consts::TAU);
         let o = axis_origin + rot(plane.origin - axis_origin, k, a) + lift;
         let pl = Plane { origin: o, x: rot(plane.x, k, a), y: rot(plane.y, k, a) };
-        wires.push(uniform_wire(&pl, &lp)?);
+        wires.push(uniform_wire(&pl, lp)?);
     }
     guard("helix sweep", || {
-        let mut faces: Vec<mt::Face> = Vec::new();
+        // Every station's wire has the profile's segments, edge for edge.
+        let mut faces: Vec<Side> = Vec::new();
         for w in wires.windows(2) {
-            let sides = builder::try_wire_homotopy(&w[0], &w[1]).map_err(|e| KernelError::Failed(format!("helix: {e}")))?;
-            faces.extend(sides.face_iter().cloned());
+            let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+            let sides = builder::try_wire_homotopy(a, b).map_err(|e| KernelError::Failed(format!("helix: {e}")))?;
+            faces.extend(record::ruled(&sides, a, b, &profile.from, &profile.from));
         }
         let (Some(first), Some(last)) = (wires.first(), wires.last()) else { return Err(KernelError::Failed("helix".into())) };
-        let seeds: Vec<(mt::EdgeID, Vec<usize>)> = first.edge_iter().map(|e| e.id()).zip(origins).collect();
-        let history = crate::record::capped_sides(&faces, &seeds, crate::record::Column::ToEnd);
-        crate::record::attach_if(cap_and_close(faces, std::slice::from_ref(first), std::slice::from_ref(last))?, &[], history)
+        cap_and_close(faces, std::slice::from_ref(first), std::slice::from_ref(last), false)
     })
 }
 
@@ -109,7 +110,8 @@ const STATIONS_PER_TURN: f64 = 12.0;
 
 /// Helical walls as B-spline surfaces: each profile segment, sampled at every station of the
 /// screw motion, interpolated by cubics across the profile and then along the helix.
-fn smooth_helix(plane: &Plane, lp: &Loop2, o: Vec3, k: Vec3, pitch: f64, turns: f64) -> Result<Body> {
+fn smooth_helix(plane: &Plane, profile: &NumberedLoop, o: Vec3, k: Vec3, pitch: f64, turns: f64) -> Result<Body> {
+    let lp = &profile.lp;
     let nseg = lp.segs.len();
     if nseg == 0 || nseg > 64 {
         return Err(KernelError::Invalid("helix profile".into()));
@@ -171,7 +173,8 @@ fn smooth_helix(plane: &Plane, lp: &Loop2, o: Vec3, k: Vec3, pitch: f64, turns: 
             };
             // Counter-clockwise in the surface's (u along the helix, v along the profile) space.
             let w: mt::Wire = vec![sa.clone(), b.clone(), sb.inverse(), a.inverse()].into();
-            walls.push(mt::Face::try_new(vec![w], mt::Surface::BSplineSurface(surf.clone())).map_err(|e| fail(&e.to_string()))?);
+            let wall = mt::Face::try_new(vec![w], mt::Surface::BSplineSurface(surf.clone())).map_err(|e| fail(&e.to_string()))?;
+            walls.push((wall, Some(record::profile(profile.numbers(j)))));
         }
         let w0: mt::Wire = e0.iter().cloned().collect();
         let w1: mt::Wire = e1.iter().cloned().collect();
@@ -179,8 +182,8 @@ fn smooth_helix(plane: &Plane, lp: &Loop2, o: Vec3, k: Vec3, pitch: f64, turns: 
         let expected = lp_area_path(plane, lp, o, k, turns);
         // A coarse mesh (within ~10%) is enough to tell a proper solid from an empty or inside-out one.
         let section_tol = (lp.signed_area().abs().sqrt() * 0.05).max(1e-3);
-        for ws in [walls.clone(), walls.iter().map(|f| f.inverse()).collect()] {
-            if let Ok(b) = cap_and_close(ws, std::slice::from_ref(&w0), std::slice::from_ref(&w1))
+        for ws in [walls.clone(), walls.iter().map(|(f, prov)| (f.inverse(), prov.clone())).collect()] {
+            if let Ok(b) = cap_and_close(ws, std::slice::from_ref(&w0), std::slice::from_ref(&w1), false)
                 && b.tessellate(section_tol).is_ok_and(|m| (m.measure().volume - expected).abs() <= 0.15 * expected.abs())
             {
                 return Ok(b);
@@ -211,30 +214,27 @@ pub fn loft_to_point(plane: &Plane, lp: &Loop2, apex: Vec3) -> Result<Body> {
     }
     // Wind the base so its normal points away from the apex.
     let above = (apex - plane.origin).dot(plane.normal()) > 0.0;
-    let numbers = crate::record::ccw_numbers(lp, above, 0);
-    let mut lp = lp.ccw();
-    if above {
-        lp = lp.reversed();
-    }
+    let base = crate::numbered::number_loops([lp]).pop().ok_or_else(|| KernelError::Invalid("loft to a point: bad section".into()))?.oriented(above);
+    let lp = &base.lp;
     guard("loft to point", || {
         let verts: Vec<mt::Vertex> = lp.segs.iter().map(|s| builder::vertex(p3(plane.to_world(s.start())))).collect();
         let top = builder::vertex(p3(apex));
         let m = verts.len();
-        let base: Vec<mt::Edge> = (0..m).filter_map(|i| Some(builder::line(verts.get(i)?, verts.get((i + 1) % m)?))).collect();
+        let edges: Vec<mt::Edge> = (0..m).filter_map(|i| Some(builder::line(verts.get(i)?, verts.get((i + 1) % m)?))).collect();
         let sides: Vec<mt::Edge> = verts.iter().map(|v| builder::line(v, &top)).collect();
         let mut faces = Vec::with_capacity(m + 1);
         // History as the faces are made: the base is the section (the start cap), each
         // triangle comes from its base segment.
         let mut history = Vec::with_capacity(m + 1);
-        let bw: mt::Wire = base.iter().cloned().collect();
+        let bw: mt::Wire = edges.iter().cloned().collect();
         faces.push(builder::try_attach_plane(&[bw]).map_err(|e| KernelError::Failed(format!("loft base: {e}")))?);
-        history.push(crate::record::cap(false));
+        history.push(record::cap(false));
         for i in 0..m {
-            let (Some(e), Some(up), Some(down), Some(n)) = (base.get(i), sides.get((i + 1) % m), sides.get(i), numbers.get(i)) else { continue };
+            let (Some(e), Some(up), Some(down)) = (edges.get(i), sides.get((i + 1) % m), sides.get(i)) else { continue };
             // Triangle i: along the base edge, up to the apex, back down — opposite to the base's winding.
             let w: mt::Wire = vec![e.inverse(), down.clone(), up.inverse()].into();
             faces.push(builder::try_attach_plane(&[w]).map_err(|e| KernelError::Failed(format!("loft side: {e}")))?);
-            history.push(crate::record::profile(&[*n]));
+            history.push(record::profile(base.numbers(i)));
         }
         let shell: mt::Shell = faces.into();
         let body = match Solid::try_new(vec![shell.clone()]) {
@@ -244,7 +244,7 @@ pub fn loft_to_point(plane: &Plane, lp: &Loop2, apex: Vec3) -> Result<Body> {
                 Body::new(Solid::try_new(vec![inv]).map_err(|e| KernelError::Failed(format!("loft to point: {e}")))?)?
             }
         };
-        crate::record::attach(body, &[], history)
+        record::attach(body, &[], Some(history), Default::default())
     })
 }
 

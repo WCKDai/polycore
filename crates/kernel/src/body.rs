@@ -458,6 +458,13 @@ impl Body {
         Ok(self)
     }
 
+    /// [`Body::with_history`], given the operands' face and edge counts.
+    pub(crate) fn with_history_counts(mut self, history: crate::history::History, operands: &[(usize, usize)]) -> Result<Self> {
+        history.check_counts((self.face_count(), self.edge_count()), operands)?;
+        self.history = Some(std::sync::Arc::new(history));
+        Ok(self)
+    }
+
     pub fn face_sources(&self) -> Option<&[Option<FaceSource>]> {
         self.face_sources.as_deref().map(Vec::as_slice)
     }

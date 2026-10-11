@@ -1,7 +1,9 @@
 //! Exact radial embossing of orthogonal profiles on complete cylindrical walls.
 use crate::body::{Body, Solid, from_p3, p3};
 use crate::history::Change;
+use crate::numbered::NumberedRegion;
 use crate::offset::{Surf, surf_of};
+use crate::record::Operand;
 use crate::{KernelError, Result, guard};
 use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling::{self as mt, Transformed, builder};
@@ -255,7 +257,6 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         let s0 = (plane.origin - o).dot(tangent);
         let map2 = |p: Vec2| Vec2::new(s0 + plane.dir_to_world(p).dot(tangent), z0 + plane.dir_to_world(p).dot(axis));
         let mut count = 0usize;
-        let mut mapped = Vec::new();
         // The regions mapped onto the wall as given (their loops' turning may differ from the
         // sketch's): profile numbering follows them.
         let mut unoriented = Vec::new();
@@ -294,12 +295,11 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
                 }
                 loops.push(Loop2 { segs });
             }
-            let outer = loops.first().ok_or_else(|| fail("profile"))?.ccw();
-            let holes = loops.iter().skip(1).map(|l| l.ccw().reversed()).collect();
-            mapped.push(Region2 { outer, holes });
             let mut given = loops.into_iter();
             unoriented.push(Region2 { outer: given.next().ok_or_else(|| fail("profile"))?, holes: given.collect() });
         }
+        let numbered: Vec<NumberedRegion> = crate::numbered::number_regions(&unoriented).iter().map(NumberedRegion::oriented).collect();
+        let mapped: Vec<Region2> = numbered.iter().map(NumberedRegion::region).collect();
         validate_profiles(&mapped, tol)?;
         if qualify {
             let segment = mapped.first().and_then(|region| region.outer.segs.first()).ok_or_else(|| fail("empty profile"))?;
@@ -343,16 +343,13 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         // History of the faces added (walls from their profile segments, the raised or sunk
         // region the profile's end cap), in the order added.
         let mut added_history = Vec::new();
-        let mut origins = crate::record::loop_origins(&unoriented).into_iter();
-        for reg in &mapped {
+        for reg in &numbered {
             let mut cap = Vec::new();
-            for (li, lp) in std::iter::once(&reg.outer).chain(&reg.holes).enumerate() {
+            for (li, numbered_loop) in reg.loops().enumerate() {
+                let lp = &numbered_loop.lp;
                 let (base, top, walls) = wrapped_loop(lp, r, rr, &at)?;
-                let loop_origins = origins.next().ok_or_else(|| fail("profile numbering"))?;
-                if loop_origins.len() != walls.len() {
-                    return Err(fail("profile numbering"));
-                }
-                added_history.extend(loop_origins.iter().map(|o| crate::record::profile(o)));
+                // One wall per segment, in order.
+                added_history.extend((0..walls.len()).map(|j| crate::record::profile(numbered_loop.numbers(j))));
                 if li == 0 {
                     footprints.push((lp, base.inverse()));
                 } else {
@@ -383,7 +380,7 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         // gathered: the other faces kept, the wall's pieces left around the footprints (split
         // when the profile's holes leave more than one), then the faces added.
         let pieces = if base_patches.len() > 1 { Change::Split } else { Change::Modified };
-        let mut history: Vec<_> = (0..faces.len()).filter(|i| *i != fi).map(|i| crate::record::from_face(0, i, Change::Kept)).collect();
+        let mut history: Vec<_> = crate::record::kept_except(faces.len(), fi).collect();
         history.extend(std::iter::repeat_n(crate::record::from_face(0, fi, pieces), base_patches.len()));
         history.extend(added_history);
         for patch in base_patches {
@@ -395,7 +392,7 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         if !result.validity().is_empty() {
             return Err(fail("rebuilt cylinder is not a closed manifold"));
         }
-        Ok(EmbossOutcome::Body(crate::record::attach(result, &[body], history)?))
+        Ok(EmbossOutcome::Body(crate::record::attach(result, &[Operand::new(body)], Some(history), Default::default())?))
     })
 }
 

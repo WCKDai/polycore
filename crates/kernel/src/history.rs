@@ -117,13 +117,18 @@ impl History {
     /// Check that this history describes `result` made from `operands`: one entry per face and
     /// edge, and every origin within its operand's faces and edges.
     pub fn check(&self, result: &Body, operands: &[&Body]) -> Result<()> {
-        if self.operands != operands.len() {
+        let counts: Vec<(usize, usize)> = operands.iter().map(|b| (b.face_count(), b.edge_count())).collect();
+        self.check_counts((result.face_count(), result.edge_count()), &counts)
+    }
+
+    /// [`History::check`] against the result's and each operand's face and edge counts.
+    pub(crate) fn check_counts(&self, result: (usize, usize), counts: &[(usize, usize)]) -> Result<()> {
+        if self.operands != counts.len() {
             return Err(failed("operand count does not match"));
         }
-        if self.faces.len() != result.face_count() || self.edges.len() != result.edge_count() {
+        if self.faces.len() != result.0 || self.edges.len() != result.1 {
             return Err(failed("entries do not match the result's faces and edges"));
         }
-        let counts: Vec<(usize, usize)> = operands.iter().map(|b| (b.face_count(), b.edge_count())).collect();
         let face_ok = |o: &FaceOrigin| match *o {
             FaceOrigin::Face { operand, face } | FaceOrigin::Offset { operand, face } => counts.get(operand).is_some_and(|c| face < c.0),
             FaceOrigin::Edge { operand, edge } => counts.get(operand).is_some_and(|c| edge < c.1),

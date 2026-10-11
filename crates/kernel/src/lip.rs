@@ -8,6 +8,7 @@ use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
 use crate::history::{Change, FaceOrigin, FaceProv};
+use crate::record::Operand;
 use crate::{KernelError, Result, guard};
 
 fn fail(m: &str) -> KernelError {
@@ -177,10 +178,10 @@ pub fn raise_band(body: &Body, at: Vec3, width: f64, height: f64, outside: bool)
             });
         }
         // The loop's edges and the band's edge beside each, by the loop edge's index in the body.
-        let edge_index = crate::record::edge_index(body);
+        let operand = Operand::new(body);
         let mut wall_edge: std::collections::HashMap<mt::EdgeID, usize> = std::collections::HashMap::new();
         for (e, ce) in along.edge_iter().zip(&cedges) {
-            if let Some(i) = edge_index.get(&e.id()) {
+            if let Some(i) = operand.edges.get(&e.id()) {
                 wall_edge.insert(e.id(), *i);
                 wall_edge.insert(ce.id(), *i);
             }
@@ -204,9 +205,8 @@ pub fn raise_band(body: &Body, at: Vec3, width: f64, height: f64, outside: bool)
         // kept, the face trimmed to what the band leaves, each wall made along the loop
         // edge it rises from (the band's inner wall along the edge it runs beside), and the
         // band's top an offset of the face. (Flipping a face keeps its edges.)
-        let history: Option<Vec<FaceProv>> = (0..faces.len())
-            .filter(|i| *i != fi)
-            .map(|i| Some(crate::record::from_face(0, i, Change::Kept)))
+        let history: Option<Vec<FaceProv>> = crate::record::kept_except(faces.len(), fi)
+            .map(Some)
             .chain([Some(crate::record::from_face(0, fi, Change::Modified))])
             .chain(wall_along.face_iter().chain(wall_c.face_iter()).map(|w| {
                 let edge = w.absolute_boundaries().iter().flatten().find_map(|e| wall_edge.get(&e.id()))?;
@@ -235,7 +235,7 @@ pub fn raise_band(body: &Body, at: Vec3, width: f64, height: f64, outside: bool)
                 Ok(s) => {
                     let b = Body::new(s)?;
                     if b.validity().is_empty() {
-                        return crate::record::attach_if(b, &[body], history.clone());
+                        return crate::record::attach(b, std::slice::from_ref(&operand), history.clone(), Default::default());
                     }
                     last = b.validity().join("; ");
                 }
