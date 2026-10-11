@@ -884,6 +884,15 @@ impl Body {
         self.lumps_with_clearance(0.0)
     }
 
+    /// Whether this body and `other` share material or touch (within a fine mesh tolerance).
+    pub fn meets(&self, other: &Body) -> Result<bool> {
+        self.require_brep("contact test")?;
+        other.require_brep("contact test")?;
+        let tol = (self.size().max(other.size()) * 1e-4).max(1e-6);
+        let (a, b) = (self.tessellate(tol)?, other.tessellate(tol)?);
+        shell_groups::meshes_meet(&a, &b, 2.0 * tol)
+    }
+
     /// A boolean shortcut needs clearance larger than both shell mesh deflections.
     pub(crate) fn separated_lumps(&self) -> Result<Vec<Body>> {
         self.lumps_with_clearance(4.0 * (self.size() * 1e-3).max(1e-3))
