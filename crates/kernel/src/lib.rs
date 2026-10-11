@@ -17,6 +17,7 @@ mod blend_corner;
 mod blend_variable;
 mod body;
 mod boolean_diagnostics;
+mod boolean_record;
 mod bore_guard;
 mod build;
 mod coplanar;

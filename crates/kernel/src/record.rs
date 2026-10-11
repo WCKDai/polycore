@@ -46,9 +46,98 @@ pub(crate) fn generated(origins: Vec<FaceOrigin>) -> FaceProv {
     FaceProv { origins, change: Change::Generated }
 }
 
-/// The index of each of `body`'s edges by identity, in its edge order.
-fn edge_index(body: &Body) -> HashMap<mt::EdgeID, usize> {
-    edge_order(body.solid.face_iter()).0.iter().enumerate().map(|(i, e)| (e.id(), i)).collect()
+/// Result faces that are each a region of input faces, given as the input faces under it and
+/// whether it is one input face untouched (`whole`). Kept when whole; Merged with several
+/// origins; Split when its one origin lies under other result faces too; Modified otherwise;
+/// Generated with no origin.
+pub(crate) fn regions(faces: Vec<(BTreeSet<FaceOrigin>, bool)>) -> Vec<FaceProv> {
+    let mut faces: Vec<FaceProv> = faces
+        .into_iter()
+        .map(|(origins, whole)| {
+            let change = match origins.len() {
+                0 => Change::Generated,
+                1 if whole => Change::Kept,
+                1 => Change::Modified,
+                _ => Change::Merged,
+            };
+            FaceProv { origins: origins.into_iter().collect(), change }
+        })
+        .collect();
+    mark_shared_split(&mut faces);
+    faces
+}
+
+/// Faces of one origin that is under other faces too, and that still say Kept or Modified,
+/// are Split (also where histories are put side by side: pieces of one body can share a
+/// source).
+pub(crate) fn mark_shared_split(faces: &mut [FaceProv]) {
+    let mut uses: HashMap<FaceOrigin, usize> = HashMap::new();
+    for o in faces.iter().flat_map(|f| &f.origins) {
+        *uses.entry(*o).or_default() += 1;
+    }
+    for f in faces.iter_mut() {
+        if matches!(f.change, Change::Kept | Change::Modified)
+            && let [o] = f.origins.as_slice()
+            && uses.get(o).copied().unwrap_or(0) > 1
+        {
+            f.change = Change::Split;
+        }
+    }
+}
+
+/// The index of each of `solid`'s edges by identity, in its edge order.
+pub(crate) fn edge_index(solid: &crate::body::Solid) -> HashMap<mt::EdgeID, usize> {
+    edge_order(solid.face_iter()).0.iter().enumerate().map(|(i, e)| (e.id(), i)).collect()
+}
+
+/// The index of each of `solid`'s faces by identity, in its face order.
+pub(crate) fn face_index(solid: &crate::body::Solid) -> HashMap<mt::FaceID, usize> {
+    solid.face_iter().enumerate().map(|(i, f)| (f.id(), i)).collect()
+}
+
+/// Each of `solid`'s edges, by identity, as edge `i` (its position in the solid's edge order) of
+/// operand `operand`: the operand's own edges, or a copy's made by `Body::deep_copy` or truck's
+/// mapping builders (`translated`, `transformed`), which build the same faces, wires and edges
+/// in the same order, so position `i` of the copy is position `i` of the body it copies.
+pub(crate) fn edge_origins(solid: &crate::body::Solid, operand: usize) -> HashMap<mt::EdgeID, Vec<EdgeOrigin>> {
+    edge_order(solid.face_iter()).0.iter().enumerate().map(|(edge, e)| (e.id(), vec![EdgeOrigin::Edge { operand, edge }])).collect()
+}
+
+/// The edge entries of the history of `body`, each edge's origins from `origins` (by identity);
+/// `None` when an edge has none there.
+pub(crate) fn edge_provs(body: &Body, origins: &HashMap<mt::EdgeID, Vec<EdgeOrigin>>) -> Option<Vec<EdgeProv>> {
+    let (edges, bounds) = edge_order(body.solid.face_iter());
+    edges.iter().zip(bounds).map(|(e, faces)| Some(EdgeProv { faces, origins: origins.get(&e.id())?.clone() })).collect()
+}
+
+/// `body` with the history whose faces are `faces` (in its face order) and whose edges'
+/// origins are `edges` (by identity), made from operands with the face and edge `counts`; with
+/// no history where either is missing, an edge has no entry, or the history does not describe
+/// the body (an operation whose history could not be recorded still gives its result).
+pub(crate) fn traced(
+    body: Body,
+    counts: &[(usize, usize)],
+    faces: Option<Vec<FaceProv>>,
+    edges: Option<&HashMap<mt::EdgeID, Vec<EdgeOrigin>>>,
+) -> Body {
+    let history = faces.zip(edges).and_then(|(faces, edges)| Some(History { operands: counts.len(), faces, edges: edge_provs(&body, edges)? }));
+    body.with_checked_history(history, counts)
+}
+
+/// [`traced`] of the body `Body::new` makes of `solid`: faces given in `solid`'s face order
+/// and edges by identity, both of which `Body::new` keeps.
+pub(crate) fn build(
+    solid: crate::body::Solid,
+    counts: &[(usize, usize)],
+    faces: Option<Vec<FaceProv>>,
+    edges: Option<&HashMap<mt::EdgeID, Vec<EdgeOrigin>>>,
+) -> Result<Body> {
+    Ok(traced(Body::new(solid)?, counts, faces, edges))
+}
+
+/// The face and edge counts of `bodies`, for [`traced`].
+pub(crate) fn counts(bodies: &[&Body]) -> Vec<(usize, usize)> {
+    bodies.iter().map(|b| (b.face_count(), b.edge_count())).collect()
 }
 
 /// An operation's operand, with its edges indexed by identity (in its edge order).
@@ -59,7 +148,7 @@ pub(crate) struct Operand<'a> {
 
 impl<'a> Operand<'a> {
     pub(crate) fn new(body: &'a Body) -> Operand<'a> {
-        Operand { body, edges: edge_index(body) }
+        Operand { body, edges: edge_index(&body.solid) }
     }
 }
 

@@ -97,12 +97,14 @@ impl Cache {
 
 /// Sew the faces into a closed solid.
 pub fn sew(faces: &[FaceSpec]) -> Result<Body> {
-    sew_impl(faces, false, None)
+    sew_impl(faces, false, None).map(|(body, _)| body)
 }
 
 /// Separate boundary sheets at a shared geometric edge without moving it.
 /// Optional transient sources follow only unchanged produced face identities.
-pub(crate) fn sew_touching_with_sources(faces: &[FaceSpec], sources: &[Option<crate::FaceSource>]) -> Result<Body> {
+/// Also reports the face each face of the body was built from (by its place in `faces`; `None`
+/// when that could not be followed).
+pub(crate) fn sew_touching_with_sources(faces: &[FaceSpec], sources: &[Option<crate::FaceSource>]) -> Result<(Body, Option<Vec<usize>>)> {
     if sources.len() != faces.len() {
         return Err(KernelError::Invalid("sew source alignment".into()));
     }
@@ -350,7 +352,7 @@ fn split_vertex_fans(faces: Vec<mt::Face>) -> Result<Vec<mt::Face>> {
         .collect()
 }
 
-fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::FaceSource>]>) -> Result<Body> {
+fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::FaceSource>]>) -> Result<(Body, Option<Vec<usize>>)> {
     if faces.len() < 4 || faces.len() > 200_000 {
         return Err(KernelError::Invalid("a solid needs 4…200000 faces".into()));
     }
@@ -411,12 +413,15 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
         if !sheets.is_empty() {
             out = split_vertex_fans(out)?;
         }
+        // Faces keep their identity into the solid (grouped into shells) and the body.
+        let built: HashMap<mt::FaceID, usize> = out.iter().enumerate().map(|(i, f)| (f.id(), i)).collect();
         let shells = closed_components(out)?;
         let solid = Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("sew: the faces do not close: {e}")))?;
+        let from = solid.face_iter().map(|f| built.get(&f.id()).copied()).collect();
         let body = Body::new(solid)?;
         let mapped =
             body.solid.face_iter().map(|f| source_ids.get(&f.id()).filter(|(o, _)| *o == f.orientation()).map(|(_, s)| (*s).clone())).collect();
-        Ok(body.with_face_sources(sources.map(|_| std::sync::Arc::new(mapped))))
+        Ok((body.with_face_sources(sources.map(|_| std::sync::Arc::new(mapped))), from))
     })
 }
 

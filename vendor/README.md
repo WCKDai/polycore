@@ -26,7 +26,8 @@ Changes:
   whose intersection made it. The code that creates faces and edges records them as it goes:
   `divide_face` (face pieces), `loops_store` (intersection edges, split edges, edges rebuilt on
   a moved vertex), across the passes that fold in the operands' extra shells. `and` / `or` are
-  wrappers that drop the history.
+  wrappers that drop the history; the `*_with_history` forms return the same solid with the
+  history as an `Option` (`None` where a face or edge went unrecorded).
 
 ## truck-stepio 0.3.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 

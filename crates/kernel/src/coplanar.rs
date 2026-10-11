@@ -17,7 +17,8 @@ use solvecraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
-use crate::{BoolOp, KernelError, Result, guard};
+use crate::history::{Change, EdgeOrigin, FaceOrigin, FaceProv, History};
+use crate::{BoolOp, KernelError, Result, guard, record};
 
 #[derive(Clone, Copy, Debug)]
 struct PlaneFace {
@@ -41,7 +42,8 @@ fn planes(b: &Body) -> Vec<(usize, PlaneFace)> {
 }
 
 /// Push the planar faces of `b` lying in the plane (n, d) — n their outward normal — along n
-/// by `delta` (negative: inward). Their neighbours must stand perpendicular to the plane.
+/// by `delta` (negative: inward). Their neighbours must stand perpendicular to the plane. The
+/// result's history is over `[b]` (none where the faces had to be offset instead).
 pub(crate) fn push_faces(b: &Body, n: Vec3, d: f64, delta: f64) -> Result<Body> {
     // The exact rebuild, unless it came out unsound (a curved side it couldn't re-sweep).
     match push_faces_exact(b, n, d, delta)
@@ -64,6 +66,7 @@ pub(crate) fn push_faces(b: &Body, n: Vec3, d: f64, delta: f64) -> Result<Body> 
                     _ => false,
                 })
                 .collect();
+            // An offset reports no history yet.
             crate::offset::offset_body(b, |i, _| if planes.get(i).copied().unwrap_or(false) { delta } else { 0.0 }).map_err(|_| e)
         }
     }
@@ -75,6 +78,9 @@ pub(crate) fn push_faces_exact(b: &Body, n: Vec3, d: f64, delta: f64) -> Result<
     let fail = |m: &str| KernelError::Failed(format!("pushing a face: {m}"));
     guard("push face", || {
         let solid = b.deep_copy();
+        // The copy's edges are b's, in order; the faces come out in place, one for one.
+        let mut edge_origins = record::edge_origins(&solid, 0);
+        let mut faces_from = Vec::new();
         let shift = n * delta;
         let mat = mt::Matrix4::from_translation(v3(shift));
         let mut shells = Vec::new();
@@ -89,7 +95,9 @@ pub(crate) fn push_faces_exact(b: &Body, n: Vec3, d: f64, delta: f64) -> Result<
                 _ => false,
             };
             let moving: Vec<usize> = (0..faces.len()).filter(|i| faces.get(*i).is_some_and(on_plane)).collect();
+            let first = faces_from.len();
             if moving.is_empty() {
+                faces_from.extend((first..first + faces.len()).map(|i| record::from_face(0, i, Change::Kept)));
                 shells.push(sh.clone());
                 continue;
             }
@@ -161,10 +169,18 @@ pub(crate) fn push_faces_exact(b: &Body, n: Vec3, d: f64, delta: f64) -> Result<
                     })
                     .collect()
             };
+            // Each moved or stretched edge stands for the one it replaces.
+            for (old, new) in &emap {
+                if let Some(o) = edge_origins.get(old).cloned() {
+                    edge_origins.insert(new.id(), o);
+                }
+            }
             use mt::{ParametricSurface3D, SearchNearestParameter};
             let mut out: Vec<mt::Face> = Vec::new();
             for (i, f) in faces.iter().enumerate() {
                 let touches = f.edge_iter().any(|e| emap.contains_key(&e.id()));
+                let change = if touches { Change::Modified } else { Change::Kept };
+                faces_from.push(record::from_face(0, first + i, change));
                 if !touches {
                     out.push(f.clone());
                     continue;
@@ -208,7 +224,7 @@ pub(crate) fn push_faces_exact(b: &Body, n: Vec3, d: f64, delta: f64) -> Result<
             shells.push(out.into());
         }
         let s = Solid::try_new(shells).map_err(|e| fail(&e.to_string()))?;
-        Body::new(s)
+        record::build(s, &record::counts(&[b]), Some(faces_from), Some(&edge_origins))
     })
 }
 
@@ -257,13 +273,18 @@ pub(crate) fn boolean_apart(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Opt
         return None;
     }
     let (d1, d2) = (size * 0.0137, size * 0.0229);
+    let counts = record::counts(&[a, b]);
     let run = || -> Result<Option<Body>> {
         let (mut a2, mut b2) = (a.clone(), b.clone());
+        // What the pushed bodies are made of: their histories over [a] and [b].
+        let (mut ha, mut hb) = (crate::boolean_record::kept(a, 0, 1), crate::boolean_record::kept(b, 0, 1));
         for (n, d) in &same {
             // b's face points along n too.
             b2 = push_faces(&b2, *n, *d, d2)?;
+            hb = crate::boolean_record::through(&b2, 0, hb.as_ref());
             if op == BoolOp::Union {
                 a2 = push_faces(&a2, *n, *d, d1)?;
+                ha = crate::boolean_record::through(&a2, 0, ha.as_ref());
             }
         }
         for (n, d) in &back {
@@ -285,20 +306,75 @@ pub(crate) fn boolean_apart(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Opt
                 -d2
             };
             b2 = push_faces(&b2, -*n, -*d, shift)?;
+            hb = crate::boolean_record::through(&b2, 0, hb.as_ref());
         }
         let Some(mut r) = crate::ops::boolean(&a2, &b2, op)? else { return Ok(None) };
+        // The pushed bodies' histories as over [a, b], a's and b's in their places.
+        let (ha, hb) = (crate::boolean_record::placed(ha, 0, 2), crate::boolean_record::placed(hb, 1, 2));
+        let mut h = crate::boolean_record::of_pair(&r, &ha, &hb);
         if op == BoolOp::Union {
             for (n, d) in &same {
                 let slab = slab_beyond(*n, *d, d1.max(d2) * 3.0, size * 4.0)?;
                 match crate::ops::boolean(&r, &slab, BoolOp::Cut)? {
-                    Some(x) => r = x,
+                    Some(x) => {
+                        h = h.and_then(|h| trimmed(&x, h, &slab, [a, b], *n, *d, tol));
+                        r = x;
+                    }
                     None => return Ok(None),
                 }
             }
         }
-        Ok(Some(r))
+        Ok(Some(r.with_checked_history(h, &counts)))
     };
     Some(run())
+}
+
+/// The history over `[a, b]` of `x`, the union `r` of `a` and `b` (with history `h` over them),
+/// pushed out past the plane (n, d), with the slab beyond it (`slab`, whose start cap lies in
+/// the plane) cut off. The slab's cap in `x` is where the operands' faces in that plane were
+/// (all of them, so only a cap that stays one face says which), and where it meets a side of
+/// an operand is that side's edge along one of those faces. `None` where that is not so.
+fn trimmed(x: &Body, h: History, slab: &Body, operands: [&Body; 2], n: Vec3, d: f64, tol: f64) -> Option<History> {
+    let mut cut = x.history()?.clone();
+    cut.substitute(0, &h).ok()?;
+    let cap = slab.history()?.faces.iter().position(|f| f.origins == [FaceOrigin::Cap { end: false }])?;
+    let cap = FaceOrigin::Face { operand: 2, face: cap };
+    // The operands' faces in the plane, facing along n, and their edges with each other face.
+    let in_plane: Vec<Vec<usize>> = operands
+        .iter()
+        .map(|o| planes(o).into_iter().filter(|(_, p)| p.n.dot(n) > 1.0 - 1e-9 && (p.d - d).abs() < tol * 10.0).map(|(i, _)| i).collect())
+        .collect();
+    let bounds: Vec<Vec<Vec<usize>>> = operands.iter().map(|o| crate::history::edge_faces(&o.solid)).collect();
+    if cut.faces.iter().filter(|f| f.origins.contains(&cap)).count() != 1 {
+        return None;
+    }
+    for f in &mut cut.faces {
+        if f.origins.contains(&cap) {
+            let mut origins: std::collections::BTreeSet<FaceOrigin> = f.origins.iter().copied().filter(|o| *o != cap).collect();
+            for (operand, faces) in in_plane.iter().enumerate() {
+                origins.extend(faces.iter().map(|face| FaceOrigin::Face { operand, face: *face }));
+            }
+            f.change = if origins.len() > 1 { Change::Merged } else { Change::Modified };
+            f.origins = origins.into_iter().collect();
+        }
+    }
+    for e in &mut cut.edges {
+        for o in &mut e.origins {
+            let side = match *o {
+                EdgeOrigin::Meet { a, b } if a == cap => b,
+                EdgeOrigin::Meet { a, b } if b == cap => a,
+                _ => continue,
+            };
+            let FaceOrigin::Face { operand, face } = side else { return None };
+            let (plane_faces, bounds) = (in_plane.get(operand)?, bounds.get(operand)?);
+            let mut along = (0..bounds.len())
+                .filter(|k| bounds.get(*k).is_some_and(|fs| fs.len() == 2 && fs.contains(&face) && fs.iter().any(|f| plane_faces.contains(f))));
+            let (Some(edge), None) = (along.next(), along.next()) else { return None };
+            *o = EdgeOrigin::Edge { operand, edge };
+        }
+    }
+    cut.renumber(&[Some(0), Some(1), None], 2).ok()?;
+    Some(cut)
 }
 
 /// Has `a` material behind every part of b's faces in the plane (m, d) (m their outward
@@ -398,6 +474,17 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
                     edges.insert(e.id(), mt::Edge::new(&v0, &v1, e.curve()));
                 }
                 let mut faces: Vec<mt::Face> = fa_list.iter().enumerate().filter(|(i, _)| i != ia).map(|(_, f)| (*f).clone()).collect();
+                // Every face but the two glued is kept; an edge along the seam is an edge of both.
+                let kept = |operand: usize, n: usize, skip: usize| {
+                    (0..n).filter(move |i| *i != skip).map(move |i| record::from_face(operand, i, Change::Kept))
+                };
+                let from: Vec<FaceProv> = kept(0, fa_list.len(), *ia).chain(kept(1, fb_list.len(), *ib)).collect();
+                let mut origins = record::edge_origins(&a.solid, 0);
+                for (old, o) in record::edge_origins(&b.solid, 1) {
+                    if let Some(new) = edges.get(&old) {
+                        origins.entry(new.id()).or_default().extend(o);
+                    }
+                }
                 for (i, f) in fb_list.iter().enumerate() {
                     if i == *ib {
                         continue;
@@ -419,7 +506,9 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
                     faces.push(nf);
                 }
                 let solid = Solid::try_new(vec![faces.into()]).map_err(|e| fail(&e.to_string()))?;
-                Body::new(crate::heal::heal(solid, size))
+                // Each edge's origins in the solid's edge order.
+                let origins = crate::body::edge_order(solid.face_iter()).0.iter().map(|e| origins.get(&e.id()).cloned()).collect();
+                crate::boolean_record::heal_build(solid, size, &[], Some(from), origins, &record::counts(&[a, b]))
             }));
         }
     }

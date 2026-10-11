@@ -240,6 +240,75 @@ impl History {
         Ok(())
     }
 
+    /// Renumber the operands: operand `i` becomes `map[i]` of `operands` (several may become
+    /// one, which joins their origins), or is dropped (`None`), which fails, without changing
+    /// `self`, where an origin lies on it.
+    pub(crate) fn renumber(&mut self, map: &[Option<usize>], operands: usize) -> Result<()> {
+        if map.len() != self.operands || map.iter().flatten().any(|op| *op >= operands) {
+            return Err(failed("operand map does not match"));
+        }
+        let to = |op: usize| map.get(op).copied().flatten().ok_or_else(|| failed("an origin lies on a dropped operand"));
+        let face = |o: FaceOrigin| -> Result<FaceOrigin> {
+            Ok(match o {
+                FaceOrigin::Face { operand, face } => FaceOrigin::Face { operand: to(operand)?, face },
+                FaceOrigin::Edge { operand, edge } => FaceOrigin::Edge { operand: to(operand)?, edge },
+                FaceOrigin::Offset { operand, face } => FaceOrigin::Offset { operand: to(operand)?, face },
+                other => other,
+            })
+        };
+        let mut faces = Vec::with_capacity(self.faces.len());
+        for f in &self.faces {
+            let origins: BTreeSet<FaceOrigin> = f.origins.iter().map(|o| face(*o)).collect::<Result<_>>()?;
+            // Origins that became one are one face: no longer a merge.
+            let change = if f.change == Change::Merged && origins.len() == 1 { Change::Modified } else { f.change };
+            faces.push(FaceProv { origins: origins.into_iter().collect(), change });
+        }
+        let mut edges = Vec::with_capacity(self.edges.len());
+        for e in &self.edges {
+            let origins: BTreeSet<EdgeOrigin> = e
+                .origins
+                .iter()
+                .map(|o| match *o {
+                    EdgeOrigin::Edge { operand, edge } => Ok(EdgeOrigin::Edge { operand: to(operand)?, edge }),
+                    EdgeOrigin::Meet { a, b } => Ok(EdgeOrigin::Meet { a: face(a)?, b: face(b)? }),
+                })
+                .collect::<Result<_>>()?;
+            edges.push(EdgeProv { faces: e.faces.clone(), origins: origins.into_iter().collect() });
+        }
+        self.operands = operands;
+        self.faces = faces;
+        self.edges = edges;
+        Ok(())
+    }
+
+    /// [`History::renumber`], consuming.
+    pub(crate) fn renumbered(mut self, map: &[Option<usize>], operands: usize) -> Result<History> {
+        self.renumber(map, operands)?;
+        Ok(self)
+    }
+
+    /// [`History::substitute`], consuming.
+    pub(crate) fn substituted(mut self, k: usize, inner: &History) -> Result<History> {
+        self.substitute(k, inner)?;
+        Ok(self)
+    }
+
+    /// This history, whose operand `i` was made by the operation `parts[i]` describes (all of
+    /// them over the same operands), as a history over those operands.
+    pub(crate) fn over(mut self, parts: &[&History]) -> Result<History> {
+        let n = parts.first().map_or(0, |p| p.operands);
+        if parts.len() != self.operands || parts.iter().any(|p| p.operands != n) {
+            return Err(failed("operand histories do not match"));
+        }
+        // Each part's operands come in at its place: then part i's operand j is i * n + j.
+        for (k, part) in parts.iter().enumerate().rev() {
+            self.substitute(k, part)?;
+        }
+        let map: Vec<Option<usize>> = (0..self.operands).map(|op| op.checked_rem(n)).collect();
+        self.renumber(&map, n)?;
+        Ok(self)
+    }
+
     /// The result's face sources, carried from its operands' through this history: a face
     /// kept, modified or split from one face keeps that face's source; a merged face keeps the
     /// source its origins share, if they share one; a generated face has none.

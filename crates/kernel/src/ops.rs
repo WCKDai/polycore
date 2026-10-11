@@ -6,7 +6,8 @@ use truck_modeling as mt;
 
 use crate::body::{Body, Solid, from_p3};
 use crate::boolean_diagnostics::{BooleanFallback, BooleanStrategy, capture_boolean_diagnostics, merge, record};
-use crate::{KernelError, Result, guard};
+use crate::boolean_record::{self as recorded, Traced};
+use crate::{KernelError, Result, guard, record};
 
 #[cfg(test)]
 #[path = "bore_union_tests.rs"]
@@ -112,8 +113,15 @@ fn overlap(a: &solvecraft_geom::Mesh, b: &solvecraft_geom::Mesh) -> Option<(f64,
 
 /// Booleans that need no intersection: one body clear of the other, or inside it. These are
 /// common with coincident curved faces (a hole drilled where one already is, a body joined
-/// with itself), which the intersection can't handle.
-fn trivial(a: &Body, b: &Body, op: BoolOp, ma: &solvecraft_geom::Mesh, mb: &solvecraft_geom::Mesh) -> Option<Option<Body>> {
+/// with itself), which the intersection can't handle. `counts`: the operands' faces and edges.
+fn trivial(
+    a: &Body,
+    b: &Body,
+    op: BoolOp,
+    ma: &solvecraft_geom::Mesh,
+    mb: &solvecraft_geom::Mesh,
+    counts: &[(usize, usize)],
+) -> Option<Option<Body>> {
     let (b_in_a, a_in_b) = overlap(ma, mb)?;
     const NONE: f64 = 0.003;
     const ALL: f64 = 0.997;
@@ -122,20 +130,21 @@ fn trivial(a: &Body, b: &Body, op: BoolOp, ma: &solvecraft_geom::Mesh, mb: &solv
         // Sampling only selects this candidate. Validate every shell boundary and the
         // complete material/void nesting before preserving a disconnected union.
         BoolOp::Union if disjoint => {
-            let joined = join_pieces(vec![a.clone(), b.clone()]).ok().flatten()?;
+            let pieces = vec![(a.clone(), recorded::kept(a, 0, 2)), (b.clone(), recorded::kept(b, 1, 2))];
+            let joined = recorded::join(pieces, counts).ok().flatten()?;
             joined.separated_lumps().ok()?;
             Some(Some(joined))
         }
-        BoolOp::Cut if disjoint => Some(Some(a.clone())),
+        BoolOp::Cut if disjoint => Some(Some(recorded::operand(a, 0, counts))),
         BoolOp::Cut if a_in_b > ALL => Some(None),
         BoolOp::Intersect if disjoint => Some(None),
-        BoolOp::Intersect if b_in_a > ALL => Some(Some(b.clone())),
-        BoolOp::Intersect if a_in_b > ALL => Some(Some(a.clone())),
-        BoolOp::Union if b_in_a > ALL => Some(Some(a.clone())),
-        BoolOp::Union if a_in_b > ALL => Some(Some(b.clone())),
+        BoolOp::Intersect if b_in_a > ALL => Some(Some(recorded::operand(b, 1, counts))),
+        BoolOp::Intersect if a_in_b > ALL => Some(Some(recorded::operand(a, 0, counts))),
+        BoolOp::Union if b_in_a > ALL => Some(Some(recorded::operand(a, 0, counts))),
+        BoolOp::Union if a_in_b > ALL => Some(Some(recorded::operand(b, 1, counts))),
         // The tool wholly inside, clear of the outside: a void.
         BoolOp::Cut if b_in_a > ALL => {
-            let candidate = void(a, b).ok().flatten()?;
+            let candidate = void(a, b, counts).ok().flatten()?;
             candidate.separated_lumps().ok()?;
             Some(Some(candidate))
         }
@@ -155,24 +164,28 @@ mod shortcut_tests {
         for distance in [19.999, 20.001] {
             let other = crate::sphere(direction * distance, 10.0).unwrap();
             let other_mesh = other.tessellate(0.03).unwrap();
-            assert!(trivial(&outer, &other, BoolOp::Union, &mesh, &other_mesh).is_none());
-            assert!(trivial(&other, &outer, BoolOp::Union, &other_mesh, &mesh).is_none());
+            let counts = record::counts(&[&outer, &other]);
+            assert!(trivial(&outer, &other, BoolOp::Union, &mesh, &other_mesh, &counts).is_none());
+            assert!(trivial(&other, &outer, BoolOp::Union, &other_mesh, &mesh, &counts).is_none());
         }
         let protruding = crate::sphere(direction * 9.001, 1.0).unwrap();
         let protruding_mesh = protruding.tessellate(0.03).unwrap();
-        assert!(trivial(&outer, &protruding, BoolOp::Cut, &mesh, &protruding_mesh).is_none());
+        let counts = record::counts(&[&outer, &protruding]);
+        assert!(trivial(&outer, &protruding, BoolOp::Cut, &mesh, &protruding_mesh, &counts).is_none());
     }
 }
 
 /// `a` with the inside of `b` (wholly within it) taken out: a second, inward-facing shell.
-fn void(a: &Body, b: &Body) -> Result<Option<Body>> {
+fn void(a: &Body, b: &Body, counts: &[(usize, usize)]) -> Result<Option<Body>> {
     guard("void", || {
         let mut inner = b.deep_copy();
+        let inner_edges = record::edge_origins(&inner, 1);
         inner.not();
         let mut shells = a.solid.boundaries().clone();
         shells.extend(inner.boundaries().iter().cloned());
         let s = crate::body::Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("void: {e}")))?;
-        Ok(Some(Body::new(s)?))
+        let (faces, edges) = recorded::void(a, inner_edges, b.face_count());
+        Ok(Some(record::build(s, counts, Some(faces), Some(&edges))?))
     })
 }
 
@@ -192,6 +205,9 @@ pub(crate) fn narrowing_bores() -> bool {
 /// Boolean of two bodies. The result may be empty (`Ok(None)`) for a cut that removes
 /// everything or an intersection of disjoint bodies. Results are checked against volume bounds
 /// and retried with shifted copies and other tolerances when they fail or look wrong.
+///
+/// The result carries its exact history ([`Body::history`]) over the operands `[a, b]`,
+/// whichever way it was made, or none where a step it took does not report one.
 pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     let (mut r, mut diagnostics) = capture_boolean_diagnostics(|| boolean_whole(a, b, op));
     // Bodies in several pieces: when the whole failed (or came out empty), a piece at a time.
@@ -203,7 +219,7 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     if retry && (a.solid.boundaries().len() > 1 || b.solid.boundaries().len() > 1) {
         let (la, lb) = (a.lumps()?, b.lumps()?);
         if la.len() > 1 || lb.len() > 1 {
-            let (pieces, report) = capture_boolean_diagnostics(|| by_lumps(la, lb, op));
+            let (pieces, report) = capture_boolean_diagnostics(|| by_lumps(a, b, la, lb, op));
             if let Ok(Some(x)) = pieces {
                 r = Ok(Some(x));
                 diagnostics = report;
@@ -283,6 +299,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     a.require_brep("a boolean")?;
     b.require_brep("a boolean")?;
     let size = a.size().max(b.size());
+    let counts = record::counts(&[a, b]);
     // The checks mesh both bodies; where they meet in a region much thinner than they are (a
     // thin part trimmed by a long one), a step from their size would facet the small faces
     // there coarsely enough to fail the membership test on a correct result. The meshes are
@@ -318,7 +335,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     };
     // One body clear of or inside the other: no intersection needed.
     if let (Some(ma), Some(mb)) = &meshes
-        && let Some(r) = trivial(a, b, op, ma, mb)
+        && let Some(r) = trivial(a, b, op, ma, mb, &counts)
     {
         return Ok(r);
     }
@@ -332,7 +349,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         // general B-rep boolean does, retaining intentional Split Face lines.
         let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
         let r = if op == BoolOp::Union {
-            r.map(|body| guard("heal prism boolean", || Body::new(crate::heal::heal_keep((*body.solid).clone(), size, &keep))).unwrap_or(body))
+            r.map(|body| guard("heal prism boolean", || recorded::heal_body(&body, (*body.solid).clone(), size, &keep, &counts)).unwrap_or(body))
         } else {
             r
         };
@@ -384,7 +401,8 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         BORES.with(|c| c.set(false));
         if let Some(body) = r {
             merge(diagnostics);
-            return Ok(Some(body));
+            // Narrowing a bore (an offset) reports no history yet.
+            return Ok(Some(body.with_checked_history(None, &counts)));
         }
     }
     let mut empty_votes = 0;
@@ -394,25 +412,9 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         let shift = mt::Vector3::new(j[0], j[1], j[2]) * (size * 0.01);
         for k in [2e-3, 5e-4] {
             let tol = (size * k).max(1e-5);
-            let r = guard("boolean", || {
-                let (mut sa, mut sb) = (a.deep_copy(), b.deep_copy());
-                if attempt > 0 {
-                    sa = mt::builder::translated(&sa, shift);
-                    sb = mt::builder::translated(&sb, shift);
-                }
-                let res = match op {
-                    BoolOp::Union => truck_shapeops::or(&sa, &sb, tol),
-                    BoolOp::Cut => {
-                        sb.not();
-                        truck_shapeops::and(&sa, &sb, tol)
-                    }
-                    BoolOp::Intersect => truck_shapeops::and(&sa, &sb, tol),
-                };
-                let s = res.ok_or_else(|| KernelError::Failed("no result".into()))?;
-                Ok(if attempt > 0 { mt::builder::translated(&s, -shift) } else { s })
-            });
+            let r = truck_boolean(a, b, op, if attempt > 0 { Some(shift) } else { None }, tol);
             match r {
-                Ok(s) if s.boundaries().is_empty() || s.face_iter().next().is_none() => {
+                Ok((s, _)) if s.boundaries().is_empty() || s.face_iter().next().is_none() => {
                     empty_votes += 1;
                     if attempt > 0 || k != 2e-3 {
                         let mut event =
@@ -423,7 +425,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
                     }
                     last = "empty result".into();
                 }
-                Ok(s) => match guard("boolean result", || Body::new(crate::heal::heal_keep(s, size, &keep))) {
+                Ok((s, h)) => match guard("boolean result", || recorded::truck_result(s, h, size, &keep, &counts)) {
                     Ok(body) => {
                         let (ok, v) = check(&body);
                         if ok {
@@ -497,8 +499,9 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         APART.with(|c| c.set(true));
         let c = b.solid.vertex_iter().fold(Vec3::ZERO, |acc, v| acc + from_p3(v.point())) * (1.0 / b.solid.vertex_iter().count().max(1) as f64);
         let translation = Vec3::new(0.61, -0.37, 0.71) * (size * 2e-6);
-        let (r, diagnostics) =
-            capture_boolean_diagnostics(|| transform(b, translation, c, Vec3::new(0.27, 0.83, -0.49), 2e-6).and_then(|nb| boolean(a, &nb, op)));
+        let (r, diagnostics) = capture_boolean_diagnostics(|| {
+            transform(b, translation, c, Vec3::new(0.27, 0.83, -0.49), 2e-6).and_then(|nb| Ok(boolean(a, &nb, op)?.map(|r| nudged(r, &nb, &counts))))
+        });
         APART.with(|c| c.set(false));
         match r {
             Ok(Some(body)) => {
@@ -527,8 +530,42 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     Err(KernelError::Failed(format!("boolean {op:?}: {last}")))
 }
 
-/// A boolean of bodies given as their pieces; the result's pieces in one body.
-fn by_lumps(la: Vec<Body>, lb: Vec<Body>, op: BoolOp) -> Result<Option<Body>> {
+/// `r`, a boolean of the target and `nb` (the tool nudged), with its history over the target and
+/// the tool itself (the nudge keeps every face and edge).
+pub(crate) fn nudged(r: Body, nb: &Body, counts: &[(usize, usize)]) -> Body {
+    let h = recorded::through(&r, 1, nb.history());
+    r.with_checked_history(h, counts)
+}
+
+/// What truck's boolean makes of `a` and `b`: the solid, and its history in our terms (see
+/// [`recorded::shapeops`]). On copies of the operands moved by `shift` (when given; the result
+/// is moved back), which changes the rays the boolean classifies faces by. Copies (and moved
+/// copies) keep the operands' face and edge order, and so does moving the result back, so the
+/// history truck records holds for the operands themselves.
+pub(crate) fn truck_boolean(a: &Body, b: &Body, op: BoolOp, shift: Option<mt::Vector3>, tol: f64) -> Result<(Solid, Option<recorded::Shapeops>)> {
+    guard("boolean", || {
+        let (mut sa, mut sb) = (a.deep_copy(), b.deep_copy());
+        if let Some(shift) = shift {
+            sa = mt::builder::translated(&sa, shift);
+            sb = mt::builder::translated(&sb, shift);
+        }
+        let tool_edges = (op == BoolOp::Cut).then(|| record::edge_origins(&sb, 1));
+        let res = match op {
+            BoolOp::Union => truck_shapeops::or_with_history(&sa, &sb, tol),
+            BoolOp::Cut => {
+                sb.not();
+                truck_shapeops::and_with_history(&sa, &sb, tol)
+            }
+            BoolOp::Intersect => truck_shapeops::and_with_history(&sa, &sb, tol),
+        };
+        let (s, h) = res.ok_or_else(|| KernelError::Failed("no result".into()))?;
+        let h = h.and_then(|h| recorded::shapeops(&h, &sb, tool_edges.as_ref()));
+        Ok((if let Some(shift) = shift { mt::builder::translated(&s, -shift) } else { s }, h))
+    })
+}
+
+/// A boolean of `a` and `b` given as their pieces (`la`, `lb`); the result's pieces in one body.
+pub(crate) fn by_lumps(a: &Body, b: &Body, la: Vec<Body>, lb: Vec<Body>, op: BoolOp) -> Result<Option<Body>> {
     let boxes_meet = |x: &Body, y: &Body| -> bool {
         let (Ok(mx), Ok(my)) = (x.tessellate(x.size() * 0.05 + 1e-3), y.tessellate(y.size() * 0.05 + 1e-3)) else { return true };
         let (bx, by) = (mx.bounds(), my.bounds());
@@ -540,14 +577,26 @@ fn by_lumps(la: Vec<Body>, lb: Vec<Body>, op: BoolOp) -> Result<Option<Body>> {
             && bx.min.z <= by.max.z + g
             && by.min.z <= bx.max.z + g
     };
-    let mut out: Vec<Body> = Vec::new();
+    // Each piece with its history over [a, b] (a piece's faces and edges are its body's own).
+    let traced = |pieces: Vec<Body>, whole: &Body, operand: usize| -> Vec<Traced> {
+        let histories = recorded::parts_of(&pieces, whole);
+        pieces.into_iter().zip(histories).map(|(p, h)| (p, recorded::placed(h, operand, 2))).collect()
+    };
+    let (la, lb) = (traced(la, a, 0), traced(lb, b, 1));
+    let pair = |(x, hx): &Traced, (y, hy): &Traced, op: BoolOp| -> Result<Option<Traced>> {
+        Ok(boolean(x, y, op)?.map(|r| {
+            let h = recorded::of_pair(&r, hx, hy);
+            (r, h)
+        }))
+    };
+    let mut out: Vec<Traced> = Vec::new();
     match op {
         BoolOp::Cut => {
             for x in la {
                 let mut cur = Some(x);
                 for y in &lb {
                     cur = match cur {
-                        Some(c) if boxes_meet(&c, y) => boolean(&c, y, BoolOp::Cut)?,
+                        Some(c) if boxes_meet(&c.0, &y.0) => pair(&c, y, BoolOp::Cut)?,
                         other => other,
                     };
                 }
@@ -557,8 +606,8 @@ fn by_lumps(la: Vec<Body>, lb: Vec<Body>, op: BoolOp) -> Result<Option<Body>> {
         BoolOp::Intersect => {
             for x in &la {
                 for y in &lb {
-                    if boxes_meet(x, y)
-                        && let Some(r) = boolean(x, y, BoolOp::Intersect)?
+                    if boxes_meet(&x.0, &y.0)
+                        && let Some(r) = pair(x, y, BoolOp::Intersect)?
                     {
                         out.push(r);
                     }
@@ -571,9 +620,9 @@ fn by_lumps(la: Vec<Body>, lb: Vec<Body>, op: BoolOp) -> Result<Option<Body>> {
                 let mut cur = y;
                 let mut rest = Vec::new();
                 for x in out {
-                    if boxes_meet(&x, &cur) {
-                        match boolean(&x, &cur, BoolOp::Union)? {
-                            Some(u) if u.solid.boundaries().len() == 1 => cur = u,
+                    if boxes_meet(&x.0, &cur.0) {
+                        match pair(&x, &cur, BoolOp::Union)? {
+                            Some(u) if u.0.solid.boundaries().len() == 1 => cur = u,
                             _ => rest.push(x),
                         }
                     } else {
@@ -585,7 +634,7 @@ fn by_lumps(la: Vec<Body>, lb: Vec<Body>, op: BoolOp) -> Result<Option<Body>> {
             }
         }
     }
-    join_pieces(out)
+    recorded::join(out, &record::counts(&[a, b]))
 }
 
 /// Bodies whose bounding boxes are clearly apart, as one body of several pieces, without any
@@ -779,8 +828,14 @@ pub fn split_by_plane(body: &Body, plane: &solvecraft_geom::Plane) -> Result<Vec
     Ok(out)
 }
 
-/// The part of a body on one side of a plane (`None` when nothing is there).
+/// The part of a body on one side of a plane (`None` when nothing is there): its intersection
+/// with [`half_box`] (whose history it carries, over the body and the box).
 pub(crate) fn half_space(body: &Body, plane: &solvecraft_geom::Plane, positive: bool) -> Result<Option<Body>> {
+    boolean(body, &half_box(body, plane, positive)?, BoolOp::Intersect)
+}
+
+/// A box covering everything of `body` on one side of a plane, its start cap in the plane.
+pub(crate) fn half_box(body: &Body, plane: &solvecraft_geom::Plane, positive: bool) -> Result<Body> {
     body.require_brep("split")?;
     let size = body.size();
     let mut bb = solvecraft_geom::Aabb3::EMPTY;
@@ -799,8 +854,7 @@ pub(crate) fn half_space(body: &Body, plane: &solvecraft_geom::Plane, positive: 
         holes: vec![],
     };
     let (lo, hi) = if positive { (0.0, reach) } else { (-reach, 0.0) };
-    let half = crate::build::extrude(plane, std::slice::from_ref(&sq), lo, hi)?.pop().ok_or_else(|| KernelError::Failed("half space".into()))?;
-    boolean(body, &half, BoolOp::Intersect)
+    crate::build::extrude(plane, std::slice::from_ref(&sq), lo, hi)?.pop().ok_or_else(|| KernelError::Failed("half space".into()))
 }
 
 #[cfg(test)]

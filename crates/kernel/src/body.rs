@@ -465,6 +465,21 @@ impl Body {
         Ok(self)
     }
 
+    /// This body with `history` if it describes the body made from operands with these face
+    /// and edge counts, else with none: an operation whose history could not be recorded still
+    /// gives its result.
+    pub(crate) fn with_checked_history(mut self, history: Option<crate::history::History>, operands: &[(usize, usize)]) -> Self {
+        let counts = (self.face_count(), self.edge_count());
+        self.history = history.and_then(|h| match h.check_counts(counts, operands) {
+            Ok(()) => Some(std::sync::Arc::new(h)),
+            Err(e) => {
+                log::debug!("no history: {e}");
+                None
+            }
+        });
+        self
+    }
+
     pub fn face_sources(&self) -> Option<&[Option<FaceSource>]> {
         self.face_sources.as_deref().map(Vec::as_slice)
     }

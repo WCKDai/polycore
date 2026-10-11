@@ -85,6 +85,7 @@ fn box_union_box_history() {
     let a = cuboid(Point3::origin(), Vector3::new(1.0, 1.0, 1.0));
     let b = cuboid(Point3::new(0.5, 0.25, 0.25), Vector3::new(1.0, 0.5, 0.5));
     let (or, history) = crate::or_with_history(&a, &b, 0.05).unwrap();
+    let history = history.unwrap();
     let (kept, meets) = check(&or, [&a, &b], &history, 0.05);
     // a's five faces away from b and b's far end are kept; a's face at x = 1 gets a hole and
     // b's four sides are trimmed where they enter a.
@@ -111,6 +112,7 @@ fn box_minus_cylinder_history() {
     let mut cylinder = builder::tsweep(&f, Vector3::unit_z() * 2.0);
     cylinder.not();
     let (cut, history) = crate::and_with_history(&cube, &cylinder, 0.05).unwrap();
+    let history = history.unwrap();
     let (kept, meets) = check(&cut, [&cube, &cylinder], &history, 0.05);
     // The cube's four sides are kept; its top and bottom get holes; only the cylinder's wall
     // remains of the tool, trimmed to the cube.
@@ -137,6 +139,7 @@ fn multi_shell_operand_history() {
     // Covers the upper half of the hollow cube: its bottom crosses both shells.
     let slab = cuboid(Point3::new(-0.5, -0.5, 1.5), Vector3::new(4.0, 4.0, 2.5));
     let (and, history) = crate::and_with_history(&hollow, &slab, 0.05).unwrap();
+    let history = history.unwrap();
     let (kept, meets) = check(&and, [&hollow, &slab], &history, 0.05);
     // The outer top and the void's top (numbered after the outer shell's six faces) are kept.
     assert_eq!(kept, 2);

@@ -124,27 +124,27 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
 }
 
 /// SolveCraft: AND operation between two solids, with where each face and edge of the result
-/// came from (operand 0 is `solid0`, operand 1 is `solid1`). The operands must not share faces
-/// or edges.
+/// came from (operand 0 is `solid0`, operand 1 is `solid1`): the same result as [`and`], and
+/// its history, `None` when a face or edge of it was not recorded. The operands must not share
+/// faces or edges.
 pub fn and_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
-) -> Option<(Solid<Point3, C, S>, History)> {
-    let (solid, history) = boolean(solid0, solid1, tol, |[and, _]| and)?;
-    Some((solid, history?))
+) -> Option<(Solid<Point3, C, S>, Option<History>)> {
+    boolean(solid0, solid1, tol, |[and, _]| and)
 }
 
 /// SolveCraft: OR operation between two solids, with where each face and edge of the result
-/// came from (operand 0 is `solid0`, operand 1 is `solid1`). The operands must not share faces
-/// or edges.
+/// came from (operand 0 is `solid0`, operand 1 is `solid1`): the same result as [`or`], and
+/// its history, `None` when a face or edge of it was not recorded. The operands must not share
+/// faces or edges.
 pub fn or_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
-) -> Option<(Solid<Point3, C, S>, History)> {
-    let (solid, history) = boolean(solid0, solid1, tol, |[_, or]| or)?;
-    Some((solid, history?))
+) -> Option<(Solid<Point3, C, S>, Option<History>)> {
+    boolean(solid0, solid1, tol, |[_, or]| or)
 }
 
 /// Combines the operands' first shells, then folds in their other shells one at a time
