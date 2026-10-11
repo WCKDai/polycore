@@ -511,7 +511,7 @@ fn sew_sections(plane: &Plane, d: Vec3, levels: &[f64], slabs: &[Vec<Region2>], 
             faces.push(FaceSpec { loops, surface: SurfSpec::Plane, probe: None });
         }
     }
-    Some(crate::sew::sew(&faces))
+    Some(crate::sew::sew_touching(&faces))
 }
 
 fn simple_prism_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {

@@ -318,7 +318,7 @@ fn planar_booleans_with_coincident_faces() {
 }
 
 #[test]
-fn stepped_logo_join_never_moves_faces_to_hide_an_edge_pinch() {
+fn connected_logo_join_preserves_exact_faces_at_edge_contact() {
     let mut body = box_solid(Vec3::ZERO, Vec3::new(10.0, 20.0, 10.0)).unwrap();
     for (i, (lo, hi)) in
         [(Vec3::new(0.0, 0.0, 10.0), Vec3::new(10.0, 10.0, 20.0)), (Vec3::new(-10.0, 0.0, 10.0), Vec3::new(0.0, 10.0, 20.0))].into_iter().enumerate()
@@ -336,8 +336,21 @@ fn stepped_logo_join_never_moves_faces_to_hide_an_edge_pinch() {
         assert!(m.bbox.max.dist(Vec3::new(10.0, 20.0, 20.0)) < 1e-9);
     }
     let tool = box_solid(Vec3::new(-10.0, 10.0, 10.0), Vec3::new(0.0, 20.0, 20.0)).unwrap();
-    let error = boolean(&body, &tool, BoolOp::Union).unwrap_err();
-    assert!(error.to_string().contains("zero-thickness edge contact"), "{error}");
+    let logo = boolean(&body, &tool, BoolOp::Union).unwrap().unwrap();
+    assert!(logo.validity().is_empty());
+    let m = measure(&logo).unwrap();
+    assert!((m.volume - 5000.0).abs() < 1e-6);
+    assert!(m.bbox.min.dist(Vec3::new(-10.0, 0.0, 0.0)) < 1e-9);
+    assert!(m.bbox.max.dist(Vec3::new(10.0, 20.0, 20.0)) < 1e-9);
+    let tops =
+        logo.faces(0.01).unwrap().iter().filter(|f| f.plane_normal.is_some_and(|n| n.z > 0.999999) && (f.centroid.z - 20.0).abs() < 1e-9).count();
+    assert_eq!(tops, 1);
+    let text = step_export(&[&logo], "SolveCraft").unwrap();
+    let imported = step_import(&text).unwrap();
+    assert_eq!(imported.bodies.len(), 1);
+    let roundtrip = &imported.bodies.first().unwrap().body;
+    assert!(roundtrip.validity().is_empty());
+    assert!((measure(roundtrip).unwrap().volume - 5000.0).abs() < 1e-6);
     // An intentional overlap removes the pinch without any automatic displacement.
     let overlap = box_solid(Vec3::new(-10.0, 10.0, 10.0), Vec3::new(0.1, 20.0, 20.0)).unwrap();
     let joined = boolean(&body, &overlap, BoolOp::Union).unwrap().unwrap();
