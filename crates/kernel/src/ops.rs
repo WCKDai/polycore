@@ -175,6 +175,13 @@ thread_local! {
     /// Set while a boolean runs on bodies whose coincident faces were pushed apart (no
     /// second round of pushing).
     static APART: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a union runs with a bore narrowed off a common cylinder (no second round).
+    static BORES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Is a union with a narrowed bore running (see [`crate::coplanar::bore_union`])?
+pub(crate) fn narrowing_bores() -> bool {
+    BORES.with(|c| c.get())
 }
 
 /// Boolean of two bodies. The result may be empty (`Ok(None)`) for a cut that removes
@@ -345,6 +352,15 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             if ok {
                 return Ok(Some(body));
             }
+        }
+    }
+    // Bores on a common cylinder (a pad's bore around the hole it is joined over).
+    if op == BoolOp::Union && !BORES.with(|c| c.get()) && crate::coplanar::has_coincident_cylinders(a, b) {
+        BORES.with(|c| c.set(true));
+        let r = crate::coplanar::bore_union(a, b, &|body| check(body).0);
+        BORES.with(|c| c.set(false));
+        if let Some(body) = r {
+            return Ok(Some(body));
         }
     }
     let mut empty_votes = 0;

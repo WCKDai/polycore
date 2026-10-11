@@ -290,6 +290,60 @@ fn moving_a_body_with_an_intersection_curve_edge_ends() {
     assert!(rel(v0, v1) < 1e-6, "{v0} vs {v1}");
 }
 
+/// Drain pads joined flush under a floor with a drain hole. The floor (100 × 80, top sloping
+/// 1°, so not a prism) has a Ø20 hole through it at (50, 40).
+/// - A ring whose bore is the hole's wall (coincident cylinders): used to fail.
+/// - The same ring 2 mm into the floor: used to fail too.
+/// - A disc across the hole: worked before, and must stay exact.
+#[test]
+fn drain_pads_flush_under_a_floor_with_a_hole() {
+    let t = 1f64.to_radians().tan();
+    let hs = |n: Vec3, p: Vec3| {
+        let n = n.normalized().unwrap();
+        HalfSpace { n, d: n.dot(p) }
+    };
+    let slab = convex_polyhedron(&[
+        hs(Vec3::X, Vec3::new(100.0, 0.0, 0.0)),
+        hs(-Vec3::X, Vec3::ZERO),
+        hs(Vec3::Y, Vec3::new(0.0, 80.0, 0.0)),
+        hs(-Vec3::Y, Vec3::ZERO),
+        hs(-Vec3::Z, Vec3::ZERO),
+        hs(Vec3::new(-t, 0.0, 1.0), Vec3::new(0.0, 0.0, 10.0)),
+    ])
+    .unwrap();
+    let hole = cylinder(Vec3::new(50.0, 40.0, -5.0), Vec3::Z, 10.0, 30.0).unwrap();
+    let floor = boolean(&slab, &hole, BoolOp::Cut).unwrap().unwrap();
+    // Top z = 10 + t x: the slab's volume is its mean height (at x = 50) times its area, the
+    // hole's likewise (its top is planar, centred at x = 50).
+    let v_floor = (10.0 + t * 50.0) * (8000.0 - PI * 100.0);
+    assert!(rel(measure(&floor).unwrap().volume, v_floor) < 2e-5, "{} vs {v_floor}", measure(&floor).unwrap().volume);
+    let ring = |z0: f64, z1: f64| {
+        let r = Region2 { outer: Loop2::circle(Vec2::new(50.0, 40.0), 20.0), holes: vec![Loop2::circle(Vec2::new(50.0, 40.0), 10.0).reversed()] };
+        extrude(&Plane::XY, &[r], z0, z1).unwrap().pop().unwrap()
+    };
+    // The ring's part inside the floor adds nothing: 5 mm of ring below it either way.
+    let v_ring = PI * (400.0 - 100.0) * 5.0;
+    for (z0, z1) in [(-5.0, 0.0), (-5.0, 2.0)] {
+        let u = boolean(&floor, &ring(z0, z1), BoolOp::Union).unwrap().unwrap();
+        let v = measure(&u).unwrap().volume;
+        assert!(rel(v, v_floor + v_ring) < 2e-5, "ring {z0}..{z1}: {v} vs {}", v_floor + v_ring);
+        assert!(u.validity().is_empty(), "{:?}", u.validity());
+    }
+    let disc = cylinder(Vec3::new(50.0, 40.0, -5.0), Vec3::Z, 20.0, 5.0).unwrap();
+    let u = boolean(&floor, &disc, BoolOp::Union).unwrap().unwrap();
+    let v = measure(&u).unwrap().volume;
+    let expect = v_floor + PI * 400.0 * 5.0;
+    assert!(rel(v, expect) < 2e-5, "disc across the hole: {v} vs {expect}");
+    // A boss ring standing on the sloping top around the hole, its foot just under the top
+    // everywhere: it adds its annulus times its height above the top at the centre.
+    let foot = 10.0 + t * 30.0 - 0.2;
+    let u = boolean(&floor, &ring(foot, 14.0), BoolOp::Union).unwrap().unwrap();
+    let v = measure(&u).unwrap().volume;
+    let expect = v_floor + PI * 300.0 * (14.0 - (10.0 + t * 50.0));
+    assert!(rel(v, expect) < 2e-5, "boss ring on the slope: {v} vs {expect}");
+    assert!(u.validity().is_empty(), "{:?}", u.validity());
+}
+
 /// A trough whose floor falls 1° (or 2° toward a drain, in four faces), and short round pads
 /// and bosses crossing the fall. The B-rep results were right, but the plausibility check meshed
 /// them without refinement: on a round side trimmed to a thin band by the shallow cut, the plain
