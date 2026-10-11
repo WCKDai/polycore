@@ -5,6 +5,9 @@ use truck_modeling as mt;
 
 use crate::{KernelError, Result, guard};
 
+#[path = "shell_groups.rs"]
+mod shell_groups;
+
 pub(crate) type Solid = mt::Solid;
 
 /// A solid body (one or more closed shells), or a mesh body (triangles only, like an imported
@@ -24,6 +27,31 @@ pub struct Body {
     /// Lines the user split faces along (Split Face), as polylines: export keeps the faces on
     /// either side apart where it would otherwise join pieces of one surface.
     pub(crate) splits: Option<std::sync::Arc<Vec<Vec<Vec3>>>>,
+    /// Exact construction/import source identities, in this body's face order.
+    pub(crate) face_sources: Option<std::sync::Arc<Vec<Option<FaceSource>>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FaceSource {
+    ExtrudeSide { segment: solvecraft_geom::Seg2, plane: Option<solvecraft_geom::Plane> },
+    CertifiedExtrudeSide { producer: u64, sketch: u64, curve: String, plane: Option<solvecraft_geom::Plane> },
+    ExtrudeCap { high: bool, region: solvecraft_geom::Region2, plane: solvecraft_geom::Plane },
+    CertifiedExtrudeCap { producer: u64, sketch: u64, high: bool, outer: Vec<String>, holes: Vec<Vec<String>>, plane: solvecraft_geom::Plane },
+    Box { producer: Option<u64>, axis: u8, high: bool, plane: solvecraft_geom::Plane },
+    Imported { item: u64, face: u64, payload_sha256: Option<String>, producer: Option<u64> },
+}
+
+pub type CapSignature = (Vec<String>, Vec<Vec<String>>);
+type FaceSources = std::sync::Arc<Vec<Option<FaceSource>>>;
+
+impl FaceSource {
+    fn plane_mut(&mut self) -> Option<&mut solvecraft_geom::Plane> {
+        match self {
+            Self::ExtrudeSide { plane, .. } | Self::CertifiedExtrudeSide { plane, .. } => plane.as_mut(),
+            Self::ExtrudeCap { plane, .. } | Self::CertifiedExtrudeCap { plane, .. } | Self::Box { plane, .. } => Some(plane),
+            Self::Imported { .. } => None,
+        }
+    }
 }
 
 /// How a body looks beyond its colour, for export: its opacity and its faces' own colours.
@@ -284,6 +312,7 @@ impl Body {
             && self.color == other.color
             && self.paint == other.paint
             && self.splits == other.splits
+            && self.face_sources == other.face_sources
     }
 
     pub(crate) fn new(solid: Solid) -> Result<Body> {
@@ -321,7 +350,184 @@ impl Body {
             color: None,
             paint: None,
             splits: None,
+            face_sources: None,
         })
+    }
+
+    pub fn face_sources(&self) -> Option<&[Option<FaceSource>]> {
+        self.face_sources.as_deref().map(Vec::as_slice)
+    }
+
+    /// An exact construction/import plane; never inferred from tessellation.
+    pub fn face_plane(&self, index: usize) -> Option<solvecraft_geom::Plane> {
+        if index >= 50_000 {
+            return None;
+        }
+        let source = self.face_sources()?.get(index)?.as_ref()?;
+        match source {
+            FaceSource::ExtrudeSide { plane, .. } | FaceSource::CertifiedExtrudeSide { plane, .. } => *plane,
+            FaceSource::ExtrudeCap { plane, .. } | FaceSource::CertifiedExtrudeCap { plane, .. } | FaceSource::Box { plane, .. } => Some(*plane),
+            FaceSource::Imported { .. } => self.planar_face(index),
+        }
+    }
+
+    /// Exact current planar surface for an explicitly fixed snapshot, without source lineage.
+    pub fn planar_face(&self, index: usize) -> Option<solvecraft_geom::Plane> {
+        if index >= 50_000 {
+            return None;
+        }
+        guard("exact planar face", || {
+            let plane = self.solid.face_iter().nth(index).and_then(|face| match face.oriented_surface() {
+                mt::Surface::Plane(plane) => {
+                    let u = plane.u_axis();
+                    let v = plane.v_axis();
+                    solvecraft_geom::Plane::new(from_p3(plane.origin()), Vec3::new(u.x, u.y, u.z), Vec3::new(v.x, v.y, v.z))
+                }
+                _ => None,
+            });
+            Ok(plane)
+        })
+        .ok()
+        .flatten()
+    }
+
+    pub fn with_box_certificate(mut self, producer: u64) -> Result<Self> {
+        if producer == 0 {
+            return Err(KernelError::Invalid("invalid box producer".into()));
+        }
+        if let Some(sources) = &self.face_sources {
+            let mut sources = sources.as_ref().clone();
+            for source in sources.iter_mut().flatten() {
+                if let FaceSource::Box { producer: id, .. } = source {
+                    *id = Some(producer);
+                }
+            }
+            self.face_sources = Some(std::sync::Arc::new(sources));
+        }
+        Ok(self)
+    }
+
+    /// Cap signatures are in face order; unknown or ambiguous source curves stay uncertified.
+    pub fn with_extrude_cap_certificates(mut self, producer: u64, sketch: u64, signatures: &[Option<CapSignature>]) -> Result<Self> {
+        if producer == 0 || sketch == 0 {
+            return Err(KernelError::Invalid("invalid cap producer".into()));
+        }
+        if let Some(sources) = &self.face_sources {
+            if sources.len() != signatures.len() {
+                return Err(KernelError::Invalid("cap certificate count mismatch".into()));
+            }
+            let mut sources = sources.as_ref().clone();
+            for (source, signature) in sources.iter_mut().zip(signatures) {
+                if let Some(FaceSource::ExtrudeCap { high, plane, .. }) = source {
+                    let Some((outer, holes)) = signature else {
+                        *source = None;
+                        continue;
+                    };
+                    if outer.len() > 4096 || holes.len() > 4096 || holes.iter().any(|hole| hole.len() > 4096) {
+                        return Err(KernelError::Invalid("oversized cap curve signature".into()));
+                    }
+                    let count = outer.len() + holes.iter().map(Vec::len).sum::<usize>();
+                    if outer.is_empty()
+                        || count > 4096
+                        || holes.len() > 4096
+                        || outer.iter().chain(holes.iter().flatten()).map(String::len).sum::<usize>() > 65_536
+                        || outer.iter().chain(holes.iter().flatten()).any(|id| id.is_empty() || id.len() > 128)
+                    {
+                        return Err(KernelError::Invalid("invalid cap curve signature".into()));
+                    }
+                    let mut outer = outer.clone();
+                    outer.sort();
+                    outer.dedup();
+                    let mut holes = holes.clone();
+                    for hole in &mut holes {
+                        if hole.is_empty() {
+                            return Err(KernelError::Invalid("empty cap hole signature".into()));
+                        }
+                        hole.sort();
+                        hole.dedup();
+                    }
+                    holes.sort();
+                    if holes.windows(2).any(|pair| pair[0] == pair[1]) || holes.iter().flatten().any(|id| outer.binary_search(id).is_ok()) {
+                        return Err(KernelError::Invalid("ambiguous cap hole signature".into()));
+                    }
+                    *source = Some(FaceSource::CertifiedExtrudeCap { producer, sketch, high: *high, outer, holes, plane: *plane });
+                }
+            }
+            self.face_sources = Some(std::sync::Arc::new(sources));
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn transformed_sources(&self, m: [[f64; 4]; 4]) -> Result<Option<FaceSources>> {
+        let Some(sources) = &self.face_sources else { return Ok(None) };
+        let vector = |p: Vec3| {
+            Vec3::new(
+                m[0][0] * p.x + m[1][0] * p.y + m[2][0] * p.z,
+                m[0][1] * p.x + m[1][1] * p.y + m[2][1] * p.z,
+                m[0][2] * p.x + m[1][2] * p.y + m[2][2] * p.z,
+            )
+        };
+        let translation = Vec3::new(m[3][0], m[3][1], m[3][2]);
+        let reflected = vector(Vec3::X).dot(vector(Vec3::Y).cross(vector(Vec3::Z))) < 0.;
+        let mut sources = sources.as_ref().clone();
+        for source in sources.iter_mut().flatten() {
+            if let Some(plane) = source.plane_mut() {
+                *plane = solvecraft_geom::Plane::new(
+                    vector(plane.origin) + translation,
+                    vector(plane.x),
+                    vector(plane.y) * if reflected { -1. } else { 1. },
+                )
+                .ok_or_else(|| KernelError::Invalid("degenerate transformed face plane".into()))?;
+            }
+        }
+        Ok(Some(std::sync::Arc::new(sources)))
+    }
+
+    /// Bind constructed edges to uniquely proven source curves without changing face names.
+    pub fn with_extrude_certificates(mut self, producer: u64, sketch: u64, curves: &[Option<String>]) -> Result<Self> {
+        if producer == 0 || sketch == 0 || curves.iter().flatten().any(|curve| curve.is_empty() || curve.len() > 128) {
+            return Err(KernelError::Invalid("invalid constructed side certificate".into()));
+        }
+        if let Some(sources) = &self.face_sources {
+            if sources.len() != curves.len() {
+                return Err(KernelError::Invalid("side certificate count mismatch".into()));
+            }
+            let sources = sources
+                .iter()
+                .zip(curves)
+                .map(|(source, curve)| match (source, curve) {
+                    (Some(FaceSource::ExtrudeSide { plane, .. }), Some(curve)) => {
+                        Some(FaceSource::CertifiedExtrudeSide { producer, sketch, curve: curve.clone(), plane: *plane })
+                    }
+                    (Some(FaceSource::ExtrudeSide { .. }), None) => None,
+                    _ => source.clone(),
+                })
+                .collect();
+            self.face_sources = Some(std::sync::Arc::new(sources));
+        }
+        Ok(self)
+    }
+
+    pub fn with_import_certificate(mut self, digest: &str, producer: u64) -> Result<Self> {
+        if producer == 0 || digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+            return Err(KernelError::Invalid("invalid immutable import certificate".into()));
+        }
+        if let Some(sources) = &self.face_sources {
+            let mut sources = sources.as_ref().clone();
+            for source in sources.iter_mut().flatten() {
+                if let FaceSource::Imported { payload_sha256, producer: origin, .. } = source {
+                    *payload_sha256 = Some(digest.into());
+                    *origin = Some(producer);
+                }
+            }
+            self.face_sources = Some(std::sync::Arc::new(sources));
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn with_face_sources(mut self, sources: Option<std::sync::Arc<Vec<Option<FaceSource>>>>) -> Self {
+        self.face_sources = sources;
+        self
     }
 
     /// A deep copy of the solid that can be mutated without affecting other bodies.
@@ -674,51 +880,97 @@ impl Body {
     /// The separate pieces of a body: each outer shell with the voids inside it. A body in one
     /// piece comes back as itself.
     pub fn lumps(&self) -> Result<Vec<Body>> {
+        self.lumps_with_clearance(0.0)
+    }
+
+    /// A boolean shortcut needs clearance larger than both shell mesh deflections.
+    pub(crate) fn separated_lumps(&self) -> Result<Vec<Body>> {
+        self.lumps_with_clearance(4.0 * (self.size() * 1e-3).max(1e-3))
+    }
+
+    fn lumps_with_clearance(&self, clearance: f64) -> Result<Vec<Body>> {
         if self.mesh.is_some() || self.solid.boundaries().len() < 2 {
             return Ok(vec![self.clone()]);
         }
         let tol = (self.size() * 1e-3).max(1e-3);
         guard("lumps", || {
             let shells: Vec<mt::Shell> = self.solid.boundaries().clone();
-            let meshes: Vec<(f64, Option<Mesh>)> = shells
+            if shells.len() > shell_groups::MAX_SHELLS
+                || shells.iter().flat_map(mt::Shell::vertex_iter).take(shell_groups::MAX_POINTS + 1).count() > shell_groups::MAX_POINTS
+                || shells.iter().flat_map(mt::Shell::face_iter).take(shell_groups::MAX_TRIANGLES + 1).count() > shell_groups::MAX_TRIANGLES
+            {
+                return Err(KernelError::Failed("lumps: topology exceeds the shell grouping limit".into()));
+            }
+            let (mut point_count, mut triangle_count) = (0usize, 0usize);
+            let data: Vec<(f64, Mesh)> = shells
                 .iter()
                 .map(|sh| {
-                    let pm = sh.robust_triangulation(tol).to_polygon();
-                    let v = pm.volume();
+                    let meshed = sh.robust_triangulation(tol);
+                    if meshed.face_iter().any(|f| f.surface().is_none_or(|m| m.faces().triangle_iter().next().is_none())) {
+                        return Err(KernelError::Failed("lumps: cannot mesh a complete shell boundary".into()));
+                    }
+                    let pm = meshed.to_polygon();
+                    point_count = point_count
+                        .checked_add(pm.positions().len())
+                        .ok_or_else(|| KernelError::Failed("lumps: mesh exceeds the shell grouping limit".into()))?;
+                    triangle_count = triangle_count
+                        .checked_add(pm.faces().triangle_iter().take(shell_groups::MAX_TRIANGLES + 1).count())
+                        .ok_or_else(|| KernelError::Failed("lumps: mesh exceeds the shell grouping limit".into()))?;
+                    if point_count > shell_groups::MAX_POINTS || triangle_count > shell_groups::MAX_TRIANGLES {
+                        return Err(KernelError::Failed("lumps: mesh exceeds the shell grouping limit".into()));
+                    }
                     let mut m = Mesh::default();
                     for p in pm.positions() {
                         m.positions.push(Vec3::new(p.x, p.y, p.z));
                     }
                     for t in pm.faces().triangle_iter() {
-                        let idx = |k: usize| t.get(k).map(|x| u32::try_from(x.pos).unwrap_or(0)).unwrap_or(0);
-                        m.triangles.push([idx(0), idx(1), idx(2)]);
+                        let idx = |k: usize| {
+                            t.get(k).and_then(|x| u32::try_from(x.pos).ok()).ok_or_else(|| KernelError::Failed("lumps: invalid mesh index".into()))
+                        };
+                        let indices = [idx(0)?, idx(1)?, idx(2)?];
+                        let [a, b, c] = m.tri(&indices).ok_or_else(|| KernelError::Failed("lumps: invalid mesh triangle".into()))?;
+                        // STEP sphere poles can produce zero-area duplicate triangles.
+                        // They have no boundary area or volume and are not ray crossings.
+                        if (b - a).cross(c - a) == Vec3::ZERO {
+                            continue;
+                        }
+                        m.triangles.push(indices);
                         m.tri_face.push(0);
                     }
-                    (v, Some(m))
+                    let origin = m.positions.first().copied().ok_or_else(|| KernelError::Failed("lumps: empty mesh".into()))?;
+                    let v = m
+                        .triangles
+                        .iter()
+                        .map(|t| {
+                            m.tri(t)
+                                .map(|[a, b, c]| (a - origin).dot((b - origin).cross(c - origin)) / 6.0)
+                                .ok_or_else(|| KernelError::Failed("lumps: invalid mesh triangle".into()))
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .sum();
+                    Ok((v, m))
                 })
-                .collect();
-            let outer: Vec<usize> = (0..shells.len()).filter(|i| meshes.get(*i).is_some_and(|m| m.0 > 0.0)).collect();
-            if outer.len() < 2 {
+                .collect::<Result<_>>()?;
+            let (volumes, meshes): (Vec<_>, Vec<_>) = data.into_iter().unzip();
+            let groups = shell_groups::groups(&meshes, &volumes, (self.size() * 1e-8).max(1e-9).max(clearance))?;
+            if groups.len() == 1 {
                 return Ok(vec![self.clone()]);
             }
-            let mut groups: Vec<Vec<mt::Shell>> = outer.iter().filter_map(|i| shells.get(*i).cloned()).map(|s| vec![s]).collect();
-            for (i, sh) in shells.iter().enumerate() {
-                if outer.contains(&i) {
-                    continue;
-                }
-                // A void goes with the outer shell around one of its points.
-                let probe = sh.vertex_iter().next().map(|v| from_p3(v.point()));
-                let owner = outer.iter().position(|o| {
-                    let (Some(p), Some((_, Some(m)))) = (probe, meshes.get(*o)) else { return false };
-                    m.contains(p)
-                });
-                if let Some(k) = owner
-                    && let Some(g) = groups.get_mut(k)
-                {
-                    g.push(sh.clone());
-                }
-            }
-            groups.into_iter().map(|g| Solid::try_new(g).map_err(|e| KernelError::Failed(format!("lump: {e}"))).and_then(Body::new)).collect()
+            groups
+                .into_iter()
+                .map(|g| {
+                    let shells = g
+                        .into_iter()
+                        .map(|i| shells.get(i).cloned().ok_or_else(|| KernelError::Failed("lumps: missing shell".into())))
+                        .collect::<Result<Vec<_>>>()?;
+                    Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("lump: {e}"))).and_then(Body::new)
+                })
+                .collect()
         })
     }
 }
+
+#[cfg(test)]
+#[path = "body_lump_tests.rs"]
+mod lump_tests;

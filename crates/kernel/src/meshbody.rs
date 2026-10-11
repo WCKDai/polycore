@@ -108,6 +108,7 @@ pub fn mesh_body(positions: &[Vec3], triangles: &[[u32; 3]]) -> Result<Body> {
         color: None,
         paint: None,
         splits: None,
+        face_sources: None,
     })
 }
 
@@ -199,6 +200,7 @@ impl Body {
             color: self.color,
             paint: self.paint.clone(),
             splits: self.splits.clone(),
+            face_sources: None,
         })
     }
 }

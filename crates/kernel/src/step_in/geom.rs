@@ -1,7 +1,9 @@
 //! STEP geometry (ISO 10303-42 entities) to kernel curves and surfaces.
 //!
 //! Points, placements, lines, conics, B-splines (plain and rational), elementary surfaces and
-//! swept surfaces. Edge curves are trimmed to their vertices here, so every kernel edge runs
+//! swept surfaces, with exact offsets of planes, cylinders, cones, spheres and regular tori.
+//! Free-form offsets and offsets through collapsed radii remain explicit import warnings.
+//! Edge curves are trimmed to their vertices here, so every kernel edge runs
 //! exactly from its start vertex to its end vertex. Lengths are scaled to millimetres while
 //! reading.
 
@@ -761,6 +763,59 @@ pub(crate) fn bspline_surface(cx: &Ctx, e: &Entity) -> R<mt::Surface> {
     }
 }
 
+/// Resolve exact analytic offsets. Each intermediate offset is checked: an invalid inner
+/// offset must not become valid merely because an outer offset cancels its distance.
+/// Entity attributes follow ISO 10303-42 (`basis_surface`, `distance`, `self_intersect`).
+fn offset_basis(cx: &Ctx, id: u64, depth: usize) -> R<(u64, f64)> {
+    if depth > MAX_GEOM_DEPTH {
+        return Err("surface definitions nested too deeply".into());
+    }
+    let e = entity(cx, id)?;
+    if e.name() != "OFFSET_SURFACE" {
+        return Ok((id, 0.0));
+    }
+    let p = e.params();
+    let basis = p.get(1).and_then(Param::as_ref_id).ok_or("offset surface without basis")?;
+    let distance = length(cx, p.get(2), "offset distance")?;
+    if !matches!(p.get(3).and_then(Param::as_enum), Some("T" | "F" | "U")) {
+        return Err("offset surface without a logical self_intersect flag".into());
+    }
+    let (basis, inner) = offset_basis(cx, basis, depth + 1)?;
+    let offset = inner + distance;
+    if !offset.is_finite() || offset.abs() >= MAX_COORD {
+        return Err("offset distance out of range after unit conversion".into());
+    }
+    let e = entity(cx, basis)?;
+    let p = e.params();
+    match e.name() {
+        "PLANE" => {}
+        "CYLINDRICAL_SURFACE" | "SPHERICAL_SURFACE" => {
+            let radius = length(cx, p.get(2), "radius")?;
+            if radius <= 0.0 || !(1e-9..MAX_COORD).contains(&(radius + offset)) {
+                return Err("offset surface collapses or reverses its radius".into());
+            }
+        }
+        "CONICAL_SURFACE" => {
+            let radius = length(cx, p.get(2), "radius")?;
+            let angle = num(p.get(3), "semi angle")? * cx.ang;
+            if radius < 0.0 || !(angle.abs() > 1e-9 && angle.abs() < FRAC_PI_2 - 1e-9) || !(0.0..MAX_COORD).contains(&(radius + offset / angle.cos()))
+            {
+                return Err("offset cone has an invalid reference radius or angle".into());
+            }
+        }
+        "TOROIDAL_SURFACE" => {
+            let major = length(cx, p.get(2), "major radius")?;
+            let minor = length(cx, p.get(3), "minor radius")?;
+            if minor <= 0.0 || major <= minor || major >= MAX_COORD || !(1e-9..major).contains(&(minor + offset)) {
+                return Err("offset torus collapses or becomes self-intersecting".into());
+            }
+        }
+        _ if offset == 0.0 => {}
+        n => return Err(format!("unsupported OFFSET_SURFACE basis surface {n}")),
+    }
+    Ok((basis, offset))
+}
+
 /// A STEP surface entity as a kernel surface whose normal is the STEP surface normal.
 /// `extent` holds points of the face boundary (bounds the analytic surfaces' parameter ranges).
 /// `sense` false gives the opposite normal (a face with `same_sense = .F.`).
@@ -776,6 +831,7 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
     if depth > MAX_GEOM_DEPTH {
         return Err("surface definitions nested too deeply".into());
     }
+    let (id, offset) = offset_basis(cx, id, depth)?;
     let e = entity(cx, id)?;
     if e.is_complex() {
         return bspline_surface(cx, e).map(flip);
@@ -785,11 +841,12 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
     match e.name() {
         "PLANE" => {
             let f = placement()?;
-            Ok(flip(mt::Surface::Plane(mt::Plane::new(f.o, f.o + f.x, f.o + f.y))))
+            let o = f.o + f.z * offset;
+            Ok(flip(mt::Surface::Plane(mt::Plane::new(o, o + f.x, o + f.y))))
         }
         "CYLINDRICAL_SURFACE" => {
             let f = seam_frame(&placement()?, extent, seam);
-            let r = length(cx, p.get(2), "radius")?;
+            let r = length(cx, p.get(2), "radius")? + offset;
             if r <= 0.0 {
                 return Err("cylinder radius must be positive".into());
             }
@@ -799,8 +856,9 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
         }
         "CONICAL_SURFACE" => {
             let f = seam_frame(&placement()?, extent, seam);
-            let r = length(cx, p.get(2), "radius")?;
+            let basis_r = length(cx, p.get(2), "radius")?;
             let a = num(p.get(3), "semi angle")? * cx.ang;
+            let r = basis_r + offset / a.cos();
             if r < 0.0 || !(a.abs() > 1e-9 && a.abs() < FRAC_PI_2 - 1e-9) {
                 return Err("bad cone".into());
             }
@@ -821,7 +879,7 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
         }
         "SPHERICAL_SURFACE" => {
             let f = placement()?;
-            let r = length(cx, p.get(2), "radius")?;
+            let r = length(cx, p.get(2), "radius")? + offset;
             if r <= 0.0 {
                 return Err("sphere radius must be positive".into());
             }
@@ -844,7 +902,7 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
         }
         "TOROIDAL_SURFACE" => {
             let f = placement()?;
-            let (big, small) = (length(cx, p.get(2), "major radius")?, length(cx, p.get(3), "minor radius")?);
+            let (big, small) = (length(cx, p.get(2), "major radius")?, length(cx, p.get(3), "minor radius")? + offset);
             if small <= 0.0 || big < 0.0 {
                 return Err("bad torus radii".into());
             }
