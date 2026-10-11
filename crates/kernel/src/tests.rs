@@ -1464,6 +1464,49 @@ fn smooth_loft_through_three_sections() {
     assert!(v > PI * 64.0 * 30.0 && v < 576.0 * 30.0, "{v}");
 }
 
+/// A loft from the basin's whole outline (10 up) down to a drain pad in a corner (1 up), cut
+/// from a 3 mm shell: its top edges lie on the outer walls. One order of the sections failed
+/// the cut ("shell not oriented and closed", or a panic inside the intersection), the other
+/// worked; both orders now build the same body, valid and outward.
+#[test]
+fn loft_section_order_gives_the_same_body() {
+    let r = |x0: f64, y0: f64, x1: f64, y1: f64| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+    let at = |z: f64| Plane::new(Vec3::new(0.0, 0.0, z), Vec3::X, Vec3::Y).unwrap();
+    let big = (at(10.0), r(0.0, 0.0, 100.0, 60.0));
+    let small = (at(1.0), r(80.0, 40.0, 90.0, 50.0));
+    let basin = shell(&box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap(), &[Vec3::new(50.0, 30.0, 30.0)], 3.0).unwrap();
+    // The material inside the loft: the floor from 1 to 3 up, the walls from 3 to 10.
+    let v0 = measure(&basin).unwrap().volume;
+    let removed = v0 - 41582.028;
+    let mut volumes = Vec::new();
+    for secs in [vec![big.clone(), small.clone()], vec![small.clone(), big.clone()]] {
+        let l = loft(&secs).unwrap();
+        let m = measure(&l).unwrap();
+        assert!(m.volume > 0.0, "{}", m.volume);
+        volumes.push(m.volume);
+        let cut = boolean(&basin, &l, BoolOp::Cut).unwrap().unwrap();
+        let v = measure(&cut).unwrap().volume;
+        assert!((v0 - v - removed).abs() < 0.01 * removed, "{v} vs {}", v0 - removed);
+        let joined = boolean(&basin, &l, BoolOp::Union).unwrap().unwrap();
+        assert!(measure(&joined).unwrap().volume > v0);
+    }
+    assert!(rel(volumes[0], volumes[1]) < 1e-12, "{volumes:?}");
+    // Reversed in z too (large below, small above, and sketched on planes facing down).
+    let down = |z: f64| Plane::new(Vec3::new(0.0, 0.0, z), Vec3::Y, Vec3::X).unwrap();
+    for secs in [
+        vec![(at(0.0), r(0.0, 0.0, 100.0, 60.0)), (at(20.0), r(40.0, 20.0, 60.0, 40.0))],
+        vec![(down(20.0), r(20.0, 40.0, 40.0, 60.0)), (at(0.0), r(0.0, 0.0, 100.0, 60.0))],
+    ] {
+        // Prismoid: h/6 · (A0 + 4 Amid + A1).
+        let want = 20.0 / 6.0 * (6000.0 + 4.0 * 60.0 * 40.0 + 400.0);
+        let back: Vec<(Plane, Loop2)> = secs.iter().rev().cloned().collect();
+        for b in [loft(&secs).unwrap(), loft(&back).unwrap()] {
+            let v = measure(&b).unwrap().volume;
+            assert!(rel(v, want) < 1e-6, "{v} vs {want}");
+        }
+    }
+}
+
 #[test]
 fn tangent_holes_pinch_alike() {
     // Holes at ±15 and ±25 touch along a line (x = ±20); ±30 overlaps ±25. The ±25 wall is cut
