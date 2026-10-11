@@ -114,6 +114,13 @@ fn trivial(a: &Body, b: &Body, op: BoolOp, ma: &solvecraft_geom::Mesh, mb: &solv
     const ALL: f64 = 0.997;
     let disjoint = b_in_a < NONE && a_in_b < NONE;
     match op {
+        // Sampling only selects this candidate. Validate every shell boundary and the
+        // complete material/void nesting before preserving a disconnected union.
+        BoolOp::Union if disjoint => {
+            let joined = join_pieces(vec![a.clone(), b.clone()]).ok().flatten()?;
+            joined.separated_lumps().ok()?;
+            Some(Some(joined))
+        }
         BoolOp::Cut if disjoint => Some(Some(a.clone())),
         BoolOp::Cut if a_in_b > ALL => Some(None),
         BoolOp::Intersect if disjoint => Some(None),
@@ -122,31 +129,34 @@ fn trivial(a: &Body, b: &Body, op: BoolOp, ma: &solvecraft_geom::Mesh, mb: &solv
         BoolOp::Union if b_in_a > ALL => Some(Some(a.clone())),
         BoolOp::Union if a_in_b > ALL => Some(Some(b.clone())),
         // The tool wholly inside, clear of the outside: a void.
-        BoolOp::Cut if b_in_a > ALL && clear_inside(ma, mb, a.size().max(b.size()) * 1e-6) => void(a, b).ok(),
+        BoolOp::Cut if b_in_a > ALL => {
+            let candidate = void(a, b).ok().flatten()?;
+            candidate.separated_lumps().ok()?;
+            Some(Some(candidate))
+        }
         _ => None,
     }
 }
 
-/// Does every vertex of `inner` lie inside `outer` and farther than `gap` from its surface?
-fn clear_inside(outer: &solvecraft_geom::Mesh, inner: &solvecraft_geom::Mesh, gap: f64) -> bool {
-    if outer.triangles.len() * inner.positions.len() > 40_000_000 {
-        return false;
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    #[test]
+    fn curved_near_contact_never_uses_a_shell_only_boolean_candidate() {
+        let direction = Vec3::new(1.0, 2.0, 3.0).normalized().unwrap();
+        let outer = crate::sphere(Vec3::ZERO, 10.0).unwrap();
+        let mesh = outer.tessellate(0.03).unwrap();
+        for distance in [19.999, 20.001] {
+            let other = crate::sphere(direction * distance, 10.0).unwrap();
+            let other_mesh = other.tessellate(0.03).unwrap();
+            assert!(trivial(&outer, &other, BoolOp::Union, &mesh, &other_mesh).is_none());
+            assert!(trivial(&other, &outer, BoolOp::Union, &other_mesh, &mesh).is_none());
+        }
+        let protruding = crate::sphere(direction * 9.001, 1.0).unwrap();
+        let protruding_mesh = protruding.tessellate(0.03).unwrap();
+        assert!(trivial(&outer, &protruding, BoolOp::Cut, &mesh, &protruding_mesh).is_none());
     }
-    let tris: Vec<[Vec3; 3]> = outer.triangles.iter().filter_map(|t| outer.tri(t)).collect();
-    inner.positions.iter().all(|p| {
-        outer.contains(*p)
-            && tris.iter().all(|[a, b, c]| {
-                // Distance to the triangle's plane bounds the distance to the triangle from below.
-                let n = (*b - *a).cross(*c - *a);
-                let Some(nn) = n.normalized() else { return true };
-                let h = (*p - *a).dot(nn).abs();
-                h > gap || {
-                    let q = *p - nn * (*p - *a).dot(nn);
-                    let inside = [(*a, *b), (*b, *c), (*c, *a)].iter().all(|(u, v)| (*v - *u).cross(q - *u).dot(n) >= 0.0);
-                    !inside && [(*a, *b), (*b, *c), (*c, *a)].iter().all(|(u, v)| p.dist_to_segment(*u, *v) > gap)
-                }
-            })
-    })
 }
 
 /// `a` with the inside of `b` (wholly within it) taken out: a second, inward-facing shell.

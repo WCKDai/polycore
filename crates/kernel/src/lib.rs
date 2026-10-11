@@ -64,6 +64,7 @@ pub use offset::with_same_surface;
 pub use ops::{BoolOp, boolean, can_join_touching_faces, split_by_plane, transform, transform_matrix};
 pub use polybool::{faceted_boolean, planar_boolean};
 pub use polyhedron::{HalfSpace, convex_polyhedron, draft, offset_faces, shell};
+pub use prism::{extrude_planar_regions, planar_regions_boolean};
 pub use sew::{EdgeSpec, FaceSpec, SurfSpec, sew};
 pub use splitface::{SplitTool, split_body, split_faces, split_faces_with_map};
 pub use step::step_export;

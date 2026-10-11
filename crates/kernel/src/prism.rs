@@ -10,7 +10,108 @@ use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3};
-use crate::{BoolOp, Result};
+use crate::{BoolOp, KernelError, Result};
+
+const MAX_PLANAR_SEGMENTS: usize = 8192;
+const MAX_PLANAR_EVENTS: usize = 131_072;
+const MAX_PLANAR_PAIRS: usize = 16_000_000;
+
+/// Boolean of planar regions bounded by straight lines and circular arcs. Boundaries stay
+/// analytic; disjoint results and retained islands are returned as separate regions.
+pub fn planar_regions_boolean(a: &[Region2], b: &[Region2], op: BoolOp, tolerance: f64) -> Result<Vec<Region2>> {
+    crate::guard("planar region boolean", || {
+        if !tolerance.is_finite() || !(1e-9..=1.0).contains(&tolerance) {
+            return Err(KernelError::Invalid("planar boolean tolerance must be finite and between 1e-9 and 1 mm".into()));
+        }
+        let loops = || a.iter().chain(b).flat_map(|r| std::iter::once(&r.outer).chain(&r.holes));
+        let mut edges = 0usize;
+        let mut samples = 0usize;
+        for lp in loops() {
+            edges = edges.saturating_add(lp.segs.len());
+            if edges > MAX_PLANAR_SEGMENTS || lp.segs.is_empty() || !lp.is_closed(tolerance * 10.0) {
+                return Err(KernelError::Invalid("planar boolean needs closed loops within its geometry budget".into()));
+            }
+            for s in &lp.segs {
+                let finite = |p: Vec2| p.x.is_finite() && p.y.is_finite() && p.x.abs() < 1e9 && p.y.abs() < 1e9;
+                let valid = match *s {
+                    Seg2::Line { a, b } => finite(a) && finite(b) && a.dist(b) > 1e-12,
+                    Seg2::Arc { center, radius, start, sweep } => {
+                        finite(center)
+                            && radius.is_finite()
+                            && radius > 0.0
+                            && radius < 1e9
+                            && start.is_finite()
+                            && sweep.is_finite()
+                            && sweep.abs() > 1e-12
+                            && sweep.abs() <= std::f64::consts::TAU + 1e-9
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    return Err(KernelError::Invalid("planar boolean supports finite nondegenerate lines and circular arcs".into()));
+                }
+                samples = samples.saturating_add(s.polyline(1e-3).len());
+                if samples > 65_536 {
+                    return Err(KernelError::Invalid("planar boolean sampled geometry exceeds its budget".into()));
+                }
+            }
+        }
+        boolean2d(a, b, op, tolerance)
+            .ok_or_else(|| KernelError::Failed("planar region arrangement failed or exceeded its bounded processing budget".into()))
+    })
+}
+
+/// Extrude normalized planar material as one logical compound, retaining every disjoint
+/// region and its holes. Planar arrangement certifies separation before shells are joined.
+pub fn extrude_planar_regions(plane: &Plane, regions: &[Region2], start: f64, end: f64) -> Result<Body> {
+    crate::guard("planar material extrusion", || {
+        // Validate aggregate inputs first; an arrangement compares opposite operands,
+        // so regions in the same operand must be normalized through balanced unions.
+        planar_regions_boolean(regions, &[], BoolOp::Union, 1e-7)?;
+        let mut groups: Vec<Vec<Region2>> = regions.iter().cloned().map(|r| vec![r]).collect();
+        let mut remaining_pairs = 32_000_000usize;
+        while groups.len() > 1 {
+            let mut next = Vec::new();
+            let mut iter = groups.into_iter();
+            while let Some(a) = iter.next() {
+                if let Some(b) = iter.next() {
+                    let count = |rs: &[Region2]| {
+                        rs.iter().flat_map(|r| std::iter::once(&r.outer).chain(&r.holes)).fold(0usize, |n, l| n.saturating_add(l.segs.len()))
+                    };
+                    remaining_pairs = remaining_pairs
+                        .checked_sub(count(&a).saturating_mul(count(&b)))
+                        .ok_or_else(|| KernelError::Invalid("planar extrusion arrangement exceeds its work budget".into()))?;
+                    next.push(planar_regions_boolean(&a, &b, BoolOp::Union, 1e-7)?);
+                } else {
+                    next.push(a);
+                }
+            }
+            groups = next;
+        }
+        let normalized = groups.pop().unwrap_or_default();
+        if normalized.is_empty() {
+            return Err(KernelError::Invalid("empty planar material extrusion".into()));
+        }
+        for (i, a) in normalized.iter().enumerate() {
+            for b in normalized.iter().skip(i + 1) {
+                for s in std::iter::once(&a.outer).chain(&a.holes).flat_map(|l| &l.segs) {
+                    for t in std::iter::once(&b.outer).chain(&b.holes).flat_map(|l| &l.segs) {
+                        remaining_pairs = remaining_pairs
+                            .checked_sub(1)
+                            .ok_or_else(|| KernelError::Invalid("planar extrusion separation exceeds its work budget".into()))?;
+                        let endpoints_touch = [s.start(), s.end()].iter().any(|p| t.point_at(t.closest_param(*p)).dist(*p) <= 1e-7)
+                            || [t.start(), t.end()].iter().any(|p| s.point_at(s.closest_param(*p)).dist(*p) <= 1e-7);
+                        if endpoints_touch || !crossings(s, t, 1e-7).is_empty() {
+                            return Err(KernelError::Invalid("planar material pieces touch at a boundary".into()));
+                        }
+                    }
+                }
+            }
+        }
+        let pieces = crate::extrude(plane, &normalized, start, end)?;
+        crate::ops::join_pieces(pieces)?.ok_or_else(|| KernelError::Failed("empty planar material extrusion".into()))
+    })
+}
 
 /// A prism: the plane of its bottom cap (normal along the walls), its height and section.
 struct Prism {
@@ -191,9 +292,83 @@ fn crossings(s: &Seg2, t: &Seg2, tol: f64) -> Vec<(f64, f64)> {
     out
 }
 
-/// Exact point-in-loop by winding (arcs as fine polylines are enough away from the boundary).
+/// Ray parity against analytic lines/arcs. Fragment classification must not depend on a
+/// display chord tolerance: a tiny tool can sit between a circular boundary and its chords.
+fn inside_loop(lp: &Loop2, p: Vec2) -> bool {
+    let mut odd = false;
+    for seg in &lp.segs {
+        match *seg {
+            Seg2::Line { a, b } => {
+                if (a.y > p.y) != (b.y > p.y) {
+                    let x = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
+                    if x > p.x {
+                        odd = !odd;
+                    }
+                }
+            }
+            Seg2::Arc { center, radius, start, sweep } => {
+                let y = (p.y - center.y) / radius;
+                if !(-1.0..=1.0).contains(&y) {
+                    continue;
+                }
+                let a = y.asin();
+                let root = (1.0 - y * y).max(0.0).sqrt();
+                let full = (sweep.abs() - std::f64::consts::TAU).abs() < 1e-12;
+                for (i, (angle, x)) in [(a, center.x + radius * root), (std::f64::consts::PI - a, center.x - radius * root)].into_iter().enumerate() {
+                    // A tangent has one geometric root. Interior tangencies contribute zero
+                    // parity; a minimum at an endpoint follows the same half-open rule as lines.
+                    if root == 0.0 && i == 1 {
+                        continue;
+                    }
+                    if x <= p.x {
+                        continue;
+                    }
+                    let mut delta = if sweep > 0.0 { angle - start } else { start - angle };
+                    delta = delta.rem_euclid(std::f64::consts::TAU);
+                    if (delta - std::f64::consts::TAU).abs() < 1e-12 {
+                        delta = 0.0;
+                    }
+                    if delta > sweep.abs() + 1e-12 {
+                        continue;
+                    }
+                    let dy = angle.cos() * sweep;
+                    let tangent = dy.abs() < sweep.abs() * 1e-12;
+                    let at_start = delta < 1e-12;
+                    let at_end = (delta - sweep.abs()).abs() < 1e-12;
+                    let crosses = if full {
+                        !tangent
+                    } else if at_start {
+                        dy > 0.0 && !tangent || tangent && y < 0.0
+                    } else if at_end {
+                        dy < 0.0 && !tangent || tangent && y < 0.0
+                    } else {
+                        !tangent
+                    };
+                    if crosses {
+                        odd = !odd;
+                    }
+                }
+            }
+            _ => {
+                // Private prism callers only supply lines/arcs. Keep a controlled fallback
+                // for future internal callers; the public helper rejects other segment kinds.
+                let points = seg.polyline(1e-7);
+                for pair in points.windows(2) {
+                    if let [a, b] = pair
+                        && (a.y > p.y) != (b.y > p.y)
+                        && a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y) > p.x
+                    {
+                        odd = !odd;
+                    }
+                }
+            }
+        }
+    }
+    odd
+}
+
 fn inside(regions: &[Region2], p: Vec2) -> bool {
-    regions.iter().any(|r| r.contains(p))
+    regions.iter().any(|r| inside_loop(&r.outer, p) && !r.holes.iter().any(|h| inside_loop(h, p)))
 }
 
 fn dist_to(regions: &[Region2], p: Vec2) -> f64 {
@@ -233,19 +408,30 @@ fn oriented(regions: &[Region2]) -> Vec<Region2> {
 
 /// 2D boolean of regions bounded by lines and arcs.
 fn boolean2d(a: &[Region2], b: &[Region2], op: BoolOp, tol: f64) -> Option<Vec<Region2>> {
+    let count =
+        |rs: &[Region2]| rs.iter().flat_map(|r| std::iter::once(&r.outer).chain(&r.holes)).fold(0usize, |n, lp| n.saturating_add(lp.segs.len()));
+    let (na, nb) = (count(a), count(b));
+    if na.saturating_add(nb) > MAX_PLANAR_SEGMENTS || na.saturating_mul(nb) > MAX_PLANAR_PAIRS {
+        return None;
+    }
     let (a, b) = (oriented(a), oriented(b));
     let segs =
         |rs: &[Region2]| -> Vec<Seg2> { rs.iter().flat_map(|r| std::iter::once(&r.outer).chain(&r.holes)).flat_map(|l| l.segs.clone()).collect() };
     let (sa, sb) = (segs(&a), segs(&b));
-    if sa.len() * sb.len() > 4_000_000 || sa.iter().chain(&sb).any(|s| !matches!(s, Seg2::Line { .. } | Seg2::Arc { .. })) {
+    if sa.iter().chain(&sb).any(|s| !matches!(s, Seg2::Line { .. } | Seg2::Arc { .. })) {
         return None;
     }
     // Split every segment where it crosses the other side's boundary.
     let mut cut_a: Vec<Vec<f64>> = vec![Vec::new(); sa.len()];
     let mut cut_b: Vec<Vec<f64>> = vec![Vec::new(); sb.len()];
+    let mut events = 0usize;
     for (i, s) in sa.iter().enumerate() {
         for (j, t) in sb.iter().enumerate() {
             for (u, v) in crossings(s, t, tol) {
+                events += 2;
+                if events > MAX_PLANAR_EVENTS {
+                    return None;
+                }
                 cut_a.get_mut(i)?.push(u);
                 cut_b.get_mut(j)?.push(v);
             }
@@ -257,6 +443,10 @@ fn boolean2d(a: &[Region2], b: &[Region2], op: BoolOp, tol: f64) -> Option<Vec<R
             for p in [t.start(), t.end()] {
                 let u = s.closest_param(p);
                 if s.point_at(u).dist(p) < tol {
+                    events += 1;
+                    if events > MAX_PLANAR_EVENTS {
+                        return None;
+                    }
                     cut_a.get_mut(i)?.push(u);
                 }
             }
@@ -267,6 +457,10 @@ fn boolean2d(a: &[Region2], b: &[Region2], op: BoolOp, tol: f64) -> Option<Vec<R
             for p in [s.start(), s.end()] {
                 let v = t.closest_param(p);
                 if t.point_at(v).dist(p) < tol {
+                    events += 1;
+                    if events > MAX_PLANAR_EVENTS {
+                        return None;
+                    }
                     cut_b.get_mut(j)?.push(v);
                 }
             }
@@ -295,6 +489,9 @@ fn boolean2d(a: &[Region2], b: &[Region2], op: BoolOp, tol: f64) -> Option<Vec<R
     let mut kept: Vec<Seg2> = Vec::new();
     // A's pieces.
     for (i, s) in sa.iter().enumerate() {
+        if cut_a.get(i)?.len() > MAX_PLANAR_SEGMENTS {
+            return None;
+        }
         for p in pieces(s, cut_a.get_mut(i)?) {
             let m = p.point_at(0.5);
             let on = dist_to(&b, m) < tol;
@@ -312,18 +509,27 @@ fn boolean2d(a: &[Region2], b: &[Region2], op: BoolOp, tol: f64) -> Option<Vec<R
                 }
             };
             if keep {
+                if kept.len() >= MAX_PLANAR_SEGMENTS {
+                    return None;
+                }
                 kept.push(p);
             }
         }
     }
     // B's pieces (coincident ones were decided with A's).
     for (j, t) in sb.iter().enumerate() {
+        if cut_b.get(j)?.len() > MAX_PLANAR_SEGMENTS {
+            return None;
+        }
         for p in pieces(t, cut_b.get_mut(j)?) {
             let m = p.point_at(0.5);
             if dist_to(&a, m) < tol {
                 continue;
             }
             let ins = inside(&a, m);
+            if kept.len() >= MAX_PLANAR_SEGMENTS {
+                return None;
+            }
             match op {
                 BoolOp::Union if !ins => kept.push(p),
                 BoolOp::Intersect if ins => kept.push(p),
@@ -351,7 +557,9 @@ fn boolean2d(a: &[Region2], b: &[Region2], op: BoolOp, tol: f64) -> Option<Vec<R
                 return None;
             }
             let end = segs.last()?.end();
-            if end.dist(first) < tol * 10.0 && segs.len() > 1 {
+            let full_circle =
+                segs.first().is_some_and(|s| matches!(s, Seg2::Arc { sweep, .. } if (sweep.abs() - std::f64::consts::TAU).abs() < 1e-9));
+            if end.dist(first) < tol * 10.0 && (segs.len() > 1 || full_circle) {
                 break;
             }
             let next = (0..kept.len())
@@ -379,7 +587,7 @@ fn boolean2d(a: &[Region2], b: &[Region2], op: BoolOp, tol: f64) -> Option<Vec<R
     let mut regions: Vec<Region2> = outers.into_iter().map(|o| Region2 { outer: o, holes: Vec::new() }).collect();
     for h in holes {
         let p = h.segs.first()?.point_at(0.5);
-        let r = regions.iter_mut().find(|r| r.outer.contains(p) && r.outer.signed_area().abs() > h.signed_area().abs())?;
+        let r = regions.iter_mut().find(|r| inside_loop(&r.outer, p) && r.outer.signed_area().abs() > h.signed_area().abs())?;
         r.holes.push(h);
     }
     Some(regions)
@@ -706,4 +914,90 @@ fn stack_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>>
 
 pub(crate) fn prism_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
     crate::guard("prism boolean", || Ok(simple_prism_boolean(a, b, op).or_else(|| stack_boolean(a, b, op)))).ok().flatten()
+}
+
+#[cfg(test)]
+mod planar_tests {
+    use super::*;
+    fn rectangle(a: Vec2, b: Vec2) -> Region2 {
+        Region2 { outer: Loop2::polygon(&[a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)]), holes: vec![] }
+    }
+    #[test]
+    fn compound_planar_extrusion_normalizes_overlap_and_retains_islands() {
+        let plane = Plane::named("XY").unwrap();
+        let a = rectangle(Vec2::ZERO, Vec2::new(10.0, 10.0));
+        let b = rectangle(Vec2::new(5.0, 0.0), Vec2::new(15.0, 10.0));
+        let body = extrude_planar_regions(&plane, &[a.clone(), b], 0.0, 2.0).unwrap();
+        assert!((crate::measure(&body).unwrap().volume - 300.0).abs() < 1e-6);
+        let inner = Region2 { outer: Loop2::circle(Vec2::new(5.0, 5.0), 2.0), holes: vec![] };
+        let body = extrude_planar_regions(&plane, &[a.clone(), inner.clone()], 0.0, 2.0).unwrap();
+        assert!((crate::measure(&body).unwrap().volume - 200.0).abs() < 1e-6);
+        let annulus = Region2 { outer: a.outer, holes: vec![Loop2::circle(Vec2::new(5.0, 5.0), 3.0)] };
+        let body = extrude_planar_regions(&plane, &[annulus, inner], 0.0, 2.0).unwrap();
+        let expected = (100.0 - std::f64::consts::PI * 5.0) * 2.0;
+        assert!((crate::measure(&body).unwrap().volume - expected).abs() < 0.1);
+        assert_eq!(body.solid.boundaries().len(), 2);
+        let a = rectangle(Vec2::ZERO, Vec2::new(10.0, 10.0));
+        let b = rectangle(Vec2::new(10.0, 10.0), Vec2::new(20.0, 20.0));
+        assert!(extrude_planar_regions(&plane, &[a, b], 0.0, 2.0).is_err());
+        let circles = [Vec2::ZERO, Vec2::new(10.0, 0.0)].map(|center| Region2 { outer: Loop2::circle(center, 5.0), holes: vec![] });
+        assert!(extrude_planar_regions(&plane, &circles, 0.0, 2.0).is_err());
+    }
+
+    #[test]
+    fn analytic_circle_classification_respects_signed_sweeps_and_seams() {
+        for seam in [0.0, 0.13, std::f64::consts::FRAC_PI_2, -std::f64::consts::FRAC_PI_2] {
+            for reversed in [false, true] {
+                let lp = Loop2::circle_from(Vec2::ZERO, 10.0, seam);
+                let lp = if reversed { lp.reversed() } else { lp };
+                for p in [Vec2::ZERO, Vec2::new(9.9998, 0.0), Vec2::new(0.0, 9.9998), Vec2::new(0.0, -9.9998)] {
+                    assert!(inside_loop(&lp, p), "{seam} {reversed} {p:?}");
+                }
+                for p in [Vec2::new(11.0, 0.0), Vec2::new(0.0, 10.0), Vec2::new(0.0, -10.0)] {
+                    assert!(!inside_loop(&lp, p), "{seam} {reversed} {p:?}");
+                }
+            }
+        }
+        let half = Loop2 {
+            segs: vec![
+                Seg2::Arc { center: Vec2::ZERO, radius: 10.0, start: -std::f64::consts::FRAC_PI_2, sweep: std::f64::consts::PI },
+                Seg2::Line { a: Vec2::new(0.0, 10.0), b: Vec2::new(0.0, -10.0) },
+            ],
+        };
+        for lp in [half.clone(), half.reversed()] {
+            assert!(inside_loop(&lp, Vec2::new(5.0, 0.0)));
+            assert!(!inside_loop(&lp, Vec2::new(-5.0, 0.0)));
+            assert!(!inside_loop(&lp, Vec2::new(-5.0, -10.0)));
+        }
+    }
+    #[test]
+    fn tiny_tool_between_circle_and_display_chord_is_not_lost() {
+        let circle = Region2 { outer: Loop2::circle(Vec2::ZERO, 10.0), holes: vec![] };
+        let sampled = circle.outer.polyline(1e-3);
+        let direction = (sampled[0] + sampled[1]).normalized().unwrap();
+        let at = direction * 9.9998;
+        let half = Vec2::new(0.000025, 0.000025);
+        let square = rectangle(at - half, at + half);
+        assert!(square.outer.segs.iter().all(|s| s.start().len() < 10.0));
+        assert!(!circle.contains(at), "fixture must lie outside the display chord");
+        let cut = planar_regions_boolean(std::slice::from_ref(&circle), std::slice::from_ref(&square), BoolOp::Cut, 1e-7).unwrap();
+        assert_eq!(cut.len(), 1);
+        assert_eq!(cut[0].holes.len(), 1);
+        assert!((cut[0].holes[0].signed_area().abs() - 2.5e-9).abs() < 1e-13);
+        let intersect = planar_regions_boolean(&[circle], &[square], BoolOp::Intersect, 1e-7).unwrap();
+        assert_eq!(intersect.len(), 1);
+        assert!((intersect[0].area() - 2.5e-9).abs() < 1e-13);
+    }
+    #[test]
+    fn planar_region_api_rejects_hostile_values_and_budgets() {
+        let plate = rectangle(Vec2::ZERO, Vec2::new(10.0, 10.0));
+        for tolerance in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            assert!(planar_regions_boolean(std::slice::from_ref(&plate), &[], BoolOp::Union, tolerance).is_err());
+        }
+        let mut bad = plate.clone();
+        bad.outer.segs[0] = Seg2::Line { a: Vec2::new(f64::NAN, 0.0), b: Vec2::X };
+        assert!(planar_regions_boolean(&[bad], &[], BoolOp::Union, 1e-7).is_err());
+        let many = vec![plate; MAX_PLANAR_SEGMENTS / 4 + 1];
+        assert!(planar_regions_boolean(&many, &[], BoolOp::Union, 1e-7).is_err());
+    }
 }

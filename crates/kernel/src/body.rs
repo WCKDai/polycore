@@ -5,6 +5,9 @@ use truck_modeling as mt;
 
 use crate::{KernelError, Result, guard};
 
+#[path = "shell_groups.rs"]
+mod shell_groups;
+
 pub(crate) type Solid = mt::Solid;
 
 /// A solid body (one or more closed shells), or a mesh body (triangles only, like an imported
@@ -674,51 +677,97 @@ impl Body {
     /// The separate pieces of a body: each outer shell with the voids inside it. A body in one
     /// piece comes back as itself.
     pub fn lumps(&self) -> Result<Vec<Body>> {
+        self.lumps_with_clearance(0.0)
+    }
+
+    /// A boolean shortcut needs clearance larger than both shell mesh deflections.
+    pub(crate) fn separated_lumps(&self) -> Result<Vec<Body>> {
+        self.lumps_with_clearance(4.0 * (self.size() * 1e-3).max(1e-3))
+    }
+
+    fn lumps_with_clearance(&self, clearance: f64) -> Result<Vec<Body>> {
         if self.mesh.is_some() || self.solid.boundaries().len() < 2 {
             return Ok(vec![self.clone()]);
         }
         let tol = (self.size() * 1e-3).max(1e-3);
         guard("lumps", || {
             let shells: Vec<mt::Shell> = self.solid.boundaries().clone();
-            let meshes: Vec<(f64, Option<Mesh>)> = shells
+            if shells.len() > shell_groups::MAX_SHELLS
+                || shells.iter().flat_map(mt::Shell::vertex_iter).take(shell_groups::MAX_POINTS + 1).count() > shell_groups::MAX_POINTS
+                || shells.iter().flat_map(mt::Shell::face_iter).take(shell_groups::MAX_TRIANGLES + 1).count() > shell_groups::MAX_TRIANGLES
+            {
+                return Err(KernelError::Failed("lumps: topology exceeds the shell grouping limit".into()));
+            }
+            let (mut point_count, mut triangle_count) = (0usize, 0usize);
+            let data: Vec<(f64, Mesh)> = shells
                 .iter()
                 .map(|sh| {
-                    let pm = sh.robust_triangulation(tol).to_polygon();
-                    let v = pm.volume();
+                    let meshed = sh.robust_triangulation(tol);
+                    if meshed.face_iter().any(|f| f.surface().is_none_or(|m| m.faces().triangle_iter().next().is_none())) {
+                        return Err(KernelError::Failed("lumps: cannot mesh a complete shell boundary".into()));
+                    }
+                    let pm = meshed.to_polygon();
+                    point_count = point_count
+                        .checked_add(pm.positions().len())
+                        .ok_or_else(|| KernelError::Failed("lumps: mesh exceeds the shell grouping limit".into()))?;
+                    triangle_count = triangle_count
+                        .checked_add(pm.faces().triangle_iter().take(shell_groups::MAX_TRIANGLES + 1).count())
+                        .ok_or_else(|| KernelError::Failed("lumps: mesh exceeds the shell grouping limit".into()))?;
+                    if point_count > shell_groups::MAX_POINTS || triangle_count > shell_groups::MAX_TRIANGLES {
+                        return Err(KernelError::Failed("lumps: mesh exceeds the shell grouping limit".into()));
+                    }
                     let mut m = Mesh::default();
                     for p in pm.positions() {
                         m.positions.push(Vec3::new(p.x, p.y, p.z));
                     }
                     for t in pm.faces().triangle_iter() {
-                        let idx = |k: usize| t.get(k).map(|x| u32::try_from(x.pos).unwrap_or(0)).unwrap_or(0);
-                        m.triangles.push([idx(0), idx(1), idx(2)]);
+                        let idx = |k: usize| {
+                            t.get(k).and_then(|x| u32::try_from(x.pos).ok()).ok_or_else(|| KernelError::Failed("lumps: invalid mesh index".into()))
+                        };
+                        let indices = [idx(0)?, idx(1)?, idx(2)?];
+                        let [a, b, c] = m.tri(&indices).ok_or_else(|| KernelError::Failed("lumps: invalid mesh triangle".into()))?;
+                        // STEP sphere poles can produce zero-area duplicate triangles.
+                        // They have no boundary area or volume and are not ray crossings.
+                        if (b - a).cross(c - a) == Vec3::ZERO {
+                            continue;
+                        }
+                        m.triangles.push(indices);
                         m.tri_face.push(0);
                     }
-                    (v, Some(m))
+                    let origin = m.positions.first().copied().ok_or_else(|| KernelError::Failed("lumps: empty mesh".into()))?;
+                    let v = m
+                        .triangles
+                        .iter()
+                        .map(|t| {
+                            m.tri(t)
+                                .map(|[a, b, c]| (a - origin).dot((b - origin).cross(c - origin)) / 6.0)
+                                .ok_or_else(|| KernelError::Failed("lumps: invalid mesh triangle".into()))
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                        .into_iter()
+                        .sum();
+                    Ok((v, m))
                 })
-                .collect();
-            let outer: Vec<usize> = (0..shells.len()).filter(|i| meshes.get(*i).is_some_and(|m| m.0 > 0.0)).collect();
-            if outer.len() < 2 {
+                .collect::<Result<_>>()?;
+            let (volumes, meshes): (Vec<_>, Vec<_>) = data.into_iter().unzip();
+            let groups = shell_groups::groups(&meshes, &volumes, (self.size() * 1e-8).max(1e-9).max(clearance))?;
+            if groups.len() == 1 {
                 return Ok(vec![self.clone()]);
             }
-            let mut groups: Vec<Vec<mt::Shell>> = outer.iter().filter_map(|i| shells.get(*i).cloned()).map(|s| vec![s]).collect();
-            for (i, sh) in shells.iter().enumerate() {
-                if outer.contains(&i) {
-                    continue;
-                }
-                // A void goes with the outer shell around one of its points.
-                let probe = sh.vertex_iter().next().map(|v| from_p3(v.point()));
-                let owner = outer.iter().position(|o| {
-                    let (Some(p), Some((_, Some(m)))) = (probe, meshes.get(*o)) else { return false };
-                    m.contains(p)
-                });
-                if let Some(k) = owner
-                    && let Some(g) = groups.get_mut(k)
-                {
-                    g.push(sh.clone());
-                }
-            }
-            groups.into_iter().map(|g| Solid::try_new(g).map_err(|e| KernelError::Failed(format!("lump: {e}"))).and_then(Body::new)).collect()
+            groups
+                .into_iter()
+                .map(|g| {
+                    let shells = g
+                        .into_iter()
+                        .map(|i| shells.get(i).cloned().ok_or_else(|| KernelError::Failed("lumps: missing shell".into())))
+                        .collect::<Result<Vec<_>>>()?;
+                    Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("lump: {e}"))).and_then(Body::new)
+                })
+                .collect()
         })
     }
 }
+
+#[cfg(test)]
+#[path = "body_lump_tests.rs"]
+mod lump_tests;
