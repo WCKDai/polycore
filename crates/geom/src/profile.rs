@@ -397,9 +397,13 @@ impl Loop2 {
     pub fn reversed(&self) -> Loop2 {
         Loop2 { segs: self.segs.iter().rev().map(Seg2::reversed).collect() }
     }
+    /// Whether the loop runs counter-clockwise ([`Loop2::ccw`] keeps it as it is).
+    pub fn is_ccw(&self) -> bool {
+        self.signed_area() >= 0.0
+    }
     /// Counter-clockwise copy.
     pub fn ccw(&self) -> Loop2 {
-        if self.signed_area() < 0.0 { self.reversed() } else { self.clone() }
+        if self.is_ccw() { self.clone() } else { self.reversed() }
     }
     pub fn polyline(&self, tol: f64) -> Vec<Vec2> {
         let mut out = Vec::new();

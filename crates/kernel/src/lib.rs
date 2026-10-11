@@ -47,6 +47,7 @@ mod prism;
 mod prism_curve;
 mod prism_measure;
 pub mod provenance;
+mod record;
 mod sew;
 mod smooth_edges;
 mod splitface;

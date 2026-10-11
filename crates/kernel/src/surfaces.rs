@@ -10,6 +10,7 @@ use solvecraft_geom::{Plane, Region2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
+use crate::history::{Change, EdgeOrigin, FaceOrigin};
 use crate::{KernelError, Result, guard};
 
 impl Body {
@@ -430,10 +431,22 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
             Ok(nf)
         };
         let mut out = Vec::new();
-        for (f, off) in faces.iter().zip(&offs) {
+        // History (one operand, the surface): a copy at no distance is the face itself, a copy
+        // further out its offset, a wall is made along its free edge.
+        let edge_index = crate::record::edge_index(body);
+        let mut history = Vec::new();
+        let copy = |i: usize, d: f64| {
+            if d == 0.0 {
+                crate::record::from_face(0, i, Change::Kept)
+            } else {
+                crate::record::generated(vec![FaceOrigin::Offset { operand: 0, face: i }])
+            }
+        };
+        for (i, (f, off)) in faces.iter().zip(&offs).enumerate() {
             // The lower copy faces back, the upper one forward.
             out.push(moved_face(f, off, 0, lo)?.inverse());
             out.push(moved_face(f, off, 1, hi)?);
+            history.extend([copy(i, lo), copy(i, hi)]);
             // Walls along free edges, outward across the edge.
             for w in f.boundaries() {
                 for e in w.edge_iter() {
@@ -466,6 +479,8 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
                         x
                     };
                     out.push(wall);
+                    let edge = edge_index.get(&abs_id).copied().ok_or_else(|| KernelError::Failed("thicken: an edge outside the surface".into()))?;
+                    history.push(crate::record::generated(vec![FaceOrigin::Edge { operand: 0, edge }]));
                 }
             }
         }
@@ -473,7 +488,18 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
         if shell.shell_condition() != mt::ShellCondition::Closed {
             return Err(KernelError::Failed("the thickened surface does not close".into()));
         }
-        Body::new(mt::Solid::new_unchecked(vec![shell]))
+        // The edges copied at no distance are the surface's own edges, rebuilt.
+        let mut copies = HashMap::new();
+        for (id, (low, high)) in &emoved {
+            for (copy, d) in [(low, lo), (high, hi)] {
+                if let Some(&edge) = edge_index.get(id)
+                    && d == 0.0
+                {
+                    copies.insert(copy.id(), EdgeOrigin::Edge { operand: 0, edge });
+                }
+            }
+        }
+        crate::record::attach_edges(Body::new(mt::Solid::new_unchecked(vec![shell]))?, &[body], history, copies)
     })
 }
 

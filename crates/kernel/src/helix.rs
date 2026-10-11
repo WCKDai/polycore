@@ -34,9 +34,12 @@ pub fn sweep_helix(plane: &Plane, region: &Region2, axis_origin: Vec3, axis: Vec
     if turns > 1.0 && pitch.abs() <= extent {
         return Err(KernelError::Invalid(format!("the coil runs into itself: the pitch must exceed the section ({extent:.3} mm)")));
     }
+    // Profile numbering (only the outer loop is swept).
+    let origins = crate::record::loop_origins(std::slice::from_ref(region)).into_iter().next().unwrap_or_default();
     // One smooth B-spline wall per profile segment; the ruled walls below are the fallback.
     if let Ok(b) = smooth_helix(plane, &lp, axis_origin, k, pitch, turns) {
-        return Ok(b);
+        // Its faces as built: one wall per segment, then the caps.
+        return crate::record::attach(b, &[], crate::record::walls_then_caps(origins));
     }
     let n = ((turns * 120.0).ceil() as usize).clamp(4, 24_000);
     let total = std::f64::consts::TAU * turns;
@@ -55,7 +58,9 @@ pub fn sweep_helix(plane: &Plane, region: &Region2, axis_origin: Vec3, axis: Vec
             faces.extend(sides.face_iter().cloned());
         }
         let (Some(first), Some(last)) = (wires.first(), wires.last()) else { return Err(KernelError::Failed("helix".into())) };
-        cap_and_close(faces, std::slice::from_ref(first), std::slice::from_ref(last))
+        let seeds: Vec<(mt::EdgeID, Vec<usize>)> = first.edge_iter().map(|e| e.id()).zip(origins).collect();
+        let history = crate::record::capped_sides(&faces, &seeds, crate::record::Column::ToEnd);
+        crate::record::attach_if(cap_and_close(faces, std::slice::from_ref(first), std::slice::from_ref(last))?, &[], history)
     })
 }
 
@@ -205,8 +210,10 @@ pub fn loft_to_point(plane: &Plane, lp: &Loop2, apex: Vec3) -> Result<Body> {
         return Err(KernelError::Invalid("not supported yet: lofting curved sections to a point".into()));
     }
     // Wind the base so its normal points away from the apex.
+    let above = (apex - plane.origin).dot(plane.normal()) > 0.0;
+    let numbers = crate::record::ccw_numbers(lp, above, 0);
     let mut lp = lp.ccw();
-    if (apex - plane.origin).dot(plane.normal()) > 0.0 {
+    if above {
         lp = lp.reversed();
     }
     guard("loft to point", || {
@@ -216,22 +223,28 @@ pub fn loft_to_point(plane: &Plane, lp: &Loop2, apex: Vec3) -> Result<Body> {
         let base: Vec<mt::Edge> = (0..m).filter_map(|i| Some(builder::line(verts.get(i)?, verts.get((i + 1) % m)?))).collect();
         let sides: Vec<mt::Edge> = verts.iter().map(|v| builder::line(v, &top)).collect();
         let mut faces = Vec::with_capacity(m + 1);
+        // History as the faces are made: the base is the section (the start cap), each
+        // triangle comes from its base segment.
+        let mut history = Vec::with_capacity(m + 1);
         let bw: mt::Wire = base.iter().cloned().collect();
         faces.push(builder::try_attach_plane(&[bw]).map_err(|e| KernelError::Failed(format!("loft base: {e}")))?);
+        history.push(crate::record::cap(false));
         for i in 0..m {
-            let (Some(e), Some(up), Some(down)) = (base.get(i), sides.get((i + 1) % m), sides.get(i)) else { continue };
+            let (Some(e), Some(up), Some(down), Some(n)) = (base.get(i), sides.get((i + 1) % m), sides.get(i), numbers.get(i)) else { continue };
             // Triangle i: along the base edge, up to the apex, back down — opposite to the base's winding.
             let w: mt::Wire = vec![e.inverse(), down.clone(), up.inverse()].into();
             faces.push(builder::try_attach_plane(&[w]).map_err(|e| KernelError::Failed(format!("loft side: {e}")))?);
+            history.push(crate::record::profile(&[*n]));
         }
         let shell: mt::Shell = faces.into();
-        match Solid::try_new(vec![shell.clone()]) {
-            Ok(s) => Body::new(s),
+        let body = match Solid::try_new(vec![shell.clone()]) {
+            Ok(s) => Body::new(s)?,
             Err(_) => {
                 let inv: mt::Shell = shell.face_iter().map(|f| f.inverse()).collect();
-                Body::new(Solid::try_new(vec![inv]).map_err(|e| KernelError::Failed(format!("loft to point: {e}")))?)
+                Body::new(Solid::try_new(vec![inv]).map_err(|e| KernelError::Failed(format!("loft to point: {e}")))?)?
             }
-        }
+        };
+        crate::record::attach(body, &[], history)
     })
 }
 

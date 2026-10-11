@@ -139,6 +139,7 @@ pub fn sweep_path(plane: &Plane, region: &Region2, path: &[Vec3]) -> Result<Body
     let pts = clean(path)?;
     let corner = pts.windows(3).any(|w| turn(w[1] - w[0], w[2] - w[1]) > CORNER);
     let lp = region.outer.ccw();
+    let origins = crate::record::loop_origins(std::slice::from_ref(region));
     if !corner && region.holes.is_empty() {
         // Smooth: evenly spaced stations, tangents from neighbours.
         let len: f64 = pts.windows(2).map(|w| w[0].dist(w[1])).sum();
@@ -148,10 +149,11 @@ pub fn sweep_path(plane: &Plane, region: &Region2, path: &[Vec3]) -> Result<Body
         let st = stations(&sp, &tangents, &[])?;
         let expected = region.area().abs() * len * start_cos(plane, &tangents);
         if let Ok(b) = smooth_walls(plane, &lp, &st, expected) {
-            return Ok(b);
+            // Its faces as built: one wall per segment, then the caps.
+            return crate::record::attach(b, &[], crate::record::walls_then_caps(origins.first().cloned().unwrap_or_default()));
         }
     }
-    ruled(plane, region, &pts)
+    ruled(plane, region, &pts, &origins)
 }
 
 fn central_tangents(p: &[Vec3]) -> Result<Vec<Vec3>> {
@@ -170,8 +172,10 @@ fn start_cos(plane: &Plane, tangents: &[Vec3]) -> f64 {
     tangents.first().map(|t| t.dot(plane.normal()).abs()).unwrap_or(1.0).max(1e-3)
 }
 
-/// Ruled walls between stations at the path's points (mitred at corners), every loop.
-fn ruled(plane: &Plane, region: &Region2, pts: &[Vec3]) -> Result<Body> {
+/// Ruled walls between stations at the path's points (mitred at corners), every loop
+/// (`origins`: the profile segments under the loops' segments, from
+/// [`crate::record::loop_origins`]).
+fn ruled(plane: &Plane, region: &Region2, pts: &[Vec3], origins: &[Vec<Vec<usize>>]) -> Result<Body> {
     let pts: Vec<Vec3> = if pts.len() > MAX_RULED_STATIONS { resample(pts, MAX_RULED_STATIONS) } else { pts.to_vec() };
     let n = pts.len();
     let seg_dir = |i: usize| -> Option<Vec3> { (*pts.get(i + 1)? - *pts.get(i)?).normalized() };
@@ -212,7 +216,11 @@ fn ruled(plane: &Plane, region: &Region2, pts: &[Vec3]) -> Result<Body> {
             }
         }
         let (Some(first), Some(last)) = (wires.first(), wires.last()) else { return Err(KernelError::Failed("path sweep".into())) };
-        cap_and_close(faces, first, last)
+        // Each edge of the first station's loops starts a column of walls along the path.
+        let seeds: Vec<(mt::EdgeID, Vec<usize>)> =
+            first.iter().zip(origins).flat_map(|(w, os)| w.edge_iter().map(|e| e.id()).zip(os.iter().cloned())).collect();
+        let history = crate::record::capped_sides(&faces, &seeds, crate::record::Column::ToEnd);
+        crate::record::attach_if(cap_and_close(faces, first, last)?, &[], history)
     })
 }
 
