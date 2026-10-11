@@ -302,6 +302,8 @@ fn planar_booleans_with_coincident_faces() {
     // Through the public boolean (B-rep first, polygon fallback).
     let u2 = boolean(&base, &wall, BoolOp::Union).unwrap().unwrap();
     assert!(rel(measure(&u2).unwrap().volume, m.volume) < 1e-9);
+    assert_eq!(u2.face_count(), 8, "coplanar wall and base faces must merge in the B-rep");
+    assert!(u2.validity().is_empty());
     // Two boxes sharing a face, and a cut flush with a side.
     let a = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
     let b = box_solid(Vec3::new(10.0, 0.0, 0.0), Vec3::new(20.0, 10.0, 10.0)).unwrap();
@@ -313,6 +315,32 @@ fn planar_booleans_with_coincident_faces() {
     assert!(rel(measure(&c).unwrap().volume, 1000.0 - 250.0) < 1e-9);
     let i = boolean(&a, &notch, BoolOp::Intersect).unwrap().unwrap();
     assert!(rel(measure(&i).unwrap().volume, 250.0) < 1e-9);
+}
+
+#[test]
+fn corner_boss_on_stepped_case_has_one_exact_top_face() {
+    let outer = box_solid(Vec3::new(-50.0, -25.0, 0.0), Vec3::new(50.0, 25.0, 25.0)).unwrap();
+    let cavity = box_solid(Vec3::new(-48.0, -23.0, 2.0), Vec3::new(48.0, 23.0, 26.0)).unwrap();
+    let case = boolean(&outer, &cavity, BoolOp::Cut).unwrap().unwrap();
+    let boss = cylinder(Vec3::new(-45.0, 20.0, 2.0), Vec3::Z, 5.0, 23.0).unwrap();
+    let joined = boolean(&case, &boss, BoolOp::Union).unwrap().unwrap();
+    let common = boolean(&case, &boss, BoolOp::Intersect).unwrap().unwrap();
+    let cut = boolean(&case, &boss, BoolOp::Cut).unwrap().unwrap();
+    let (a, b, u, i, c) =
+        (measure(&case).unwrap(), measure(&boss).unwrap(), measure(&joined).unwrap(), measure(&common).unwrap(), measure(&cut).unwrap());
+    assert!(rel(u.volume + i.volume, a.volume + b.volume) < 1e-4);
+    assert!(rel(c.volume + i.volume, a.volume) < 1e-4);
+    for body in [&joined, &common, &cut] {
+        assert!(body.validity().is_empty());
+    }
+    assert!((u.bbox.max.z - 25.0).abs() < 1e-9, "the boss must not be nudged above the rim");
+    let top_faces = |body: &Body| {
+        body.faces(0.01).unwrap().iter().filter(|f| f.plane_normal.is_some_and(|n| n.z > 0.999999) && (f.centroid.z - 25.0).abs() < 1e-9).count()
+    };
+    assert_eq!(top_faces(&joined), 1, "the boss and both walls share one top face");
+    let rounded = fillet(&joined, &[Vec3::new(-50.0, 25.0, 12.5)], 5.0).unwrap();
+    assert!(rounded.validity().is_empty());
+    assert_eq!(top_faces(&rounded), 1, "rounding the outside corner must retain the merged top");
 }
 
 #[test]

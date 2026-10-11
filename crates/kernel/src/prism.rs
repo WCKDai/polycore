@@ -3,6 +3,8 @@
 //! spanning the target's height, the result is the prism over the 2D boolean of their
 //! sections. Plates with holes, slots and patterns of them: exact, and immune to the mesh
 //! intersection's trouble with walls meeting along lines.
+//! Stepped extrusions (case floors and walls) use sections between every cap level, so a
+//! circular boss can meet the rim without shifting either operand off its exact plane.
 
 use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
@@ -418,7 +420,6 @@ fn split_seg(seg: &Seg2, pts: &[Vec2], tol: f64) -> Option<Vec<Seg2>> {
 /// meets it, so the faces share their edges. `None` when a slab is empty or a curve isn't a
 /// line or an arc.
 fn sew_stack(plane: &Plane, d: Vec3, pa: &Prism, pb: &Prism, tol: f64) -> Option<Result<Body>> {
-    use crate::sew::{EdgeSpec, FaceSpec, SurfSpec};
     let mut levels = vec![pa.lo, pa.hi, pb.lo, pb.hi];
     levels.sort_by(f64::total_cmp);
     levels.dedup_by(|x, y| (*x - *y).abs() < tol);
@@ -434,6 +435,12 @@ fn sew_stack(plane: &Plane, d: Vec3, pa: &Prism, pb: &Prism, tol: f64) -> Option
         };
         slabs.push(oriented(&s));
     }
+    sew_sections(plane, d, &levels, &slabs, tol)
+}
+
+/// Sew the exact sections between successive levels, including empty gaps.
+fn sew_sections(plane: &Plane, d: Vec3, levels: &[f64], slabs: &[Vec<Region2>], tol: f64) -> Option<Result<Body>> {
+    use crate::sew::{EdgeSpec, FaceSpec, SurfSpec};
     // Faces at each level: up where the slab below sticks out, down where the one above does.
     let diff = |x: &[Region2], y: &[Region2]| -> Option<Vec<Region2>> {
         match (x.is_empty(), y.is_empty()) {
@@ -507,7 +514,7 @@ fn sew_stack(plane: &Plane, d: Vec3, pa: &Prism, pb: &Prism, tol: f64) -> Option
     Some(crate::sew::sew(&faces))
 }
 
-pub(crate) fn prism_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
+fn simple_prism_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
     let size = a.size().max(b.size());
     let tol = (size * 1e-7).max(1e-9) * 10.0;
     // Candidate directions: a's planar face normals (each line once).
@@ -572,4 +579,131 @@ pub(crate) fn prism_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Opt
         return Some(crate::body::Solid::try_new(shells).map_err(|e| crate::KernelError::Failed(e.to_string())).and_then(Body::new).map(Some));
     }
     Some(Ok(Some(first)))
+}
+
+/// A stepped extrusion (case floor plus walls), recovered from its cap events.
+/// Downward caps add a section above their level; upward caps remove one.
+fn stack_of(b: &Body, d: Vec3, plane: &Plane, tol: f64) -> Option<Vec<Prism>> {
+    use mt::{ParametricSurface3D, SearchNearestParameter};
+    if let Some(p) = prism_of(b, d, plane, tol) {
+        return Some(vec![p]);
+    }
+    if b.face_count() > 2048 {
+        return None;
+    }
+    let mut events = Vec::new();
+    for f in b.solid.face_iter() {
+        let surf = f.oriented_surface();
+        if let mt::Surface::Plane(p) = &surf {
+            let n = p.normal();
+            let n = Vec3::new(n.x, n.y, n.z).normalized()?;
+            if n.dot(d).abs() > 1.0 - 1e-9 {
+                let mut loops = Vec::new();
+                for w in f.boundaries() {
+                    let mut segs = Vec::new();
+                    for e in w.edge_iter() {
+                        segs.extend(seg2(e, plane, tol)?);
+                    }
+                    loops.push(Loop2 { segs });
+                }
+                let (outer, holes) = split_outer(loops)?;
+                let region = Region2 { outer, holes };
+                events.push((plane.height(from_p3(p.origin())), n.dot(d) > 0.0, oriented(&[region])));
+                continue;
+            }
+            if n.dot(d).abs() > 1e-9 {
+                return None;
+            }
+        } else {
+            // Curved walls must be extruded along d, not slanted or rounded caps.
+            for v in f.vertex_iter() {
+                let (u, w) = surf.search_nearest_parameter(v.point(), None, 50)?;
+                let n = surf.normal(u, w);
+                if Vec3::new(n.x, n.y, n.z).dot(d).abs() > 1e-7 {
+                    return None;
+                }
+            }
+        }
+    }
+    let mut levels: Vec<f64> = events.iter().map(|(z, _, _)| *z).collect();
+    levels.sort_by(f64::total_cmp);
+    levels.dedup_by(|x, y| (*x - *y).abs() < tol);
+    if levels.len() < 2 || levels.len() > 64 || levels.iter().any(|z| !z.is_finite()) {
+        return None;
+    }
+    let mut current = Vec::new();
+    let mut stack = Vec::new();
+    for (i, z) in levels.iter().enumerate() {
+        // Remove terminating material before adding any material starting here.
+        for up in [true, false] {
+            for (_, _, section) in events.iter().filter(|(h, u, _)| (*h - *z).abs() < tol && *u == up) {
+                current = match (current.is_empty(), up) {
+                    (true, false) => section.clone(),
+                    (true, true) => return None,
+                    (false, _) => boolean2d(&current, section, if up { BoolOp::Cut } else { BoolOp::Union }, tol)?,
+                };
+            }
+        }
+        if let Some(next) = levels.get(i + 1)
+            && !current.is_empty()
+        {
+            stack.push(Prism { lo: *z, hi: *next, regions: oriented(&current) });
+        }
+    }
+    (current.is_empty() && !stack.is_empty()).then_some(stack)
+}
+
+fn stack_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
+    // This path repairs joins with a common outer cap (a boss flush with a rim).
+    // Other extents and subtractive operations retain their existing B-rep path.
+    if op != BoolOp::Union {
+        return None;
+    }
+    fn section(ps: &[Prism], lo: f64, hi: f64, tol: f64) -> &[Region2] {
+        ps.iter().find(|p| p.lo <= lo + tol && p.hi >= hi - tol).map(|p| p.regions.as_slice()).unwrap_or(&[])
+    }
+    let tol = (a.size().max(b.size()) * 1e-7).max(1e-9) * 10.0;
+    let mut dirs: Vec<Vec3> = Vec::new();
+    for f in a.solid.face_iter() {
+        if let mt::Surface::Plane(p) = f.oriented_surface() {
+            let n = p.normal();
+            if let Some(n) = Vec3::new(n.x, n.y, n.z).normalized()
+                && !dirs.iter().any(|m| m.dot(n).abs() > 1.0 - 1e-9)
+            {
+                dirs.push(n);
+            }
+        }
+    }
+    let (d, plane, pa, pb) = dirs.into_iter().take(8).find_map(|d| {
+        let plane = Plane::from_normal(Vec3::ZERO, d)?;
+        Some((d, plane, stack_of(a, d, &plane, tol)?, stack_of(b, d, &plane, tol)?))
+    })?;
+    let ends = |ps: &[Prism]| ps.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.lo), hi.max(p.hi)));
+    let (ea, eb) = (ends(&pa), ends(&pb));
+    if (ea.0 - eb.0).abs() >= tol && (ea.1 - eb.1).abs() >= tol {
+        return None;
+    }
+    let mut levels: Vec<f64> = pa.iter().chain(&pb).flat_map(|p| [p.lo, p.hi]).collect();
+    levels.sort_by(f64::total_cmp);
+    levels.dedup_by(|x, y| (*x - *y).abs() < tol);
+    let mut slabs = Vec::new();
+    for w in levels.windows(2) {
+        let (lo, hi) = (*w.first()?, *w.get(1)?);
+        let (x, y) = (section(&pa, lo, hi, tol), section(&pb, lo, hi, tol));
+        let s = match (x.is_empty(), y.is_empty(), op) {
+            (true, _, BoolOp::Cut | BoolOp::Intersect) | (_, true, BoolOp::Intersect) => Vec::new(),
+            (true, _, BoolOp::Union) => y.to_vec(),
+            (_, true, _) => x.to_vec(),
+            _ => boolean2d(x, y, op, tol)?,
+        };
+        slabs.push(oriented(&s));
+    }
+    if slabs.iter().all(Vec::is_empty) {
+        return Some(Ok(None));
+    }
+    sew_sections(&plane, d, &levels, &slabs, tol).map(|r| r.map(Some))
+}
+
+pub(crate) fn prism_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
+    crate::guard("prism boolean", || Ok(simple_prism_boolean(a, b, op).or_else(|| stack_boolean(a, b, op)))).ok().flatten()
 }

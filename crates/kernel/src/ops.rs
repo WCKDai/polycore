@@ -248,6 +248,15 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Prisms along one direction (plates with holes): exact, in 2D (so only the volume
     // bounds are checked).
     if let Some(Ok(r)) = crate::prism::prism_boolean(a, b, op) {
+        // Slab-by-slab prism joins sew a closed solid, but leave cap and wall
+        // pieces along slab boundaries. Merge those coplanar faces just as the
+        // general B-rep boolean does, retaining intentional Split Face lines.
+        let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
+        let r = if op == BoolOp::Union {
+            r.map(|body| guard("heal prism boolean", || Body::new(crate::heal::heal_keep((*body.solid).clone(), size, &keep))).unwrap_or(body))
+        } else {
+            r
+        };
         match &r {
             Some(body) => {
                 let v = volume(body);
