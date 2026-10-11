@@ -290,6 +290,65 @@ fn moving_a_body_with_an_intersection_curve_edge_ends() {
     assert!(rel(v0, v1) < 1e-6, "{v0} vs {v1}");
 }
 
+/// A trough whose floor falls 1° (or 2° toward a drain, in four faces), and short round pads
+/// and bosses crossing the fall. The B-rep results were right, but the plausibility check meshed
+/// them without refinement: on a round side trimmed to a thin band by the shallow cut, the plain
+/// mesh spans the band with triangles cutting through the cylinder, so the check saw missing
+/// material, rejected the result, and the planar fallback refused the round pad.
+#[test]
+fn round_pads_crossing_a_shallow_fall() {
+    let hs = |n: Vec3, p: Vec3| {
+        let n = n.normalized().unwrap();
+        HalfSpace { n, d: n.dot(p) }
+    };
+    let walls = |floor: &[HalfSpace]| {
+        let mut h = vec![
+            hs(Vec3::X, Vec3::new(290.0, 0.0, 0.0)),
+            hs(-Vec3::X, Vec3::new(10.0, 0.0, 0.0)),
+            hs(Vec3::Y, Vec3::new(0.0, 140.0, 0.0)),
+            hs(-Vec3::Y, Vec3::new(0.0, 10.0, 0.0)),
+            hs(Vec3::Z, Vec3::new(0.0, 0.0, 90.0)),
+        ];
+        h.extend_from_slice(floor);
+        convex_polyhedron(&h).unwrap()
+    };
+    let block = box_solid(Vec3::ZERO, Vec3::new(300.0, 150.0, 80.0)).unwrap();
+    // One fall along x at 1°: floor z = 8 + t (x − 10).
+    let t = 1f64.to_radians().tan();
+    let fall = boolean(&block, &walls(&[hs(Vec3::new(t, 0.0, -1.0), Vec3::new(10.0, 0.0, 8.0))]), BoolOp::Cut).unwrap().unwrap();
+    let v0 = measure(&fall).unwrap().volume;
+    for x in [60.0, 100.0] {
+        // A pad from z = 9 to 12 (its bottom just under the floor, its top 2–3 mm above).
+        let pad = cylinder(Vec3::new(x, 75.0, 9.0), Vec3::Z, 15.0, 3.0).unwrap();
+        let u = boolean(&fall, &pad, BoolOp::Union).unwrap().unwrap();
+        // The part of the pad above the floor: the floor under the disc is planar, so its mean
+        // height is the height at the centre (where the floor is below z = 9 everywhere).
+        let floor = |x: f64| 8.0 + t * (x - 10.0);
+        let above = if floor(x - 15.0) >= 9.0 { PI * 225.0 * (12.0 - floor(x)) } else { f64::NAN };
+        let v = measure(&u).unwrap().volume;
+        if above.is_finite() {
+            assert!(rel(v, v0 + above) < 1e-5, "pad at x {x}: {v} vs {}", v0 + above);
+        } else {
+            assert!(v > v0 && v < v0 + PI * 225.0 * 3.0, "pad at x {x}: {v}");
+        }
+    }
+    // Four faces falling 2° toward a drain point, and a pad over a valley edge and a wall.
+    let t2 = 2f64.to_radians().tan();
+    let d = Vec3::new(240.0, 110.0, 8.0);
+    let hopper = walls(&[
+        hs(Vec3::new(t2, 0.0, -1.0), d),
+        hs(Vec3::new(-t2, 0.0, -1.0), d),
+        hs(Vec3::new(0.0, t2, -1.0), d),
+        hs(Vec3::new(0.0, -t2, -1.0), d),
+    ]);
+    let trough = boolean(&block, &hopper, BoolOp::Cut).unwrap().unwrap();
+    let pad = cylinder(Vec3::new(270.0, 70.0, 8.0), Vec3::Z, 25.0, 5.0).unwrap();
+    let u = boolean(&trough, &pad, BoolOp::Union).unwrap().unwrap();
+    // Integrated over the disc (outside the wall at x = 290): about 6517 mm³ above the floor.
+    let gain = measure(&u).unwrap().volume - measure(&trough).unwrap().volume;
+    assert!((gain - 6517.0).abs() < 10.0, "{gain}");
+}
+
 #[test]
 fn planar_booleans_with_coincident_faces() {
     // L-bracket: a wall flush with three sides of its base.
