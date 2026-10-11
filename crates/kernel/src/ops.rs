@@ -249,9 +249,12 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     let size = a.size().max(b.size());
     // The checks mesh both bodies; where they meet in a region much thinner than they are (a
     // thin part trimmed by a long one), a step from their size would facet the small faces
-    // there coarsely enough to fail the membership test on a correct result.
+    // there coarsely enough to fail the membership test on a correct result. The meshes are
+    // refined: a round side trimmed to a thin band (a short boss crossing a gently sloping
+    // floor) is otherwise spanned by triangles cutting through it, which reads as missing
+    // material.
     let tol_m = (size * 5e-4).min(meeting_size(a, b) * 2e-3).max(size * 1e-5);
-    let meshes = (a.tessellate(tol_m).ok(), b.tessellate(tol_m).ok());
+    let meshes = (a.tessellate_with(tol_m, true).ok(), b.tessellate_with(tol_m, true).ok());
     let (va, vb) = match &meshes {
         (Some(ma), Some(mb)) => (ma.measure().volume, mb.measure().volume),
         _ => (volume(a), volume(b)),
@@ -260,7 +263,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Volume bounds, then membership against the operands (catches misclassified pieces), on
     // one mesh of the result. Returns (plausible, volume).
     let check = |r: &Body| -> (bool, f64) {
-        let Ok(mr) = r.tessellate(tol_m) else { return (false, f64::NAN) };
+        let Ok(mr) = r.tessellate_with(tol_m, true) else { return (false, f64::NAN) };
         let v = mr.measure().volume;
         let bounds = v > 0.0
             && match op {
