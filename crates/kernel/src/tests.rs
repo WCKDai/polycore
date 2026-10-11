@@ -1549,3 +1549,20 @@ fn raise_band_on_a_rounded_rim() {
         assert!((v - (v0 + band * 1.5)).abs() < 1e-5 * v, "outside {outside}: {v} vs {}", v0 + band * 1.5);
     }
 }
+
+#[test]
+fn orientation_mesh_reuses_missing_face_check_at_matching_tolerance() {
+    for scale in [0.001, 1.0, 1000.0] {
+        let body = box_solid(Vec3::ZERO, Vec3::new(10., 20., 30.) * scale).unwrap();
+        let tol = (body.size() * 0.01).max(1e-3);
+        let mesh = body.tessellate(tol).unwrap();
+        let mut present = vec![false; body.face_count()];
+        for face in mesh.tri_face {
+            present[face as usize] = true;
+        }
+        assert_eq!(body.unmeshed_faces(), present.iter().filter(|p| !**p).count());
+        if scale == 1.0 {
+            assert_eq!(body.coarse_missing, Some((tol, 0)));
+        }
+    }
+}

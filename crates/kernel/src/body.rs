@@ -13,6 +13,8 @@ pub(crate) type Solid = mt::Solid;
 #[derive(Clone, Debug)]
 pub struct Body {
     pub(crate) solid: std::sync::Arc<Solid>,
+    /// Missing-face check from the orientation mesh, reusable at exactly its tolerance.
+    pub(crate) coarse_missing: Option<(f64, usize)>,
     /// Set for mesh bodies (`solid` is then empty).
     pub(crate) mesh: Option<std::sync::Arc<crate::meshbody::TriMesh>>,
     /// Display colour (linear RGB 0..1) from an imported file; operations drop it.
@@ -302,11 +304,24 @@ impl Body {
             if lo.x.is_finite() { (hi - lo).len() } else { 1.0 }
         };
         let tol = (span * 0.01).clamp(1e-3, 1.0);
-        let v = guard("orient", || Ok(mesh_shells(&solid, tol).iter().map(|s| s.to_polygon().volume()).sum::<f64>()))?;
+        let (v, missing) = guard("orient", || {
+            let shells = mesh_shells(&solid, tol);
+            let volume = shells.iter().map(|s| s.to_polygon().volume()).sum::<f64>();
+            let missing =
+                shells.iter().flat_map(|s| s.face_iter()).filter(|f| f.surface().is_none_or(|m| m.faces().triangle_iter().next().is_none())).count();
+            Ok((volume, missing))
+        })?;
         if v < 0.0 {
             solid.not();
         }
-        Ok(Body { solid: std::sync::Arc::new(solid), mesh: None, color: None, paint: None, splits: None })
+        Ok(Body {
+            solid: std::sync::Arc::new(solid),
+            coarse_missing: (v >= 0.0).then_some((tol, missing)),
+            mesh: None,
+            color: None,
+            paint: None,
+            splits: None,
+        })
     }
 
     /// A deep copy of the solid that can be mutated without affecting other bodies.
@@ -506,7 +521,13 @@ impl Body {
         if self.is_mesh() {
             return 0;
         }
-        let Ok(m) = self.tessellate((self.size() * 1e-2).max(1e-3)) else { return self.face_count() };
+        let tol = (self.size() * 1e-2).max(1e-3);
+        if let Some((cached_tol, missing)) = self.coarse_missing
+            && cached_tol == tol
+        {
+            return missing;
+        }
+        let Ok(m) = self.tessellate(tol) else { return self.face_count() };
         let mut has = vec![false; self.face_count()];
         for f in &m.tri_face {
             if let Some(h) = has.get_mut(*f as usize) {
