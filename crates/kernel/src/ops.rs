@@ -171,7 +171,7 @@ thread_local! {
 /// everything or an intersection of disjoint bodies. Results are checked against volume bounds
 /// and retried with shifted copies and other tolerances when they fail or look wrong.
 pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
-    let r = boolean_whole(a, b, op);
+    let mut r = boolean_whole(a, b, op);
     // Bodies in several pieces: when the whole failed (or came out empty), a piece at a time.
     let retry = match &r {
         Err(_) => true,
@@ -183,10 +183,50 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         if (la.len() > 1 || lb.len() > 1)
             && let Ok(Some(x)) = by_lumps(la, lb, op)
         {
-            return Ok(Some(x));
+            r = Ok(Some(x));
         }
     }
+    if op == BoolOp::Union
+        && let Ok(Some(body)) = &r
+        && !preserves_planar_surfaces(a, b, body)
+    {
+        // Numerical retries must not quietly alter a planar design's dimensions.
+        // Prefer the exact polygon result; reject an edge-only pinch if it cannot
+        // form a closed solid without displacing either operand.
+        r = match crate::polybool::planar_boolean(a, b, op) {
+            Ok(Some(exact)) if preserves_planar_surfaces(a, b, &exact) => Ok(Some(exact)),
+            _ => Err(KernelError::Invalid(
+                "join cannot preserve the original faces; check for zero-thickness edge contact or add intentional overlap".into(),
+            )),
+        };
+    }
     r
+}
+
+/// Every face of an all-planar union must remain on an operand's original plane.
+/// Curved operands keep their existing surface-specific boolean handling.
+fn preserves_planar_surfaces(a: &Body, b: &Body, result: &Body) -> bool {
+    guard("validate planar union", || Ok(planar_surfaces_match(a, b, result))).unwrap_or(false)
+}
+
+fn planar_surfaces_match(a: &Body, b: &Body, result: &Body) -> bool {
+    let planes: Option<Vec<(Vec3, f64)>> = a
+        .solid
+        .face_iter()
+        .chain(b.solid.face_iter())
+        .map(|f| {
+            let mt::Surface::Plane(p) = f.oriented_surface() else { return None };
+            let n = p.normal();
+            let n = Vec3::new(n.x, n.y, n.z).normalized()?;
+            Some((n, n.dot(from_p3(p.origin()))))
+        })
+        .collect();
+    let Some(planes) = planes else { return true };
+    let tol = (a.size().max(b.size()) * 1e-9).max(1e-9);
+    result.solid.face_iter().all(|f| {
+        matches!(f.oriented_surface(), mt::Surface::Plane(_))
+            && planes.iter().any(|(n, d)| f.vertex_iter().all(|v| (n.dot(from_p3(v.point())) - d).abs() <= tol))
+    })
 }
 
 /// Smallest side of the box where the bodies' vertex boxes overlap (infinite when they don't).
