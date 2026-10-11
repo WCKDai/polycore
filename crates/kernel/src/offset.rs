@@ -2,8 +2,10 @@
 //! faces). Each face moves along its outward normal by its own distance: a plane is translated,
 //! a cylinder changes radius about its axis. Every vertex and edge goes to where its faces'
 //! moved surfaces meet; edges are lines or circular arcs. This is exact when the moved
-//! surfaces meet the way the old ones did (prismatic parts, bosses, fillets between walls);
-//! anything else is refused, so callers can fall back.
+//! surfaces meet the way the old ones did (prismatic parts, bosses, fillets between walls).
+//! A corner where more than three planes meet, whose moved planes miss a common point (a
+//! floor falling to a drain, a pyramid's apex), becomes several corners joined by short edges.
+//! Anything else is refused, so callers can fall back.
 
 use std::collections::HashMap;
 
@@ -422,6 +424,143 @@ fn span_step(ns: &[Vec3], s: &[f64]) -> Option<Vec3> {
     Some(v)
 }
 
+/// Most faces round one corner that [`split_corner`] takes on.
+const MAX_SPLIT_FACES: usize = 48;
+
+/// The corners in place of a corner where more than three planar faces meet and whose moved
+/// planes miss a common point (a hip floor's corner, a pyramid's apex): each new corner with
+/// the faces through it. Corners sharing two faces are joined by a new edge on those faces.
+/// Only corners whose edges are all convex or all concave: the faces there bound a convex
+/// region (the body's side or the outside's), and after the move its corners are the points on
+/// three moved planes inside all the others.
+fn split_corner(
+    v: &mt::Vertex,
+    at: &[usize],
+    faces: &[mt::Face],
+    efaces: &HashMap<mt::EdgeID, Vec<usize>>,
+    old: &[Surf],
+    new: &[Surf],
+    size: f64,
+) -> Option<Vec<(Vec3, Vec<usize>)>> {
+    if at.len() < 4 || at.len() > MAX_SPLIT_FACES {
+        return None;
+    }
+    let p = from_p3(v.point());
+    // (face, outward normal, old offset, moved offset).
+    let planes: Vec<(usize, Vec3, f64, f64)> = at
+        .iter()
+        .map(|i| match (old.get(*i)?, new.get(*i)?) {
+            (Surf::Plane { n, d }, Surf::Plane { d: d2, .. }) => Some((*i, *n, *d, *d2)),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let normal = |fi: usize| planes.iter().find(|x| x.0 == fi).map(|x| x.1);
+    // Edge kinds round the corner: a face's loop runs counter-clockwise about its outward
+    // normal, so its inside is to the left; the edge is convex when the face beyond it falls
+    // away from there.
+    let mut sign = 0.0f64;
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for &(fi, na, ..) in &planes {
+        for w in faces.get(fi)?.boundaries() {
+            for e in w.edge_iter() {
+                if e.front().id() != v.id() && e.back().id() != v.id() {
+                    continue;
+                }
+                let fb = efaces.get(&e.id())?.iter().copied().find(|j| *j != fi)?;
+                pairs.push((fi, fb));
+                let dir = (from_p3(e.back().point()) - from_p3(e.front().point())).normalized()?;
+                let s = normal(fb)?.dot(na.cross(dir));
+                if s.abs() < 1e-9 {
+                    continue;
+                }
+                if sign * s < 0.0 {
+                    return None;
+                }
+                sign = s.signum();
+            }
+        }
+    }
+    if sign == 0.0 {
+        return None;
+    }
+    // Convex: the body's side, n·x ≤ d; concave: the outside's, n·x ≥ d.
+    let side = -sign;
+    let merge = size * 1e-6;
+    let mut nodes: Vec<(Vec3, Vec<usize>)> = Vec::new();
+    for (ia, a) in planes.iter().enumerate() {
+        for (ib, b) in planes.iter().enumerate().skip(ia + 1) {
+            for c in planes.iter().skip(ib + 1) {
+                let den = a.1.dot(b.1.cross(c.1));
+                if den.abs() < 1e-9 {
+                    continue;
+                }
+                let x = (b.1.cross(c.1) * a.3 + c.1.cross(a.1) * b.3 + a.1.cross(b.1) * c.3) * (1.0 / den);
+                if !x.is_finite() || x.dist(p) > size || planes.iter().any(|q| side * (q.1.dot(x) - q.3) > merge) {
+                    continue;
+                }
+                let fs = [a.0, b.0, c.0];
+                match nodes.iter_mut().find(|(q, _)| q.dist(x) < merge) {
+                    Some((_, nf)) => {
+                        for f in fs {
+                            if !nf.contains(&f) {
+                                nf.push(f);
+                            }
+                        }
+                    }
+                    None => nodes.push((x, fs.to_vec())),
+                }
+            }
+        }
+    }
+    // Every face keeps a corner here, and every edge an end.
+    if planes.iter().any(|q| !nodes.iter().any(|(_, nf)| nf.contains(&q.0)))
+        || pairs.iter().any(|(x, y)| !nodes.iter().any(|(_, nf)| nf.contains(x) && nf.contains(y)))
+    {
+        return None;
+    }
+    // Each corner where its planes meet best (least squares, for planes meeting at one point
+    // to within the merge distance).
+    for (q, nf) in nodes.iter_mut() {
+        let (ns, ss): (Vec<Vec3>, Vec<f64>) = nf.iter().filter_map(|f| planes.iter().find(|x| x.0 == *f)).map(|x| (x.1, x.3 - x.2)).unzip();
+        *q = p + span_step(&ns, &ss)?;
+    }
+    Some(nodes)
+}
+
+/// The corners of a split corner (see [`split_corner`]) on face `face`, in order from corner
+/// `from` to corner `to`, along the new edges between them.
+fn split_path(nodes: &[(Vec3, Vec<usize>)], face: usize, from: usize, to: usize) -> Option<Vec<usize>> {
+    let joined = |x: usize, y: usize| {
+        let (Some((_, a)), Some((_, b))) = (nodes.get(x), nodes.get(y)) else { return false };
+        a.contains(&face) && b.contains(&face) && a.iter().filter(|f| b.contains(f)).count() >= 2
+    };
+    // Breadth first; `prev` leads back to `from`.
+    let mut prev: Vec<Option<usize>> = vec![None; nodes.len()];
+    let mut queue = std::collections::VecDeque::from([from]);
+    let mut seen = vec![false; nodes.len()];
+    *seen.get_mut(from)? = true;
+    while let Some(x) = queue.pop_front() {
+        if x == to {
+            let mut path = vec![to];
+            let mut cur = to;
+            while let Some(p) = prev.get(cur).copied().flatten() {
+                path.push(p);
+                cur = p;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for y in 0..nodes.len() {
+            if !seen.get(y).copied().unwrap_or(true) && joined(x, y) {
+                *seen.get_mut(y)? = true;
+                *prev.get_mut(y)? = Some(x);
+                queue.push_back(y);
+            }
+        }
+    }
+    None
+}
+
 /// A line or circular arc through an edge (by samples): `None` for other curves.
 /// Maximum straight edges per face checked pairwise for crossings.
 const MAX_CROSSING_EDGES: usize = 2000;
@@ -431,7 +570,7 @@ const MAX_CROSSING_EDGES: usize = 2000;
 fn crossed_loops(
     faces: &[mt::Face],
     old: &[Surf],
-    newpos: &HashMap<mt::VertexID, Vec3>,
+    pos: &dyn Fn(&mt::Vertex, &mt::Edge) -> Option<Vec3>,
     edge_collapsed: &dyn Fn(&mt::Edge) -> bool,
     size: f64,
 ) -> Option<Vec3> {
@@ -443,32 +582,32 @@ fn crossed_loops(
         }
         let (u, w) = (n.any_perp(), n.cross(n.any_perp()));
         let flat = |p: Vec3| (p.dot(u), p.dot(w));
-        // Straight edges as (vertex ids, old ends, new ends) in the plane.
-        let mut segs: Vec<([mt::VertexID; 2], [(f64, f64); 2])> = Vec::new();
+        // Straight edges as (vertex ids, new ends in the plane, the plane's new offset).
+        let mut segs: Vec<([mt::VertexID; 2], [(f64, f64); 2], f64)> = Vec::new();
         for wire in f.absolute_boundaries() {
             let (mut area_old, mut area_new, mut straight) = (0.0, 0.0, true);
             for e in wire.edge_iter() {
                 let (v0, v1) = (e.front(), e.back());
-                let (Some(q0), Some(q1)) = (newpos.get(&v0.id()), newpos.get(&v1.id())) else { return None };
-                let (o0, o1, n0, n1) = (flat(from_p3(v0.point())), flat(from_p3(v1.point())), flat(*q0), flat(*q1));
+                let (Some(q0), Some(q1)) = (pos(v0, e), pos(v1, e)) else { return None };
+                let (o0, o1, n0, n1) = (flat(from_p3(v0.point())), flat(from_p3(v1.point())), flat(q0), flat(q1));
                 area_old += o0.0 * o1.1 - o1.0 * o0.1;
                 area_new += n0.0 * n1.1 - n1.0 * n0.1;
                 if arc_mid(e, size * 1e-6) == Some(None) {
-                    segs.push(([v0.id(), v1.id()], [n0, n1]));
+                    segs.push(([v0.id(), v1.id()], [n0, n1], n.dot(q0)));
                 } else {
                     straight = false;
                 }
             }
             if straight && area_old.abs() > eps && area_old * area_new <= 0.0 {
-                return wire.vertex_iter().next().and_then(|v| newpos.get(&v.id()).copied());
+                return wire.edge_iter().next().and_then(|e| pos(e.front(), e));
             }
         }
         if segs.len() > MAX_CROSSING_EDGES {
             continue;
         }
         let side = |a: (f64, f64), c: (f64, f64), p: (f64, f64)| (c.0 - a.0) * (p.1 - a.1) - (c.1 - a.1) * (p.0 - a.0);
-        for (i, (ia, [a0, a1])) in segs.iter().enumerate() {
-            for (ib, [b0, b1]) in segs.iter().skip(i + 1) {
+        for (i, (ia, [a0, a1], d)) in segs.iter().enumerate() {
+            for (ib, [b0, b1], _) in segs.iter().skip(i + 1) {
                 if ia.iter().any(|v| ib.contains(v)) {
                     continue;
                 }
@@ -478,8 +617,7 @@ fn crossed_loops(
                 if ((s0 > tol && s1 < -tol) || (s0 < -tol && s1 > tol)) && ((t0 > tol && t1 < -tol) || (t0 < -tol && t1 > tol)) {
                     let k = t0 / (t0 - t1);
                     let (x, y) = (a0.0 + (a1.0 - a0.0) * k, a0.1 + (a1.1 - a0.1) * k);
-                    let d = n.dot(newpos.get(&ia[0]).copied().unwrap_or_default());
-                    return Some(u * x + w * y + n * d);
+                    return Some(u * x + w * y + n * *d);
                 }
             }
         }
@@ -618,6 +756,8 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
         })
         .collect();
     let mut newpos: HashMap<mt::VertexID, Vec3> = HashMap::new();
+    // Corners whose moved faces meet at several points (see `split_corner`).
+    let mut splits: HashMap<mt::VertexID, Vec<(Vec3, Vec<usize>)>> = HashMap::new();
     for v in b.solid.vertex_iter() {
         let at = vfaces.get(&v.id()).ok_or_else(|| fail("vertex"))?;
         let p = from_p3(v.point());
@@ -672,10 +812,33 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
         });
         let q = match apex {
             Some(q) if n.iter().all(|sf| sf.dist(q).abs() < size * 1e-6) => q,
-            _ => move_point(p, &o, &s, &n, size * 1e-6).ok_or_else(|| fail("a corner whose faces don't meet the same way after the move"))?,
+            _ => match move_point(p, &o, &s, &n, size * 1e-6) {
+                Some(q) => q,
+                None => {
+                    let nodes = (fs == *at)
+                        .then(|| split_corner(&v, at, &faces, &efaces, &old, &new, size))
+                        .flatten()
+                        .ok_or_else(|| fail("a corner whose faces don't meet the same way after the move"))?;
+                    let q = nodes.first().map(|x| x.0).ok_or_else(|| fail("corner"))?;
+                    splits.insert(v.id(), nodes);
+                    q
+                }
+            },
         };
         newpos.insert(v.id(), q);
     }
+    // Which of a split corner's new corners an edge ends at.
+    let node_of = |v: mt::VertexID, e: mt::EdgeID| -> Option<usize> {
+        let fs = efaces.get(&e)?;
+        splits.get(&v)?.iter().position(|(_, nf)| fs.iter().all(|i| nf.contains(i)))
+    };
+    // Where an edge's end goes.
+    let end_pos = |v: &mt::Vertex, e: &mt::Edge| -> Option<Vec3> {
+        match splits.get(&v.id()) {
+            Some(nodes) => nodes.get(node_of(v.id(), e.id())?).map(|x| x.0),
+            None => newpos.get(&v.id()).copied(),
+        }
+    };
     // An edge turned round: faces crossed over (a wall thinner than the move), which would
     // leave the body inside out.
     let edge_collapsed = |e: &mt::Edge| efaces.get(&e.id()).is_some_and(|fs| fs.iter().any(|i| is_collapsed(*i)));
@@ -684,8 +847,8 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
             continue;
         }
         let (f0, f1) = (e.absolute_front(), e.absolute_back());
-        let (Some(q0), Some(q1)) = (newpos.get(&f0.id()), newpos.get(&f1.id())) else { continue };
-        let (old_v, new_v) = (from_p3(f1.point()) - from_p3(f0.point()), *q1 - *q0);
+        let (Some(q0), Some(q1)) = (end_pos(f0, &e), end_pos(f1, &e)) else { continue };
+        let (old_v, new_v) = (from_p3(f1.point()) - from_p3(f0.point()), q1 - q0);
         if old_v.len() > size * 1e-6 && old_v.dot(new_v) < 0.0 {
             return Err(fail("not supported yet: the move is larger than a wall or step is thick (faces would cross)"));
         }
@@ -693,7 +856,7 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
     // A plane's loops crossing after the move: a rim or ledge narrower than the move (the hole
     // in a top face sliding past its outer edge) turns part of the face inside out, though no
     // edge turns round.
-    if let Some(at) = crossed_loops(&faces, &old, &newpos, &edge_collapsed, size) {
+    if let Some(at) = crossed_loops(&faces, &old, &end_pos, &edge_collapsed, size) {
         return Err(fail(&format!(
             "not supported yet: the move is larger than a rim or ledge near [{:.1}, {:.1}, {:.1}] is wide (a face would turn inside out)",
             at.x, at.y, at.z
@@ -725,6 +888,16 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
             };
             verts.insert(v.id(), nv);
         }
+        let node_verts: HashMap<mt::VertexID, Vec<mt::Vertex>> =
+            splits.iter().map(|(id, nodes)| (*id, nodes.iter().map(|(q, _)| builder::vertex(p3(*q))).collect())).collect();
+        let vert_at = |v: &mt::Vertex, e: &mt::Edge| -> Option<&mt::Vertex> {
+            match node_verts.get(&v.id()) {
+                Some(nv) => nv.get(node_of(v.id(), e.id())?),
+                None => verts.get(&v.id()),
+            }
+        };
+        // New edges between a split corner's corners (stored from the lower index).
+        let mut links: HashMap<(mt::VertexID, usize, usize), mt::Edge> = HashMap::new();
         // Old edge → new edge, and whether it runs the other way (merged with its twin).
         let mut edges: HashMap<mt::EdgeID, (mt::Edge, bool)> = HashMap::new();
         let mut merged: HashMap<(mt::VertexID, mt::VertexID), mt::Edge> = HashMap::new();
@@ -732,7 +905,7 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
             if edges.contains_key(&e.id()) {
                 continue;
             }
-            let (Some(a), Some(c)) = (verts.get(&e.absolute_front().id()), verts.get(&e.absolute_back().id())) else { return Err(fail("edge")) };
+            let (Some(a), Some(c)) = (vert_at(e.absolute_front(), &e), vert_at(e.absolute_back(), &e)) else { return Err(fail("edge")) };
             let touches = edge_collapsed(&e);
             if a == c || from_p3(a.point()).dist(from_p3(c.point())) < size * 1e-9 {
                 if touches {
@@ -796,18 +969,37 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
             if is_collapsed(i) {
                 continue;
             }
-            let wires: Vec<mt::Wire> = f
-                .absolute_boundaries()
-                .iter()
-                .map(|w| {
-                    w.edge_iter()
-                        .filter_map(|e| {
-                            edges.get(&e.id()).map(|(ne, flip)| if (e.front() == e.absolute_front()) != *flip { ne.clone() } else { ne.inverse() })
-                        })
-                        .collect::<Vec<_>>()
-                        .into()
-                })
-                .collect();
+            let mut wires: Vec<mt::Wire> = Vec::new();
+            for w in f.absolute_boundaries() {
+                let old_edges: Vec<mt::Edge> = w.edge_iter().cloned().collect();
+                let mut wire: Vec<mt::Edge> = Vec::new();
+                for (j, e) in old_edges.iter().enumerate() {
+                    if let Some((ne, flip)) = edges.get(&e.id()) {
+                        wire.push(if (e.front() == e.absolute_front()) != *flip { ne.clone() } else { ne.inverse() });
+                    }
+                    // At a split corner, along the new edges from this edge's end to the next's.
+                    let v = e.back();
+                    let (Some(nodes), Some(next)) = (splits.get(&v.id()), old_edges.get((j + 1) % old_edges.len())) else { continue };
+                    let (Some(from), Some(to)) = (node_of(v.id(), e.id()), node_of(v.id(), next.id())) else { return Err(fail("split corner")) };
+                    let path = split_path(nodes, i, from, to).ok_or_else(|| fail("split corner"))?;
+                    for pair in path.windows(2) {
+                        let (Some(&x), Some(&y)) = (pair.first(), pair.get(1)) else { continue };
+                        let key = (v.id(), x.min(y), x.max(y));
+                        let link = match links.get(&key) {
+                            Some(l) => l.clone(),
+                            None => {
+                                let nv = node_verts.get(&v.id()).ok_or_else(|| fail("split corner"))?;
+                                let (Some(va), Some(vb)) = (nv.get(key.1), nv.get(key.2)) else { return Err(fail("split corner")) };
+                                let l = builder::line(va, vb);
+                                links.insert(key, l.clone());
+                                l
+                            }
+                        };
+                        wire.push(if x < y { link } else { link.inverse() });
+                    }
+                }
+                wires.push(wire.into());
+            }
             let (Some(o), Some(n)) = (old.get(i), new.get(i)) else { return Err(fail("face")) };
             let surface = match (o.map_to(n), *o, *n) {
                 (Some(mat), _, _) => mt::Transformed::transformed(&f.surface(), mat),

@@ -334,6 +334,73 @@ fn drain_pads_flush_under_a_floor_with_a_hole() {
     let v = measure(&u).unwrap().volume;
     let expect = v_floor + PI * 400.0 * 5.0;
     assert!(rel(v, expect) < 2e-5, "disc across the hole: {v} vs {expect}");
+    // A boss ring standing on the sloping top around the hole, its foot just under the top
+    // everywhere: it adds its annulus times its height above the top at the centre.
+    let foot = 10.0 + t * 30.0 - 0.2;
+    let u = boolean(&floor, &ring(foot, 14.0), BoolOp::Union).unwrap().unwrap();
+    let v = measure(&u).unwrap().volume;
+    let expect = v_floor + PI * 300.0 * (14.0 - (10.0 + t * 50.0));
+    assert!(rel(v, expect) < 2e-5, "boss ring on the slope: {v} vs {expect}");
+    assert!(u.validity().is_empty(), "{:?}", u.validity());
+}
+
+/// A trough whose floor falls 1° (or 2° toward a drain, in four faces), and short round pads
+/// and bosses crossing the fall. The B-rep results were right, but the plausibility check meshed
+/// them without refinement: on a round side trimmed to a thin band by the shallow cut, the plain
+/// mesh spans the band with triangles cutting through the cylinder, so the check saw missing
+/// material, rejected the result, and the planar fallback refused the round pad.
+#[test]
+fn round_pads_crossing_a_shallow_fall() {
+    let hs = |n: Vec3, p: Vec3| {
+        let n = n.normalized().unwrap();
+        HalfSpace { n, d: n.dot(p) }
+    };
+    let walls = |floor: &[HalfSpace]| {
+        let mut h = vec![
+            hs(Vec3::X, Vec3::new(290.0, 0.0, 0.0)),
+            hs(-Vec3::X, Vec3::new(10.0, 0.0, 0.0)),
+            hs(Vec3::Y, Vec3::new(0.0, 140.0, 0.0)),
+            hs(-Vec3::Y, Vec3::new(0.0, 10.0, 0.0)),
+            hs(Vec3::Z, Vec3::new(0.0, 0.0, 90.0)),
+        ];
+        h.extend_from_slice(floor);
+        convex_polyhedron(&h).unwrap()
+    };
+    let block = box_solid(Vec3::ZERO, Vec3::new(300.0, 150.0, 80.0)).unwrap();
+    // One fall along x at 1°: floor z = 8 + t (x − 10).
+    let t = 1f64.to_radians().tan();
+    let fall = boolean(&block, &walls(&[hs(Vec3::new(t, 0.0, -1.0), Vec3::new(10.0, 0.0, 8.0))]), BoolOp::Cut).unwrap().unwrap();
+    let v0 = measure(&fall).unwrap().volume;
+    for x in [60.0, 100.0] {
+        // A pad from z = 9 to 12 (its bottom just under the floor, its top 2–3 mm above).
+        let pad = cylinder(Vec3::new(x, 75.0, 9.0), Vec3::Z, 15.0, 3.0).unwrap();
+        let u = boolean(&fall, &pad, BoolOp::Union).unwrap().unwrap();
+        // The part of the pad above the floor: the floor under the disc is planar, so its mean
+        // height is the height at the centre (where the floor is below z = 9 everywhere).
+        let floor = |x: f64| 8.0 + t * (x - 10.0);
+        let above = if floor(x - 15.0) >= 9.0 { PI * 225.0 * (12.0 - floor(x)) } else { f64::NAN };
+        let v = measure(&u).unwrap().volume;
+        if above.is_finite() {
+            assert!(rel(v, v0 + above) < 1e-5, "pad at x {x}: {v} vs {}", v0 + above);
+        } else {
+            assert!(v > v0 && v < v0 + PI * 225.0 * 3.0, "pad at x {x}: {v}");
+        }
+    }
+    // Four faces falling 2° toward a drain point, and a pad over a valley edge and a wall.
+    let t2 = 2f64.to_radians().tan();
+    let d = Vec3::new(240.0, 110.0, 8.0);
+    let hopper = walls(&[
+        hs(Vec3::new(t2, 0.0, -1.0), d),
+        hs(Vec3::new(-t2, 0.0, -1.0), d),
+        hs(Vec3::new(0.0, t2, -1.0), d),
+        hs(Vec3::new(0.0, -t2, -1.0), d),
+    ]);
+    let trough = boolean(&block, &hopper, BoolOp::Cut).unwrap().unwrap();
+    let pad = cylinder(Vec3::new(270.0, 70.0, 8.0), Vec3::Z, 25.0, 5.0).unwrap();
+    let u = boolean(&trough, &pad, BoolOp::Union).unwrap().unwrap();
+    // Integrated over the disc (outside the wall at x = 290): about 6517 mm³ above the floor.
+    let gain = measure(&u).unwrap().volume - measure(&trough).unwrap().volume;
+    assert!((gain - 6517.0).abs() < 10.0, "{gain}");
 }
 
 #[test]
@@ -361,6 +428,38 @@ fn planar_booleans_with_coincident_faces() {
     assert!(rel(measure(&c).unwrap().volume, 1000.0 - 250.0) < 1e-9);
     let i = boolean(&a, &notch, BoolOp::Intersect).unwrap().unwrap();
     assert!(rel(measure(&i).unwrap().volume, 250.0) < 1e-9);
+}
+
+/// The planar fallback runs after any failed B-rep boolean, not only on coincident faces; when
+/// it can't run it says which body has which curved faces (it used to blame "coincident faces
+/// on curved bodies" whatever the cause).
+#[test]
+fn planar_fallback_names_the_curved_faces() {
+    let slab = box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 10.0)).unwrap();
+    let pad = cylinder(Vec3::new(20.0, 15.0, 5.0), Vec3::Z, 8.0, 10.0).unwrap();
+    let e = planar_boolean(&slab, &pad, BoolOp::Union).unwrap_err().to_string();
+    assert!(e.contains("not supported yet"), "{e}");
+    assert!(e.contains("the tool has 2 curved faces (cylinder)"), "{e}");
+    assert!(!e.contains("target"), "{e}");
+    assert!(!e.contains("coincident faces on curved bodies"), "{e}");
+    let ball = sphere(Vec3::new(20.0, 15.0, 10.0), 5.0).unwrap();
+    let e = planar_boolean(&ball, &pad, BoolOp::Cut).unwrap_err().to_string();
+    assert!(e.contains("the target has 6 curved faces (sphere) and the tool has 2 curved faces (cylinder)"), "{e}");
+    // All-planar bodies, a face of one at a shallow angle (1°): the fallback takes them.
+    let slope = Vec3::new(-1f64.to_radians().tan(), 0.0, 1.0).normalized().unwrap();
+    let wedge = convex_polyhedron(&[
+        HalfSpace { n: Vec3::X, d: 30.0 },
+        HalfSpace { n: -Vec3::X, d: -10.0 },
+        HalfSpace { n: Vec3::Y, d: 20.0 },
+        HalfSpace { n: -Vec3::Y, d: -10.0 },
+        HalfSpace { n: -Vec3::Z, d: -5.0 },
+        HalfSpace { n: slope, d: slope.dot(Vec3::new(10.0, 0.0, 11.0)) },
+    ])
+    .unwrap();
+    let u = planar_boolean(&slab, &wedge, BoolOp::Union).unwrap().unwrap();
+    let above = box_solid(Vec3::new(0.0, 0.0, 10.0), Vec3::new(40.0, 30.0, 20.0)).unwrap();
+    let expect = 40.0 * 30.0 * 10.0 + measure(&boolean(&wedge, &above, BoolOp::Intersect).unwrap().unwrap()).unwrap().volume;
+    assert!(rel(measure(&u).unwrap().volume, expect) < 1e-6, "{} vs {expect}", measure(&u).unwrap().volume);
 }
 
 #[test]
@@ -1510,6 +1609,49 @@ fn smooth_loft_through_three_sections() {
     assert!(v > PI * 64.0 * 30.0 && v < 576.0 * 30.0, "{v}");
 }
 
+/// A loft from the basin's whole outline (10 up) down to a drain pad in a corner (1 up), cut
+/// from a 3 mm shell: its top edges lie on the outer walls. One order of the sections failed
+/// the cut ("shell not oriented and closed", or a panic inside the intersection), the other
+/// worked; both orders now build the same body, valid and outward.
+#[test]
+fn loft_section_order_gives_the_same_body() {
+    let r = |x0: f64, y0: f64, x1: f64, y1: f64| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
+    let at = |z: f64| Plane::new(Vec3::new(0.0, 0.0, z), Vec3::X, Vec3::Y).unwrap();
+    let big = (at(10.0), r(0.0, 0.0, 100.0, 60.0));
+    let small = (at(1.0), r(80.0, 40.0, 90.0, 50.0));
+    let basin = shell(&box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap(), &[Vec3::new(50.0, 30.0, 30.0)], 3.0).unwrap();
+    // The material inside the loft: the floor from 1 to 3 up, the walls from 3 to 10.
+    let v0 = measure(&basin).unwrap().volume;
+    let removed = v0 - 41582.028;
+    let mut volumes = Vec::new();
+    for secs in [vec![big.clone(), small.clone()], vec![small.clone(), big.clone()]] {
+        let l = loft(&secs).unwrap();
+        let m = measure(&l).unwrap();
+        assert!(m.volume > 0.0, "{}", m.volume);
+        volumes.push(m.volume);
+        let cut = boolean(&basin, &l, BoolOp::Cut).unwrap().unwrap();
+        let v = measure(&cut).unwrap().volume;
+        assert!((v0 - v - removed).abs() < 0.01 * removed, "{v} vs {}", v0 - removed);
+        let joined = boolean(&basin, &l, BoolOp::Union).unwrap().unwrap();
+        assert!(measure(&joined).unwrap().volume > v0);
+    }
+    assert!(rel(volumes[0], volumes[1]) < 1e-12, "{volumes:?}");
+    // Reversed in z too (large below, small above, and sketched on planes facing down).
+    let down = |z: f64| Plane::new(Vec3::new(0.0, 0.0, z), Vec3::Y, Vec3::X).unwrap();
+    for secs in [
+        vec![(at(0.0), r(0.0, 0.0, 100.0, 60.0)), (at(20.0), r(40.0, 20.0, 60.0, 40.0))],
+        vec![(down(20.0), r(20.0, 40.0, 40.0, 60.0)), (at(0.0), r(0.0, 0.0, 100.0, 60.0))],
+    ] {
+        // Prismoid: h/6 · (A0 + 4 Amid + A1).
+        let want = 20.0 / 6.0 * (6000.0 + 4.0 * 60.0 * 40.0 + 400.0);
+        let back: Vec<(Plane, Loop2)> = secs.iter().rev().cloned().collect();
+        for b in [loft(&secs).unwrap(), loft(&back).unwrap()] {
+            let v = measure(&b).unwrap().volume;
+            assert!(rel(v, want) < 1e-6, "{v} vs {want}");
+        }
+    }
+}
+
 #[test]
 fn tangent_holes_pinch_alike() {
     // Holes at ±15 and ±25 touch along a line (x = ±20); ±30 overlaps ±25. The ±25 wall is cut
@@ -1683,4 +1825,105 @@ fn orientation_mesh_reuses_missing_face_check_at_matching_tolerance() {
             assert_eq!(body.coarse_missing, Some((tol, 0)));
         }
     }
+}
+
+/// A trough whose floor falls about 1° toward a central drain, the fall starting right at the
+/// trough edges: four faces meet at each bottom corner (two walls, two fall facets) and at the
+/// drain (four facets). A tab on one end makes the body non-convex. The moved planes of four
+/// faces don't meet at one point, so each such corner of the cavity becomes two corners joined
+/// by a short edge. Checked against the volume integrated by hand.
+#[test]
+fn shell_where_four_faces_meet_at_a_corner() {
+    let (w, l, ht, t) = (100.0, 60.0, 40.0, 2.0);
+    // Drain depth: the long facets fall 1°.
+    let h = 30.0 * 1f64.to_radians().tan();
+    let facet = |n: Vec3, p: Vec3| {
+        let n = n.normalized().unwrap();
+        HalfSpace { n, d: n.dot(p) }
+    };
+    let facets = [
+        facet(Vec3::new(0.0, -h, -30.0), Vec3::ZERO),
+        facet(Vec3::new(0.0, h, -30.0), Vec3::new(0.0, l, 0.0)),
+        facet(Vec3::new(-h, 0.0, -50.0), Vec3::ZERO),
+        facet(Vec3::new(h, 0.0, -50.0), Vec3::new(w, 0.0, 0.0)),
+    ];
+    let mut hs = vec![
+        HalfSpace { n: -Vec3::X, d: 0.0 },
+        HalfSpace { n: Vec3::X, d: w },
+        HalfSpace { n: -Vec3::Y, d: 0.0 },
+        HalfSpace { n: Vec3::Y, d: l },
+        HalfSpace { n: Vec3::Z, d: ht },
+    ];
+    hs.extend(facets);
+    let trough = convex_polyhedron(&hs).unwrap();
+    let pyramid = w * l * h / 3.0;
+    assert!(rel(measure(&trough).unwrap().volume, w * l * ht + pyramid) < 1e-9);
+    let tab = box_solid(Vec3::new(w, 20.0, 20.0), Vec3::new(w + 20.0, 40.0, ht)).unwrap();
+    let body = boolean(&trough, &tab, BoolOp::Union).unwrap().unwrap();
+    let s = shell(&body, &[Vec3::new(50.0, 30.0, ht)], t).unwrap();
+    // The cavity: the walls in by t, above the floor facets moved in by t (midpoint rule; the
+    // floor is linear between its creases).
+    let floor = |x: f64, y: f64| facets.iter().map(|f| (f.d - t - f.n.x * x - f.n.y * y) / f.n.z).fold(f64::NEG_INFINITY, f64::max);
+    let (nx, ny) = (960, 560);
+    let (dx, dy) = ((w - 2.0 * t) / nx as f64, (l - 2.0 * t) / ny as f64);
+    let mut cavity = 0.0;
+    for i in 0..nx {
+        for j in 0..ny {
+            cavity += (ht - floor(t + (i as f64 + 0.5) * dx, t + (j as f64 + 0.5) * dy)) * dx * dy;
+        }
+    }
+    let tab_cavity = 20.0 * (20.0 - 2.0 * t) * (20.0 - t);
+    let want = w * l * ht + pyramid + 8000.0 - cavity - tab_cavity;
+    let m = measure(&s).unwrap();
+    assert!(rel(m.volume, want) < 1e-5, "{} vs {want}", m.volume);
+}
+
+/// The same trough cut as a pocket into a slab (four faces meet at each concave corner of the
+/// pocket floor), shelled with its top open.
+#[test]
+fn shell_of_a_pocket_whose_floor_falls_to_a_drain() {
+    let (px, py, pw, pl, top, depth, t) = (20.0, 15.0, 100.0, 60.0, 50.0, 30.0, 3.0);
+    let h = 30.0 * 1f64.to_radians().tan();
+    let z0 = top - depth;
+    let facet = |n: Vec3, p: Vec3| {
+        let n = n.normalized().unwrap();
+        HalfSpace { n, d: n.dot(p) }
+    };
+    let facets = [
+        facet(Vec3::new(0.0, -h, -30.0), Vec3::new(px, py, z0)),
+        facet(Vec3::new(0.0, h, -30.0), Vec3::new(px, py + pl, z0)),
+        facet(Vec3::new(-h, 0.0, -50.0), Vec3::new(px, py, z0)),
+        facet(Vec3::new(h, 0.0, -50.0), Vec3::new(px + pw, py, z0)),
+    ];
+    let mut hs = vec![
+        HalfSpace { n: -Vec3::X, d: -px },
+        HalfSpace { n: Vec3::X, d: px + pw },
+        HalfSpace { n: -Vec3::Y, d: -py },
+        HalfSpace { n: Vec3::Y, d: py + pl },
+        HalfSpace { n: Vec3::Z, d: top + 10.0 },
+    ];
+    hs.extend(facets);
+    let pocket = convex_polyhedron(&hs).unwrap();
+    let slab = box_solid(Vec3::ZERO, Vec3::new(140.0, 90.0, top)).unwrap();
+    let basin = boolean(&slab, &pocket, BoolOp::Cut).unwrap().unwrap();
+    let pocket_vol = pw * pl * depth + pw * pl * h / 3.0;
+    assert!(rel(measure(&basin).unwrap().volume, 140.0 * 90.0 * top - pocket_vol) < 1e-9);
+    let s = shell(&basin, &[Vec3::new(5.0, 5.0, top)], t).unwrap();
+    // The cavity's columns: from t up to the top, or up to the pocket floor moved down by t
+    // inside the pocket's walls moved out by t.
+    let floor = |x: f64, y: f64| facets.iter().map(|f| (f.d + t - f.n.x * x - f.n.y * y) / f.n.z).fold(f64::NEG_INFINITY, f64::max);
+    let (nx, ny) = (1340, 840);
+    let (dx, dy) = ((140.0 - 2.0 * t) / nx as f64, (90.0 - 2.0 * t) / ny as f64);
+    let mut cavity = 0.0;
+    for i in 0..nx {
+        for j in 0..ny {
+            let (x, y) = (t + (i as f64 + 0.5) * dx, t + (j as f64 + 0.5) * dy);
+            let inside = x > px - t && x < px + pw + t && y > py - t && y < py + pl + t;
+            let roof = if inside { floor(x, y) } else { top };
+            cavity += (roof - t) * dx * dy;
+        }
+    }
+    let want = 140.0 * 90.0 * top - pocket_vol - cavity;
+    let m = measure(&s).unwrap();
+    assert!(rel(m.volume, want) < 1e-4, "{} vs {want}", m.volume);
 }

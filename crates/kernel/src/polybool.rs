@@ -199,16 +199,72 @@ impl Node {
     }
 }
 
-/// Polygons of a body whose faces are all planar (None otherwise).
-fn planar_polys(b: &Body) -> Option<Vec<Poly>> {
+/// Why a body's polygons can't be had: in words that finish "the {role} has …" or "the
+/// {role}'s …".
+#[derive(Debug, PartialEq)]
+enum NotPlanar {
+    /// Faces on curved surfaces, counted by kind.
+    Curved(std::collections::BTreeMap<&'static str, usize>),
+    /// Something else (a face that could not be meshed, too many polygons).
+    Other(String),
+}
+
+impl NotPlanar {
+    fn describe(&self, role: &str) -> String {
+        match self {
+            NotPlanar::Curved(kinds) => {
+                let n: usize = kinds.values().sum();
+                let list: Vec<&str> = kinds.keys().copied().collect();
+                format!("the {role} has {n} curved face{} ({})", if n == 1 { "" } else { "s" }, list.join(", "))
+            }
+            NotPlanar::Other(m) => format!("the {role}'s {m}"),
+        }
+    }
+}
+
+/// The plane of each face (from its mesh, which must be flat), or what stands in the way: the
+/// curved faces by the kind of surface they lie on.
+fn face_planes(b: &Body, faces: &[crate::FaceInfo]) -> std::result::Result<Vec<PlaneEq>, NotPlanar> {
+    use crate::FaceSurface;
+    let mut curved: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
+    let mut out = Vec::with_capacity(faces.len());
+    for f in faces {
+        if f.area <= 0.0 {
+            return Err(NotPlanar::Other(format!("face {} could not be meshed", f.index)));
+        }
+        match f.plane_normal {
+            Some(n) => out.push(PlaneEq { n, w: n.dot(f.centroid) }),
+            None => {
+                let kind = match crate::face_surface(b, f.index) {
+                    Some(FaceSurface::Cylinder { .. }) => "cylinder",
+                    Some(FaceSurface::Cone { .. }) => "cone",
+                    Some(FaceSurface::Sphere { .. }) => "sphere",
+                    Some(FaceSurface::Torus { .. }) => "torus",
+                    Some(FaceSurface::Plane { .. }) => return Err(NotPlanar::Other(format!("face {} is planar but its mesh is not flat", f.index))),
+                    None => "freeform",
+                };
+                *curved.entry(kind).or_insert(0) += 1;
+            }
+        }
+    }
+    if curved.is_empty() { Ok(out) } else { Err(NotPlanar::Curved(curved)) }
+}
+
+/// Polygons of a body whose faces are all planar.
+fn planar_polys(b: &Body) -> std::result::Result<Vec<Poly>, NotPlanar> {
     let tol = (b.size() * 1e-3).max(1e-3);
-    let faces = b.faces(tol).ok()?;
-    let mesh = b.tessellate(tol).ok()?;
-    let planes: Vec<PlaneEq> = faces.iter().map(|f| f.plane_normal.map(|n| PlaneEq { n, w: n.dot(f.centroid) })).collect::<Option<_>>()?;
+    let unmeshed = |e: KernelError| NotPlanar::Other(format!("faces could not be meshed ({e})"));
+    let faces = b.faces(tol).map_err(unmeshed)?;
+    let mesh = b.tessellate(tol).map_err(unmeshed)?;
+    let planes = face_planes(b, &faces)?;
+    if mesh.triangles.len() > MAX_POLYS {
+        return Err(NotPlanar::Other(format!("mesh is too detailed ({} triangles)", mesh.triangles.len())));
+    }
+    let bad_mesh = || NotPlanar::Other("mesh is inconsistent".into());
     let mut out = Vec::new();
     for (t, fi) in mesh.triangles.iter().zip(&mesh.tri_face) {
-        let [a, bb, c] = mesh.tri(t)?;
-        let plane = *planes.get(*fi as usize)?;
+        let [a, bb, c] = mesh.tri(t).ok_or_else(bad_mesh)?;
+        let plane = *planes.get(*fi as usize).ok_or_else(bad_mesh)?;
         // Snap the vertices onto the exact face plane.
         let snap = |p: Vec3| p - plane.n * (plane.n.dot(p) - plane.w);
         let mut v = vec![snap(a), snap(bb), snap(c)];
@@ -217,7 +273,7 @@ fn planar_polys(b: &Body) -> Option<Vec<Poly>> {
         }
         out.push(Poly { v, plane });
     }
-    (out.len() <= MAX_POLYS).then_some(out)
+    Ok(out)
 }
 
 /// Polygons of any body: planar faces exactly, curved ones as their triangles (within `tol`).
@@ -305,11 +361,19 @@ pub fn faceted_boolean(a: &Body, b: &Mesh, op: BoolOp, tol: f64) -> Result<Optio
 pub fn planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     a.require_brep("a boolean")?;
     b.require_brep("a boolean")?;
-    let (Some(pa), Some(pb)) = (planar_polys(a), planar_polys(b)) else {
-        if let Some(r) = sliced_planar_boolean(a, b, op) {
-            return r;
+    let (pa, pb) = match (planar_polys(a), planar_polys(b)) {
+        (Ok(pa), Ok(pb)) => (pa, pb),
+        (ra, rb) => {
+            if let Some(r) = sliced_planar_boolean(a, b, op) {
+                return r;
+            }
+            let why: Vec<String> =
+                [(ra.err(), "target"), (rb.err(), "tool")].into_iter().filter_map(|(e, role)| e.map(|e| e.describe(role))).collect();
+            return Err(KernelError::Failed(format!(
+                "not supported yet: the exact fallback for where the bodies meet (faces that touch, or cross at a shallow angle) takes planar faces only, and {}",
+                why.join(" and ")
+            )));
         }
-        return Err(KernelError::Failed("not supported yet: coincident faces on curved bodies".into()));
     };
     let size = a.size().max(b.size());
     polys_boolean(pa, pb, size, op, size * 1e-9)
@@ -320,7 +384,7 @@ pub fn planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
 /// hole): `a` is split across the slab, the middle piece takes the exact boolean, and the
 /// pieces outside are joined back on. `None` when no such slab exists.
 fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
-    let pb = planar_polys(b)?;
+    let pb = planar_polys(b).ok()?;
     let size = a.size().max(b.size());
     let tol = (a.size() * 1e-3).max(1e-3);
     let infos = a.faces(tol).ok()?;
@@ -391,7 +455,7 @@ fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option
             outside.extend(crate::ops::half_space(&middle, &plane, !keep_positive)?);
             middle = crate::ops::half_space(&middle, &plane, keep_positive)?.ok_or_else(|| fail("nothing beside the tool"))?;
         }
-        let pm = planar_polys(&middle).ok_or_else(|| fail("the middle piece is not planar"))?;
+        let pm = planar_polys(&middle).map_err(|e| fail(&e.describe("middle piece")))?;
         let r = polys_boolean(pm, pb, size, op, size * 1e-9)?;
         if op == BoolOp::Intersect {
             return Ok(r);
