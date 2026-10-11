@@ -225,27 +225,40 @@ impl NotPlanar {
 /// The plane of each face (from its mesh, which must be flat), or what stands in the way: the
 /// curved faces by the kind of surface they lie on.
 fn face_planes(b: &Body, faces: &[crate::FaceInfo]) -> std::result::Result<Vec<PlaneEq>, NotPlanar> {
-    use crate::FaceSurface;
+    use crate::offset::{Surf, surf_of};
+    // Match face_surface's classification tolerance, but compute the body bounds only
+    // once. Walking to each indexed face separately made curved-body diagnostics quadratic.
+    let surface_tol = (b.size() * 1e-7).max(1e-9) * 100.0;
+    let mut surfaces = b.solid.face_iter();
     let mut curved: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
     let mut out = Vec::with_capacity(faces.len());
-    for f in faces {
+    for (index, f) in faces.iter().enumerate() {
+        let Some(surface) = surfaces.next() else {
+            return Err(NotPlanar::Other("mesh is inconsistent".into()));
+        };
+        if f.index != index {
+            return Err(NotPlanar::Other("mesh is inconsistent".into()));
+        }
         if f.area <= 0.0 {
             return Err(NotPlanar::Other(format!("face {} could not be meshed", f.index)));
         }
         match f.plane_normal {
             Some(n) => out.push(PlaneEq { n, w: n.dot(f.centroid) }),
             None => {
-                let kind = match crate::face_surface(b, f.index) {
-                    Some(FaceSurface::Cylinder { .. }) => "cylinder",
-                    Some(FaceSurface::Cone { .. }) => "cone",
-                    Some(FaceSurface::Sphere { .. }) => "sphere",
-                    Some(FaceSurface::Torus { .. }) => "torus",
-                    Some(FaceSurface::Plane { .. }) => return Err(NotPlanar::Other(format!("face {} is planar but its mesh is not flat", f.index))),
+                let kind = match surf_of(surface, surface_tol) {
+                    Some(Surf::Cylinder { .. }) => "cylinder",
+                    Some(Surf::Cone { .. }) => "cone",
+                    Some(Surf::Sphere { .. }) => "sphere",
+                    Some(Surf::Torus { .. }) => "torus",
+                    Some(Surf::Plane { .. }) => return Err(NotPlanar::Other(format!("face {} is planar but its mesh is not flat", f.index))),
                     None => "freeform",
                 };
                 *curved.entry(kind).or_insert(0) += 1;
             }
         }
+    }
+    if surfaces.next().is_some() {
+        return Err(NotPlanar::Other("mesh is inconsistent".into()));
     }
     if curved.is_empty() { Ok(out) } else { Err(NotPlanar::Curved(curved)) }
 }
@@ -791,4 +804,43 @@ fn rebuild(polys: Vec<Poly>, size: f64) -> Result<Body> {
         let solid = Solid::try_new(parts).map_err(|e| KernelError::Failed(format!("planar boolean: {e}")))?;
         Body::new(solid)
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn compound_curved_diagnostics_count_every_surface_kind() {
+        // Many independent shells exercise the error path without performing a costly
+        // Boolean. Each cylinder has two analytic half-cylinder walls and two flat caps.
+        let mut shells = Vec::new();
+        for i in 0..64 {
+            let cylinder = crate::cylinder(Vec3::X * (i as f64 * 6.0), Vec3::Z, 2.0, 5.0).unwrap();
+            shells.extend(cylinder.solid.boundaries().iter().cloned());
+        }
+        let sphere = crate::sphere(Vec3::new(0.0, 12.0, 0.0), 2.0).unwrap();
+        let sphere_faces = sphere.face_count();
+        shells.extend(sphere.solid.boundaries().iter().cloned());
+        let body = guard("diagnostic compound", || Body::new(Solid::try_new(shells).unwrap())).unwrap();
+        let faces = body.faces(0.02).unwrap();
+        let error = face_planes(&body, &faces).err().unwrap();
+        let expected = std::collections::BTreeMap::from([("cylinder", 128), ("sphere", sphere_faces)]);
+        assert_eq!(error, NotPlanar::Curved(expected));
+        assert_eq!(error.describe("tool"), format!("the tool has {} curved faces (cylinder, sphere)", 128 + sphere_faces));
+    }
+
+    #[test]
+    fn planar_mesh_inconsistency_does_not_become_curved_classification() {
+        let body = crate::box_solid(Vec3::ZERO, Vec3::new(4.0, 5.0, 6.0)).unwrap();
+        let mut faces = body.faces(0.01).unwrap();
+        assert_eq!(face_planes(&body, &faces).unwrap().len(), 6);
+        faces[0].plane_normal = None;
+        assert_eq!(face_planes(&body, &faces).err().unwrap(), NotPlanar::Other("face 0 is planar but its mesh is not flat".into()));
+        faces[0].area = 0.0;
+        assert_eq!(face_planes(&body, &faces).err().unwrap(), NotPlanar::Other("face 0 could not be meshed".into()));
+        faces[0].index = 999;
+        assert_eq!(face_planes(&body, &faces).err().unwrap(), NotPlanar::Other("mesh is inconsistent".into()));
+    }
 }

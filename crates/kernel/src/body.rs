@@ -957,6 +957,24 @@ impl Body {
             if groups.len() == 1 {
                 return Ok(vec![self.clone()]);
             }
+            // Grouping keeps existing shells; certificates belong to their
+            // exact face identities, not the new lump's positional face index.
+            // This is not propagation through a geometry-changing operation.
+            let sources_by_face = if let Some(sources) = &self.face_sources {
+                if sources.len() != self.solid.face_iter().count() {
+                    return Err(KernelError::Invalid("lumps: face source table does not match the body".into()));
+                }
+                let mut by_id = std::collections::HashMap::new();
+                for (face, source) in self.solid.face_iter().zip(sources.iter()) {
+                    if by_id.insert(face.id(), Some((face.orientation(), source))).is_some() {
+                        // A repeated identity has no unique source association.
+                        by_id.insert(face.id(), None);
+                    }
+                }
+                Some(by_id)
+            } else {
+                None
+            };
             groups
                 .into_iter()
                 .map(|g| {
@@ -964,7 +982,18 @@ impl Body {
                         .into_iter()
                         .map(|i| shells.get(i).cloned().ok_or_else(|| KernelError::Failed("lumps: missing shell".into())))
                         .collect::<Result<Vec<_>>>()?;
-                    Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("lump: {e}"))).and_then(Body::new)
+                    let result = Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("lump: {e}"))).and_then(Body::new)?;
+                    let sources = sources_by_face.as_ref().map(|old| {
+                        result
+                            .solid
+                            .face_iter()
+                            .map(|face| match old.get(&face.id()) {
+                                Some(Some((orientation, source))) if *orientation == face.orientation() => (*source).clone(),
+                                _ => None,
+                            })
+                            .collect()
+                    });
+                    Ok(result.with_face_sources(sources.map(std::sync::Arc::new)))
                 })
                 .collect()
         })
