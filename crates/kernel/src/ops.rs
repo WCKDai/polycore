@@ -7,6 +7,10 @@ use truck_modeling as mt;
 use crate::body::{Body, Solid, from_p3};
 use crate::{KernelError, Result, guard};
 
+#[cfg(test)]
+#[path = "bore_union_tests.rs"]
+mod bore_union_tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BoolOp {

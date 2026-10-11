@@ -461,9 +461,11 @@ pub(crate) fn has_coincident_cylinders(a: &Body, b: &Body) -> bool {
 /// it is joined over). The mesh intersection can't take the coincident walls, so the tool's
 /// bore is narrowed (its walls pushed toward the axis, now clear of the target's), the bodies
 /// are joined, and the cylinder of the original bore is cut out again over the tool's length.
-/// That is exact when the cylinder holds no material of either body, which is checked on
-/// sample points. Each way (the tool's bore narrowed, else the target's) gives a result only
-/// when `accept` takes it. `None` when there are no coincident bores or no way works.
+/// Recutting is valid only where that cylinder holds no material of either body. The
+/// samples are plausibility checks; a whole-boundary guard rejects additional boundaries
+/// crossing the recut. Original common-bore trims retain the legacy eligibility policy.
+/// This is not a general emptiness or Boolean-equivalence certificate. Each direction
+/// returns a result only when `accept` takes it; otherwise this returns `None`.
 pub(crate) fn bore_union(a: &Body, b: &Body, accept: &dyn Fn(&Body) -> bool) -> Option<Body> {
     let size = a.size().max(b.size());
     let tol = (size * 1e-7).max(1e-9) * 10.0;
@@ -536,6 +538,15 @@ pub(crate) fn bore_union(a: &Body, b: &Body, accept: &dyn Fn(&Body) -> bool) -> 
             };
             let lo = if past(t0 - ext * 0.5) && past(t0 - ext) { t0 - ext } else { t0 };
             let hi = if past(t1 + ext * 0.5) && past(t1 + ext) { t1 + ext } else { t1 };
+            // The samples above are plausibility checks, not proof that an
+            // arbitrarily thin web is absent. Every additional current boundary
+            // must be wholly clear of the recut; unsupported trims refuse.
+            let other_bore: Vec<usize> = co.iter().filter(|x| same_cylinder(c, x, tol)).map(|x| x.index).collect();
+            if crate::bore_guard::boundaries_clear(tool, &bore, c.origin, c.axis, c.radius, lo, hi, tol).is_none()
+                || crate::bore_guard::boundaries_clear(target, &other_bore, c.origin, c.axis, c.radius, lo, hi, tol).is_none()
+            {
+                continue;
+            }
             let d = (c.radius * 0.2).min(size * 0.01);
             let run = || -> Result<Option<Body>> {
                 let narrowed = crate::offset::offset_body(tool, |i, _| if bore.contains(&i) { d } else { 0.0 })?;

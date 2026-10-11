@@ -750,6 +750,7 @@ impl Body {
             return Ok(m);
         }
         m.seams = crate::topo::seam_flags(self, &m);
+        (m.smooth_edges, m.sharp_edges) = crate::smooth_edges::flags(self, &m);
         Ok(m)
     }
 
