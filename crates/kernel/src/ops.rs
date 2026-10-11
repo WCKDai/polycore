@@ -221,6 +221,9 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             )),
         };
     }
+    if matches!(op, BoolOp::Cut | BoolOp::Union) {
+        r = r.and_then(|result| result.map(|body| body.with_preserved_boolean_planar_sources(a, b, op == BoolOp::Cut)).transpose());
+    }
     r
 }
 

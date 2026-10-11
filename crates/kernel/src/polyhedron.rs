@@ -130,6 +130,10 @@ pub fn planar_convex(b: &Body) -> Result<Vec<(HalfSpace, Vec3)>> {
 
 /// Hollow a convex planar body: walls of `thickness` inside, faces near `open` removed.
 pub fn shell(b: &Body, open: &[Vec3], thickness: f64) -> Result<Body> {
+    shell_impl(b, open, thickness)?.with_shell_planar_sources(b, thickness, open)
+}
+
+fn shell_impl(b: &Body, open: &[Vec3], thickness: f64) -> Result<Body> {
     b.require_brep("shell")?;
     if !(thickness.is_finite() && thickness > 1e-6) {
         return Err(KernelError::Invalid("shell thickness must be positive".into()));

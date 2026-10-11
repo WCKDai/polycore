@@ -5,6 +5,10 @@ use truck_modeling as mt;
 
 use crate::{KernelError, Result, guard};
 
+#[path = "planar_regularize.rs"]
+mod planar_regularize;
+#[path = "planar_sources.rs"]
+mod planar_sources;
 #[path = "shell_groups.rs"]
 mod shell_groups;
 
@@ -33,11 +37,12 @@ pub struct Body {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FaceSource {
-    ExtrudeSide { segment: solvecraft_geom::Seg2, plane: Option<solvecraft_geom::Plane> },
+    ExtrudeSide { segment: solvecraft_geom::Seg2, plane: Option<solvecraft_geom::Plane>, coalesced: bool },
     CertifiedExtrudeSide { producer: u64, sketch: u64, curve: String, plane: Option<solvecraft_geom::Plane> },
     ExtrudeCap { high: bool, region: solvecraft_geom::Region2, plane: solvecraft_geom::Plane },
     CertifiedExtrudeCap { producer: u64, sketch: u64, high: bool, outer: Vec<String>, holes: Vec<Vec<String>>, plane: solvecraft_geom::Plane },
     Box { producer: Option<u64>, axis: u8, high: bool, plane: solvecraft_geom::Plane },
+    ShellPlanar { producer: Option<u64>, source: Box<FaceSource>, inner: bool, plane: solvecraft_geom::Plane },
     Imported { item: u64, face: u64, payload_sha256: Option<String>, producer: Option<u64> },
 }
 
@@ -48,7 +53,9 @@ impl FaceSource {
     fn plane_mut(&mut self) -> Option<&mut solvecraft_geom::Plane> {
         match self {
             Self::ExtrudeSide { plane, .. } | Self::CertifiedExtrudeSide { plane, .. } => plane.as_mut(),
-            Self::ExtrudeCap { plane, .. } | Self::CertifiedExtrudeCap { plane, .. } | Self::Box { plane, .. } => Some(plane),
+            Self::ExtrudeCap { plane, .. } | Self::CertifiedExtrudeCap { plane, .. } | Self::Box { plane, .. } | Self::ShellPlanar { plane, .. } => {
+                Some(plane)
+            }
             Self::Imported { .. } => None,
         }
     }
@@ -358,6 +365,12 @@ impl Body {
         self.face_sources.as_deref().map(Vec::as_slice)
     }
 
+    /// A current wall reconstructed from an exact contiguous section run.
+    /// This transient witness grants no durable source/producer identity.
+    pub fn face_was_coalesced(&self, index: usize) -> bool {
+        matches!(self.face_sources().and_then(|s| s.get(index)), Some(Some(FaceSource::ExtrudeSide { coalesced: true, .. })))
+    }
+
     /// An exact construction/import plane; never inferred from tessellation.
     pub fn face_plane(&self, index: usize) -> Option<solvecraft_geom::Plane> {
         if index >= 50_000 {
@@ -366,7 +379,10 @@ impl Body {
         let source = self.face_sources()?.get(index)?.as_ref()?;
         match source {
             FaceSource::ExtrudeSide { plane, .. } | FaceSource::CertifiedExtrudeSide { plane, .. } => *plane,
-            FaceSource::ExtrudeCap { plane, .. } | FaceSource::CertifiedExtrudeCap { plane, .. } | FaceSource::Box { plane, .. } => Some(*plane),
+            FaceSource::ExtrudeCap { plane, .. }
+            | FaceSource::CertifiedExtrudeCap { plane, .. }
+            | FaceSource::Box { plane, .. }
+            | FaceSource::ShellPlanar { plane, .. } => Some(*plane),
             FaceSource::Imported { .. } => self.planar_face(index),
         }
     }
