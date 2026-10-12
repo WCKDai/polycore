@@ -484,3 +484,20 @@ fn bore_union_of_a_bore_in_two_arcs_has_no_history() {
     let r = crate::coplanar::bore_union(&floor, &ring, &|_| true).expect("the bores are recut");
     assert!(r.history().is_none());
 }
+
+/// Bodies clearly apart, joined as one body of several pieces (`union_apart`): every face and
+/// edge is its piece's own, kept.
+#[test]
+fn bodies_apart_joined_keep_their_faces() {
+    let pieces = [boxed(0.0, 0.0, 0.0, 2.0, 2.0, 2.0), boxed(5.0, 0.0, 0.0, 7.0, 2.0, 2.0), boxed(10.0, 0.0, 0.0, 12.0, 2.0, 2.0)];
+    let r = crate::union_apart(&pieces).unwrap().unwrap();
+    let operands: Vec<&Body> = pieces.iter().collect();
+    let h = verified(&r, &operands, 0.01);
+    assert_eq!(h.operands, 3);
+    for (k, piece) in pieces.iter().enumerate() {
+        for f in 0..piece.face_count() {
+            assert_eq!(from(h, face(k, f)).len(), 1, "{}", show(h));
+        }
+    }
+    assert!(faces_of(h).iter().all(|(change, origins)| *change == Change::Kept && origins.len() == 1), "{}", show(h));
+}

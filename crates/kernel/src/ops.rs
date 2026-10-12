@@ -672,7 +672,22 @@ pub fn union_apart(bodies: &[Body]) -> Result<Option<Body>> {
             }
         }
     }
-    join_pieces(bodies.to_vec())
+    // The pieces stay as they are, side by side: each face and edge of the result is its piece's
+    // own (the history over `bodies`).
+    let Some(joined) = join_pieces(bodies.to_vec())? else { return Ok(None) };
+    let operands: Vec<&Body> = bodies.iter().collect();
+    let faces = bodies
+        .iter()
+        .enumerate()
+        .flat_map(|(operand, b)| {
+            (0..b.face_count()).map(move |face| (std::collections::BTreeSet::from([crate::history::FaceOrigin::Face { operand, face }]), true))
+        })
+        .collect();
+    let mut edges = HashMap::new();
+    for (operand, b) in bodies.iter().enumerate() {
+        edges.extend(record::edge_origins(&b.solid, operand));
+    }
+    Ok(Some(record::traced(joined, &record::counts(&operands), Some(record::regions(faces)), Some(&edges))))
 }
 
 /// Bodies (apart from each other) as one body of several pieces.
