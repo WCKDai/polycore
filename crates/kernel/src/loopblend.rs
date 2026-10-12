@@ -97,6 +97,22 @@ fn seg_of(e: &mt::Edge, tol: f64) -> Option<Seg> {
     Some(Seg::Arc { a, c: centre, axis, angle, mid: m })
 }
 
+/// Whether an edge is a straight segment: a line, or a curve whose points all lie on the chord
+/// (the contact lines of a rolling-ball blend between parallel walls are such curves).
+fn is_straight(e: &mt::Edge, tol: f64) -> bool {
+    use mt::{BoundedCurve, ParametricCurve};
+    if matches!(e.curve(), mt::Curve::Line(_)) {
+        return true;
+    }
+    let (a, b) = (from_p3(e.absolute_front().point()), from_p3(e.absolute_back().point()));
+    if a.dist(b) < tol {
+        return false;
+    }
+    let c = e.curve();
+    let (t0, t1) = c.range_tuple();
+    (0..=16).all(|k| from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 16.0)).dist_to_segment(a, b) < tol)
+}
+
 /// `p` turned about the line (c, axis) by `ang`.
 fn turn(p: Vec3, c: Vec3, axis: Vec3, ang: f64) -> Vec3 {
     let k = axis.normalized().unwrap_or(Vec3::Z);
@@ -518,7 +534,7 @@ fn build(
                 }
                 let (fa, fb) = (e.absolute_front().clone(), e.absolute_back().clone());
                 let other = if &fa == v { &fb } else { &fa };
-                if !matches!(e.curve(), mt::Curve::Line(_)) {
+                if !is_straight(&e, (size * 1e-5).max(1e-6)) {
                     return Err(unsupported("the wall seams must be straight"));
                 }
                 let face_side = on_face(&e);
