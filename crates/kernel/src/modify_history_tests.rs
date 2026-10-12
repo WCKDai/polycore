@@ -248,6 +248,31 @@ fn shell_of_a_body_that_is_not_convex() {
     assert_eq!(offsets, 7, "{h:?}");
 }
 
+/// A shell of a block with a tab joined on a side: the cavity Cut sews the walls in pieces
+/// across its slabs and joins them on their common supports, the history carried through.
+#[test]
+fn shell_of_a_stepped_body_joins_its_walls() {
+    let stock = box_solid(Vec3::new(-20.0, -15.0, 0.0), Vec3::new(20.0, 15.0, 24.0)).unwrap();
+    let tab = box_solid(Vec3::new(-12.0, -25.0, 8.0), Vec3::new(-4.0, -15.0, 16.0)).unwrap();
+    let b = boolean(&stock, &tab, BoolOp::Union).unwrap().unwrap();
+    let r = crate::shell(&b, &[Vec3::new(0.0, 0.0, 24.0)], 1.0).unwrap();
+    let h = verified(&r, &b, reach(1.0 * 1.5));
+    // Every face of the body but the open top is lined by one inner wall.
+    let offsets = h.faces.iter().filter(|f| matches!(f.origins.as_slice(), [FaceOrigin::Offset { .. }])).count();
+    assert_eq!(offsets, b.face_count() - 1, "{h:?}");
+}
+
+/// A shell of a painted block: its faces are used as they are (unhealed), keeping the paint's
+/// face order, with the history of that copy. Paint is an authored boundary, so the cavity Cut
+/// keeps the side faces it sews across the rim's level in pieces (Split).
+#[test]
+fn shell_of_a_painted_body() {
+    let b = painted_cube();
+    let r = crate::shell(&b, &[Vec3::new(20.0, 15.0, 20.0)], 2.0).unwrap();
+    let h = verified(&r, &b, reach(2.0));
+    assert_eq!(changes(h), [0, 2, 8, 0, 5], "{h:?}");
+}
+
 #[test]
 fn draft_tilts_faces() {
     let b = cube();
@@ -377,10 +402,15 @@ fn mirrored_copy_keeps_every_face_and_edge() {
     }
 }
 
-/// The block with box cuts of each common shape: a notch through the back, a pocket, a step
-/// along one end, a slot across the top, a hole through, a corner bitten out.
-fn box_cuts() -> Vec<(&'static str, Body, Body)> {
-    let b = cube();
+/// The block with a face painted: an authored boundary, so the cuts leave the faces they split
+/// across their slabs in pieces (none of them joined on their common supports).
+fn painted_cube() -> Body {
+    cube().with_paint(Some(crate::Paint { opacity: 1., faces: vec![crate::FacePaint { face: 0, color: [1., 0., 0.], opacity: 1. }] }))
+}
+
+/// The block `b` with box cuts of each common shape: a notch through the back, a pocket, a
+/// step along one end, a slot across the top, a hole through, a corner bitten out.
+fn box_cuts_of(b: &Body) -> Vec<(&'static str, Body, Body)> {
     [
         ("notch", Vec3::new(15.0, 25.0, -5.0), Vec3::new(25.0, 35.0, 25.0)),
         ("pocket", Vec3::new(10.0, 10.0, 10.0), Vec3::new(30.0, 20.0, 25.0)),
@@ -392,7 +422,7 @@ fn box_cuts() -> Vec<(&'static str, Body, Body)> {
     .into_iter()
     .map(|(name, lo, hi)| {
         let tool = box_solid(lo, hi).unwrap();
-        let cut = boolean(&b, &tool, BoolOp::Cut).unwrap().unwrap();
+        let cut = boolean(b, &tool, BoolOp::Cut).unwrap().unwrap();
         (name, cut, tool)
     })
     .collect()
@@ -403,41 +433,52 @@ fn merged_meetings(h: &History) -> usize {
     h.edges.iter().flat_map(|e| &e.origins).filter(|o| matches!(o, EdgeOrigin::Meet { a, b } if a.single().is_none() || b.single().is_none())).count()
 }
 
-/// A fillet right after a box cut. Where the cut leaves coplanar pieces (the step, slot and
-/// bite leave the front face in pieces), the fillet's heal merges them, and the edge where the
-/// round runs into that face meets all of it. Composed with the cut, over the block and the tool.
+/// A fillet right after a box cut. The cut joins the walls it sews in pieces across its slabs
+/// on their common supports, so the fillet finds whole faces. Where the block is painted the cut
+/// keeps those pieces (it has more faces), the fillet's heal merges them, and the edges where
+/// the round runs into such a face meet all of it. Composed with the cut, over the block and
+/// the tool.
 #[test]
 fn fillet_after_box_cuts() {
-    let b = cube();
     let at = Vec3::new(5.0, 0.0, 20.0);
-    for (name, cut, tool) in box_cuts() {
-        let r = crate::fillet(&cut, &[at], 2.0).unwrap();
-        let h = verified(&r, &cut, reach(2.0 * 1.5));
-        assert_eq!(blends(h), [vec![edge(edge_at(&cut, at))]], "{name}");
-        let merged = matches!(name, "step" | "slot" | "bite");
-        assert_eq!(merged_meetings(h) > 0, merged, "{name}: {h:?}");
-        let mut through = h.clone();
-        through.substitute(0, cut.history().unwrap()).unwrap();
-        through.check(&r, &[&b, &tool]).unwrap();
+    let plain = box_cuts_of(&cube());
+    for (b, painted) in [(cube(), false), (painted_cube(), true)] {
+        let cuts = if painted { box_cuts_of(&b) } else { plain.clone() };
+        for ((name, cut, tool), (_, whole, _)) in cuts.into_iter().zip(&plain) {
+            let r = crate::fillet(&cut, &[at], 2.0).unwrap();
+            let h = verified(&r, &cut, reach(2.0 * 1.5));
+            assert_eq!(blends(h), [vec![edge(edge_at(&cut, at))]], "{name}");
+            let pieces = cut.face_count() > whole.face_count();
+            assert_eq!(pieces, painted && name != "notch" && name != "hole", "{name} (painted: {painted})");
+            assert_eq!(merged_meetings(h) > 0, pieces, "{name} (painted: {painted}): {h:?}");
+            let mut through = h.clone();
+            through.substitute(0, cut.history().unwrap()).unwrap();
+            through.check(&r, &[&b, &tool]).unwrap();
+        }
     }
 }
 
 /// A chamfer right after a box cut, its cutter's cut going the prism way along the edge: the
 /// cutter's walls meet the cut body's walls where a segment was split off. The cut body's ends
 /// have their outlines in collinear edges (pocket, step, bite), each matched by the segment
-/// running along it; walls the cut left in pieces across the slabs (step, slot, bite) are
-/// followed through the levels where one piece gives way to the next. Composed with the cut,
-/// over the block and the tool.
+/// running along it; walls the cut left in pieces across the slabs (step, slot, bite of the
+/// painted block) are followed through the levels where one piece gives way to the next. Where
+/// the cut joined those pieces, the line between two walls stays in edges split at the levels,
+/// and each slab's edge runs along the one over its levels. Composed with the cut, over the
+/// block and the tool.
 #[test]
 fn chamfer_after_box_cuts() {
-    let b = cube();
     let at = Vec3::new(5.0, 0.0, 20.0);
-    for (name, cut, tool) in box_cuts() {
-        let r = crate::chamfer(&cut, &[at], 2.0).unwrap();
-        let h = verified(&r, &cut, reach(2.0 * 1.5));
-        assert_eq!(with(h, &[edge(edge_at(&cut, at))]).len(), 1, "{name}: {h:?}");
-        let mut through = h.clone();
-        through.substitute(0, cut.history().unwrap()).unwrap();
-        through.check(&r, &[&b, &tool]).unwrap();
+    for (b, painted) in [(cube(), false), (painted_cube(), true)] {
+        for (name, cut, tool) in box_cuts_of(&b) {
+            let r = crate::chamfer(&cut, &[at], 2.0).unwrap();
+            let h = verified(&r, &cut, reach(2.0 * 1.5));
+            // On the painted block the chamfer face keeps the boundaries the cut left.
+            let faces = with(h, &[edge(edge_at(&cut, at))]).len();
+            assert!(if painted { faces >= 1 } else { faces == 1 }, "{name} (painted: {painted}): {h:?}");
+            let mut through = h.clone();
+            through.substitute(0, cut.history().unwrap()).unwrap();
+            through.check(&r, &[&b, &tool]).unwrap();
+        }
     }
 }

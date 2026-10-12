@@ -80,9 +80,7 @@ pub(crate) fn join(pieces: Vec<Traced>, counts: &[(usize, usize)]) -> Result<Opt
             break;
         };
         all.extend(h.faces.iter().cloned());
-        for (e, prov) in edge_order(p.solid.face_iter()).0.iter().zip(&h.edges) {
-            edges.insert(e.id(), prov.origins.clone());
-        }
+        edges.extend(record::edges_by_identity(p, h));
     }
     if let Some(faces) = faces.as_mut() {
         record::mark_shared_split(faces);

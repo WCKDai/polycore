@@ -290,7 +290,6 @@ fn box_minus_cylinder_prism() {
 /// A slot across the top (a stepped prism along y): the top and the box's ends come apart in
 /// pieces (Split); the slot's floor and sides are the tool's.
 #[test]
-#[ignore = "fails until #136 is fixed"]
 fn slot_splits_a_face() {
     let a = boxed(0.0, 0.0, 0.0, 10.0, 10.0, 10.0);
     let b = boxed(4.0, -1.0, 5.0, 6.0, 11.0, 11.0);
@@ -368,7 +367,6 @@ fn glue_merges_across_the_seam() {
 /// Coincident faces pushed apart: a cut flush with the target's top, and a union of bodies
 /// standing on one floor (the floor that is cut back is both operands' floors).
 #[test]
-#[ignore = "fails until #136 is fixed"]
 fn faces_pushed_apart() {
     let a = boxed(0.0, 0.0, 0.0, 10.0, 10.0, 10.0);
     let tool = boxed(2.0, 2.0, 5.0, 8.0, 8.0, 10.0);
@@ -425,9 +423,36 @@ fn faceted_tool() {
     assert_eq!(h.faces.iter().filter(|f| matches!(f.origins.first(), Some(FaceOrigin::Face { operand: 1, .. }))).count(), 3);
 }
 
-/// A step cut into a certified box: the boolean leaves the faces it split on the box's planes
-/// in pieces, which the planar regularization joins back; the joined body keeps the boolean's
-/// history composed through the join.
+/// A partial-depth cut of stepped prisms: walls over one segment through successive slabs are
+/// sewn as one face (coalesced), which comes from the operand walls under it in every slab.
+#[test]
+fn coalesced_stepped_walls() {
+    use solvecraft_geom::{Loop2, Plane, Region2, Vec2};
+    for curved in [true, false] {
+        let (outer, inner) = if curved {
+            (Loop2::circle(Vec2::ZERO, 10.0), Loop2::circle(Vec2::ZERO, 5.0))
+        } else {
+            let square = |h: f64| Loop2::polygon(&[Vec2::new(-h, -h), Vec2::new(h, -h), Vec2::new(h, h), Vec2::new(-h, h)]);
+            (square(10.0), square(5.0))
+        };
+        let stock = crate::extrude(&Plane::XY, &[Region2 { outer, holes: vec![] }], 0.0, 20.0).unwrap().pop().unwrap();
+        let cutter = crate::extrude(&Plane::XY, &[Region2 { outer: inner, holes: vec![] }], 2.0, 22.0).unwrap().pop().unwrap();
+        let r = boolean(&stock, &cutter, BoolOp::Cut).unwrap().unwrap();
+        let h = verified(&r, &[&stock, &cutter], 0.01);
+        // The stock's walls run whole from 0 to 20, one face each, past the cutter's floor.
+        let walls: Vec<usize> = (0..r.face_count()).filter(|i| r.face_was_coalesced(*i)).collect();
+        assert_eq!(walls.len(), if curved { 2 } else { 4 }, "{}", show(h));
+        for i in walls {
+            assert!(matches!(h.faces[i].origins.as_slice(), [FaceOrigin::Face { operand: 0, .. }]), "{}", show(h));
+            assert_eq!(h.faces[i].change, Change::Modified, "{}", show(h));
+        }
+    }
+}
+
+/// A step cut into a box: the stepped prism path sews the box's face 3 in pieces at the
+/// slab stations, and the joining of generated walls on their common supports makes it one face
+/// again; the joined body keeps the sewn body's history composed through the join. A certified
+/// box (whose planar regularization would join the same pieces) gets the same history.
 #[test]
 fn regularized_step_cut() {
     let (pa, pb) = (boxed(0.0, 0.0, 0.0, 30.0, 35.0, 7.5), boxed(0.0, 30.0, 2.5, 22.5, 50.0, 25.0));
@@ -436,16 +461,10 @@ fn regularized_step_cut() {
     let h = verified(&r, &[&a, &b], 0.01);
     let plain = boolean(&pa, &pb, BoolOp::Cut).unwrap().unwrap();
     let ph = verified(&plain, &[&pa, &pb], 0.01);
-    // Uncertified, the box's face 3 stays in two pieces; certified, they are joined into one
-    // face, the only one from it.
-    assert_eq!(from(ph, face(0, 3)).len(), 2, "{}", show(ph));
-    assert_eq!(r.face_count() + 1, plain.face_count());
-    let joined = from(h, face(0, 3));
-    assert_eq!(joined.len(), 1, "{}", show(h));
-    assert_eq!(faces_of(h)[joined[0]], (Change::Modified, vec![face(0, 3)]));
-    // Every other face is as the boolean made it, in its order.
-    let rest = |h: &History| -> Vec<(Change, Vec<FaceOrigin>)> { faces_of(h).into_iter().filter(|(_, o)| *o != [face(0, 3)]).collect() };
-    assert_eq!(rest(h), rest(ph));
+    let joined = from(ph, face(0, 3));
+    assert_eq!(joined.len(), 1, "{}", show(ph));
+    assert_eq!(faces_of(ph)[joined[0]], (Change::Modified, vec![face(0, 3)]));
+    assert_eq!(faces_of(h), faces_of(ph), "{}", show(h));
 }
 
 /// A ring joined under a floor, its bore on the floor's hole (coincident cylinders): the ring's

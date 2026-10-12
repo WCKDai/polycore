@@ -378,7 +378,9 @@ fn polyline_mid(pts: &[Vec3]) -> (Vec3, f64) {
 }
 
 impl Body {
-    /// The very same body (shared data), not just an equal-looking one.
+    /// The very same body (shared data), not just an equal-looking one. Its history (how an
+    /// operation made it) is not part of it: an operation that leaves a body as it is (a cut by
+    /// a tool clear of it) gives the same body, with that operation's history.
     pub fn same(&self, other: &Body) -> bool {
         std::sync::Arc::ptr_eq(&self.solid, &other.solid)
             && match (&self.mesh, &other.mesh) {
@@ -391,11 +393,6 @@ impl Body {
             && self.splits == other.splits
             && self.face_sources == other.face_sources
             && self.regularization_protected == other.regularization_protected
-            && match (&self.history, &other.history) {
-                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
     }
 
     pub(crate) fn new(solid: Solid) -> Result<Body> {

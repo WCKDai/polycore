@@ -53,6 +53,8 @@ pub(super) struct Context<'a> {
     pub plane: Plane,
     pub tol: f64,
     pub heights: Option<[(f64, f64); 2]>,
+    /// Both operands' caps, read once (see [`Context::caps`]).
+    caps: std::cell::OnceCell<Option<Vec<Cap>>>,
 }
 
 /// How one piece of the result was built.
@@ -62,15 +64,51 @@ pub(super) enum Built {
     /// Sewn (`sew_connected_sections`) from these faces, the sewing saying which each face of
     /// the piece was built from (`None`: it could not).
     Sewn { specs: Vec<Spec>, faces: Option<Vec<usize>> },
+    /// Built some other way, carrying its own history over the operands (none: not known).
+    Traced,
 }
 
 /// A face sewn into a stepped prism.
 pub(super) enum Spec {
-    /// A wall over a section segment (tagged `tag`) from level `z0` up. `next` is the wall over
-    /// the next segment of its loop, which it meets at `at`.
-    Wall { tag: Tag, z0: f64, next: usize, at: Vec2 },
+    /// A wall over one section segment through successive slabs, between successive `levels`
+    /// (one more than `slabs`): what it is over in each slab.
+    Wall { levels: Vec<f64>, slabs: Vec<Slab> },
     /// A cap over `section` at level `z`, facing along the direction when `up`.
     Cap { section: Section, z: f64, up: bool },
+}
+
+/// A wall in one slab: over a segment tagged `tag`; `next` is the wall over the next segment
+/// of its loop in that slab, which it meets at `at`.
+pub(super) struct Slab {
+    pub tag: Tag,
+    pub next: usize,
+    pub at: Vec2,
+}
+
+impl Spec {
+    /// The wall's slab between levels `lo` and `hi` (`hi` above `lo`).
+    fn slab(&self, lo: f64, hi: f64) -> Option<&Slab> {
+        let Spec::Wall { levels, slabs } = self else { return None };
+        let mid = (lo + hi) / 2.0;
+        slabs.iter().zip(levels.windows(2)).find(|(_, z)| z[0] < mid && mid < z[1]).map(|(s, _)| s)
+    }
+
+    /// The wall's slab at its bottom level, when that is `z`.
+    fn bottom(&self, z: f64, tol: f64) -> Option<&Slab> {
+        let Spec::Wall { levels, slabs } = self else { return None };
+        ((levels.first()? - z).abs() <= tol).then_some(slabs.first()?)
+    }
+
+    /// The wall's slab at its top level, when that is `z`.
+    fn top(&self, z: f64, tol: f64) -> Option<&Slab> {
+        let Spec::Wall { levels, slabs } = self else { return None };
+        ((levels.last()? - z).abs() <= tol).then_some(slabs.last()?)
+    }
+
+    /// The wall's slab at its bottom or top level `z`.
+    fn end(&self, z: f64, tol: f64) -> Option<&Slab> {
+        self.bottom(z, tol).or_else(|| self.top(z, tol))
+    }
 }
 
 /// A face of a piece: the wall over a segment with this tag between two levels, or a cap.
@@ -80,7 +118,11 @@ enum Kind {
     Cap(usize),
 }
 
-impl Context<'_> {
+impl<'a> Context<'a> {
+    pub(super) fn new(op: BoolOp, operands: [&'a Body; 2], index: [&'a Index; 2], plane: Plane, tol: f64, heights: Option<[(f64, f64); 2]>) -> Self {
+        Context { op, operands, index, plane, tol, heights, caps: std::cell::OnceCell::new() }
+    }
+
     /// `body`, made of `pieces` (their shells in order), with its history over the operands
     /// (none where it is not known).
     pub(super) fn attach<B: std::borrow::Borrow<Body>>(&self, body: Body, pieces: &[(B, Built)]) -> Body {
@@ -92,18 +134,26 @@ impl Context<'_> {
     /// The faces (each a region of operand faces, and whether it is one untouched) and the edges
     /// (by identity) of the pieces, in order; `None` where something is not known.
     pub(super) fn history(&self, pieces: &[(&Body, &Built)]) -> Option<(Vec<FaceProv>, HashMap<mt::EdgeID, Vec<EdgeOrigin>>)> {
-        let caps = self.caps()?;
+        let caps = self.caps.get_or_init(|| self.caps()).as_deref()?;
         let mut faces = Vec::new();
         let mut edges = HashMap::new();
         for (body, built) in pieces {
             let (f, e) = match built {
-                Built::Extruded { section, lo, hi } => self.extruded(&caps, body, section, *lo, *hi)?,
-                Built::Sewn { specs, faces } => self.sewn(&caps, body, specs, faces.as_deref()?)?,
+                Built::Extruded { section, lo, hi } => self.extruded(caps, body, section, *lo, *hi)?,
+                Built::Sewn { specs, faces } => self.sewn(caps, body, specs, faces.as_deref()?)?,
+                Built::Traced => {
+                    let h = body.history()?;
+                    faces.extend(h.faces.iter().cloned());
+                    edges.extend(crate::record::edges_by_identity(body, h));
+                    continue;
+                }
             };
-            faces.extend(f);
+            faces.extend(f.into_iter().map(|(origins, whole)| crate::record::region(origins, whole)));
             edges.extend(e);
         }
-        Some((crate::record::regions(faces), edges))
+        // Pieces of one body can share an origin.
+        crate::record::mark_shared_split(&mut faces);
+        Some((faces, edges))
     }
 
     /// Both operands' caps, their outlines tagged.
@@ -157,16 +207,9 @@ impl Context<'_> {
         Some(Face { operand: t.operand, face: t.wall? })
     }
 
-    /// The operand's edges (by number) bounding exactly the faces `faces`, and touching vertex
-    /// `at` when given.
-    fn edges_between(&self, operand: usize, [f, g]: [usize; 2], at: Option<usize>) -> Vec<usize> {
-        let Some(index) = self.index.get(operand) else { return Vec::new() };
-        let Some(between) = index.between.get(&(f.min(g), f.max(g))) else { return Vec::new() };
-        between
-            .iter()
-            .copied()
-            .filter(|e| at.is_none_or(|v| index.bounds.get(*e).is_some_and(|(_, front, back)| *front == Some(v) || *back == Some(v))))
-            .collect()
+    /// The operand's edges (by number) bounding exactly the faces `faces`.
+    fn edges_between(&self, operand: usize, [f, g]: [usize; 2]) -> &[usize] {
+        self.index.get(operand).and_then(|index| index.between.get(&(f.min(g), f.max(g)))).map_or(&[], Vec::as_slice)
     }
 
     /// Is the wall over a segment tagged `t` between `lo` and `hi` its operand wall untouched?
@@ -199,7 +242,7 @@ impl Context<'_> {
         if let Some(e) = [t.edge, t.far].into_iter().flatten().find(beside) {
             return Some(vec![EdgeOrigin::Edge { operand: x, edge: e }]);
         }
-        let along: Vec<usize> = own.iter().flat_map(|c| self.edges_between(x, [w, *c], None)).collect();
+        let along: Vec<usize> = own.iter().flat_map(|c| self.edges_between(x, [w, *c])).copied().collect();
         match along.as_slice() {
             [e] => Some(vec![EdgeOrigin::Edge { operand: x, edge: *e }]),
             [] => Some(vec![EdgeOrigin::meet(Self::wall(t)?, Side::new(cap.iter().copied())?)]),
@@ -208,10 +251,11 @@ impl Context<'_> {
     }
 
     /// The origins of the edge between the walls over two segments where the first (tagged
-    /// `t1`) runs into the second (`t2`): the operand's edge there between its walls (at the
-    /// operand vertex the segments meet at, else the one edge between them), where two
-    /// operands' walls meet, or none within one wall (a segment split there).
-    fn junction(&self, t1: Tag, t2: Tag) -> Option<Vec<EdgeOrigin>> {
+    /// `t1`) runs into the second (`t2`), between levels `lo` and `hi`: the operand's edge there
+    /// between its walls (along the line through the operand vertex the segments meet at, else
+    /// the one edge between them), where two operands' walls meet, or none within one wall (a
+    /// segment split there).
+    fn junction(&self, t1: Tag, t2: Tag, lo: f64, hi: f64) -> Option<Vec<EdgeOrigin>> {
         let (p, q) = (Self::wall(t1)?, Self::wall(t2)?);
         if t1.operand != t2.operand {
             return Some(vec![EdgeOrigin::meet(p, q)]);
@@ -220,12 +264,47 @@ impl Context<'_> {
         match (t1.end, t2.start) {
             // At that vertex: the operand's edge there (a seam, within one wall), else two edges
             // of one wall's cap outline running on through it.
-            (Some(v), Some(u)) if v == u => self.one_edge(x, [w1, w2], Some(v)).or_else(|| (w1 == w2).then(Vec::new)),
+            (Some(v), Some(u)) if v == u => self.edge_over(x, [w1, w2], Some(v), lo, hi).or_else(|| (w1 == w2).then(Vec::new)),
             _ if w1 == w2 => Some(Vec::new()),
             // Elsewhere (a segment split off there, or read off another cap): only the operand's
             // walls are around the edge, so the operand has its edge between them there, and
-            // that is the one edge between them where there is one.
-            _ => self.one_edge(x, [w1, w2], None),
+            // that is the one edge between them over these levels where there is one.
+            _ => self.edge_over(x, [w1, w2], None, lo, hi),
+        }
+    }
+
+    /// The operand's edge between the walls `faces` that runs over the levels `lo` to `hi`,
+    /// when it has exactly one; with `at`, among the edges between them chained to that vertex.
+    /// The segments' vertex was read at one level and carried through others, and the line
+    /// between two walls is in several edges where vertices an earlier operation left (stations)
+    /// split it: the levels say which of them a slab's edge runs along.
+    fn edge_over(&self, operand: usize, faces: [usize; 2], at: Option<usize>, lo: f64, hi: f64) -> Option<Vec<EdgeOrigin>> {
+        let index = self.index.get(operand)?;
+        let between = self.edges_between(operand, faces);
+        if between.len() > 4096 {
+            return None;
+        }
+        let ends: Vec<(Option<usize>, Option<usize>)> =
+            between.iter().map(|e| index.bounds.get(*e).map_or((None, None), |(_, front, back)| (*front, *back))).collect();
+        // With `at`: the edges reached from it through shared vertices.
+        let mut chained = vec![at.is_none(); between.len()];
+        let mut reached: Vec<usize> = at.into_iter().collect();
+        while let Some(p) = reached.pop() {
+            for (k, (front, back)) in ends.iter().enumerate() {
+                if !chained[k] && (*front == Some(p) || *back == Some(p)) {
+                    chained[k] = true;
+                    reached.extend(if *front == Some(p) { *back } else { *front });
+                }
+            }
+        }
+        let height = |v: Option<usize>| v.and_then(|v| index.points.get(v)).map(|p| self.plane.height(*p));
+        let mut over = between.iter().zip(&ends).zip(chained).filter_map(|((e, (front, back)), chained)| {
+            let (a, b) = (height(*front)?, height(*back)?);
+            (chained && a.min(b) <= lo + self.tol && a.max(b) >= hi - self.tol).then_some(*e)
+        });
+        match (over.next(), over.next()) {
+            (Some(edge), None) => Some(vec![EdgeOrigin::Edge { operand, edge }]),
+            _ => None,
         }
     }
 
@@ -240,13 +319,13 @@ impl Context<'_> {
         if t1.operand != t2.operand {
             return Some(vec![EdgeOrigin::meet(p, q)]);
         }
-        self.one_edge(t1.operand, [t1.wall?, t2.wall?], None)
+        // An edge across the direction at a level: the levels cannot tell edges apart here.
+        self.one_edge(t1.operand, [t1.wall?, t2.wall?])
     }
 
-    /// The operand's edge between the faces `faces` (touching vertex `at` when given), when it
-    /// has exactly one.
-    fn one_edge(&self, operand: usize, faces: [usize; 2], at: Option<usize>) -> Option<Vec<EdgeOrigin>> {
-        match self.edges_between(operand, faces, at).as_slice() {
+    /// The operand's edge between the faces `faces`, when it has exactly one.
+    fn one_edge(&self, operand: usize, faces: [usize; 2]) -> Option<Vec<EdgeOrigin>> {
+        match self.edges_between(operand, faces) {
             [edge] => Some(vec![EdgeOrigin::Edge { operand, edge: *edge }]),
             _ => None,
         }
@@ -317,7 +396,7 @@ impl Context<'_> {
                 (Kind::Wall(t, ..), Kind::Cap(end)) | (Kind::Cap(end), Kind::Wall(t, ..)) => self.cap_edge(*t, tops.get(*end)?)?,
                 (Kind::Wall(..), Kind::Wall(..)) => {
                     let (t1, t2) = [e.absolute_front().id(), e.absolute_back().id()].iter().find_map(|v| junctions.get(v))?;
-                    self.junction(*t1, *t2)?
+                    self.junction(*t1, *t2, lo, hi)?
                 }
                 _ => return None,
             };
@@ -348,7 +427,7 @@ impl Context<'_> {
         let faces = built
             .iter()
             .map(|i| match specs.get(*i)? {
-                Spec::Wall { tag, .. } => Some((std::iter::once(Self::wall(*tag)?).collect(), false)),
+                Spec::Wall { slabs, .. } => Some((slabs.iter().map(|s| Self::wall(s.tag)).collect::<Option<_>>()?, false)),
                 Spec::Cap { .. } => cap_of.get(*i)?.clone().map(|o| (o, false)),
             })
             .collect::<Option<Vec<_>>>()?;
@@ -357,24 +436,34 @@ impl Context<'_> {
         for (e, fs) in edges.iter().zip(&bounds) {
             let [f, g] = fs.as_slice() else { return None };
             let (i, j) = (*built.get(*f)?, *built.get(*g)?);
-            let o = match (specs.get(i)?, specs.get(j)?) {
-                (Spec::Wall { tag, .. }, Spec::Cap { .. }) => self.cap_edge(*tag, cap_of.get(j)?.as_ref()?)?,
-                (Spec::Cap { .. }, Spec::Wall { tag, .. }) => self.cap_edge(*tag, cap_of.get(i)?.as_ref()?)?,
-                (Spec::Wall { tag: t, z0: a0, next: ni, at: pi, .. }, Spec::Wall { tag: u, z0: b0, next: nj, at: pj, .. }) => {
-                    if (a0 - b0).abs() > self.tol {
-                        // One over the other: the lower first.
-                        if a0 < b0 { self.stacked(*t, *u)? } else { self.stacked(*u, *t)? }
+            let (x, y) = (specs.get(i)?, specs.get(j)?);
+            // The edge's levels, lower first, and where it stands in plan.
+            let (front, back) = (from_p3(e.absolute_front().point()), from_p3(e.absolute_back().point()));
+            let (h1, h2) = (self.plane.height(front), self.plane.height(back));
+            let (lo, hi) = (h1.min(h2), h1.max(h2));
+            let o = match (x, y) {
+                (Spec::Wall { .. }, Spec::Cap { .. }) => self.cap_edge(x.end(lo, self.tol)?.tag, cap_of.get(j)?.as_ref()?)?,
+                (Spec::Cap { .. }, Spec::Wall { .. }) => self.cap_edge(y.end(lo, self.tol)?.tag, cap_of.get(i)?.as_ref()?)?,
+                (Spec::Wall { .. }, Spec::Wall { .. }) if hi - lo <= self.tol => {
+                    // One over the other at a level: the lower first.
+                    let (below, above) = match (x.top(lo, self.tol), y.bottom(lo, self.tol)) {
+                        (Some(s), Some(t)) => (s, t),
+                        _ => (y.top(lo, self.tol)?, x.bottom(lo, self.tol)?),
+                    };
+                    self.stacked(below.tag, above.tag)?
+                }
+                (Spec::Wall { .. }, Spec::Wall { .. }) => {
+                    // Side by side within a slab: the vertex the edge stands on (in plan) says
+                    // which way round they meet.
+                    let (s, t) = (x.slab(lo, hi)?, y.slab(lo, hi)?);
+                    let p = self.plane.to_local(front);
+                    let at = |q: &Vec2| p.dist(*q) < self.tol * 10.0;
+                    if s.next == j && at(&s.at) {
+                        self.junction(s.tag, t.tag, lo, hi)?
+                    } else if t.next == i && at(&t.at) {
+                        self.junction(t.tag, s.tag, lo, hi)?
                     } else {
-                        // The vertex the edge stands on (in plan) says which way round they meet.
-                        let p = self.plane.to_local(from_p3(e.absolute_front().point()));
-                        let at = |q: &Vec2| p.dist(*q) < self.tol * 10.0;
-                        if *ni == j && at(pi) {
-                            self.junction(*t, *u)?
-                        } else if *nj == i && at(pj) {
-                            self.junction(*u, *t)?
-                        } else {
-                            return None;
-                        }
+                        return None;
                     }
                 }
                 _ => return None,

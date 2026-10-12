@@ -128,8 +128,9 @@ fn substitute_composes_kept_split_merged_and_generated_faces() {
     assert_eq!(op2.operands, 4);
     let f = &op2.faces;
     assert_eq!(f[0], prov(vec![face(1, 0)], Change::Kept));
-    // Two pieces of one face, merged back: one origin, so not a merge across faces.
-    assert_eq!(f[1], prov(vec![face(1, 1)], Change::Split));
+    // Two pieces of one face, merged back: one origin, so not a merge across faces, and no
+    // other face comes from it, so not split.
+    assert_eq!(f[1], prov(vec![face(1, 1)], Change::Modified));
     assert_eq!(f[2], prov(vec![face(2, 4)], Change::Modified));
     assert_eq!(f[3], prov(vec![FaceOrigin::Profile { segment: 2 }], Change::Generated));
     assert_eq!(f[4], prov(vec![face(0, 5), face(3, 1)], Change::Merged));

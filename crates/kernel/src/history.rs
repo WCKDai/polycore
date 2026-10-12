@@ -250,11 +250,10 @@ impl History {
         let mut faces = Vec::with_capacity(self.faces.len());
         for f in &self.faces {
             let mut origins = BTreeSet::new();
-            let (mut split, mut kept) = (f.change == Change::Split, f.change == Change::Kept);
+            let mut kept = f.change == Change::Kept;
             for o in &f.origins {
                 let (os, change) = map_face(*o)?;
                 origins.extend(os);
-                split |= change == Some(Change::Split);
                 kept &= change.is_none_or(|c| c == Change::Kept);
             }
             let origins: Vec<FaceOrigin> = origins.into_iter().collect();
@@ -262,8 +261,6 @@ impl History {
                 Change::Generated
             } else if origins.len() > 1 {
                 Change::Merged
-            } else if split {
-                Change::Split
             } else if kept {
                 Change::Kept
             } else {

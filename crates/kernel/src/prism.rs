@@ -129,8 +129,10 @@ struct Prism {
 /// (`wall`), and the operand's vertices (by [`Index`]) the segment starts and ends at (`None`
 /// where it was split off a longer one). Where the wall ends with a slab of a stepped operand, at
 /// a cap whose outline runs along the whole segment, `far` is the operand's edge there (the
-/// segment may have been read off a cap at another level). `None` fields: not known (no history
-/// then).
+/// segment may have been read off a cap at another level). A segment carried through levels
+/// beside the same wall keeps the vertices it was read at, which may lie at another level: they
+/// say which line two walls meet along, not which edge of it. `None` fields: not known (no
+/// history then).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Tag {
     pub operand: usize,
@@ -1094,7 +1096,8 @@ fn sew_stack(plane: &Plane, d: Vec3, pa: &Prism, pb: &Prism, tol: f64, history: 
     sew_sections(plane, d, &levels, &slabs, tol, false, history)
 }
 
-/// Sew the exact sections between successive levels, including empty gaps.
+/// Sew the exact sections between successive levels, including empty gaps. With `coalesce`,
+/// walls over one segment through successive slabs are one face.
 fn sew_sections(
     plane: &Plane,
     d: Vec3,
@@ -1154,11 +1157,11 @@ fn sew_sections(
                     pieces.push((piece, lineage::Built::Extruded { section: tagged.region(r), lo: levels[first], hi: levels[end] }));
                 }
             } else {
-                let (piece, specs, faces) = sew_connected_sections(plane, d, &levels[first..=end], &slabs[first..end], tol, coalesce)
+                let (piece, built) = sew_connected_sections(plane, d, &levels[first..=end], &slabs[first..end], tol, coalesce, history)
                     .ok_or_else(|| KernelError::Failed("stepped prism construction failed".into()))??;
                 remaining_faces =
                     remaining_faces.checked_sub(piece.face_count()).ok_or_else(|| KernelError::Failed("prism output face budget".into()))?;
-                pieces.push((piece, lineage::Built::Sewn { specs, faces }));
+                pieces.push((piece, built));
             }
         }
         let mut old = std::collections::HashMap::new();
@@ -1199,7 +1202,6 @@ fn wall_key(s: &Seg2) -> Option<[u64; 6]> {
 }
 
 /// A genuinely stepped connected axial block has no single extrusion footprint.
-#[allow(clippy::type_complexity)]
 fn sew_connected_sections(
     plane: &Plane,
     d: Vec3,
@@ -1207,7 +1209,8 @@ fn sew_connected_sections(
     slabs: &[Section],
     tol: f64,
     coalesce: bool,
-) -> Option<Result<(Body, Vec<lineage::Spec>, Option<Vec<usize>>)>> {
+    history: &lineage::Context,
+) -> Option<Result<(Body, lineage::Built)>> {
     use crate::sew::{EdgeSpec, FaceSpec, SurfSpec};
     // Faces at each level: up where the slab below sticks out, down where the one above does.
     let diff = |x: &Section, y: &Section| -> Option<Section> {
@@ -1244,52 +1247,54 @@ fn sew_connected_sections(
     };
     // Exact oriented generated segments alone define a run. No support fitting,
     // proximity matching, or old face lineage is used here.
-    let mut runs: Vec<(usize, usize, Seg2)> = Vec::new();
+    // Each run, with what its wall is over in each of its slabs (for the result's history).
+    type Run = (usize, usize, Seg2, Vec<lineage::Slab>);
+    let mut runs: Vec<Run> = Vec::new();
     let mut last = std::collections::BTreeMap::new();
     let mut remaining = MAX_PLANAR_SEGMENTS * 2;
-    // What each face is over, for the result's history. Coalesced walls span several slabs
-    // and are not described: such a piece carries no history.
-    let mut specs: Vec<lineage::Spec> = Vec::new();
     for (i, slab) in slabs.iter().enumerate() {
-        let z0 = *levels.get(i)?;
         for (r, reg) in slab.regions.iter().enumerate() {
             for (l, lp) in std::iter::once(&reg.outer).chain(&reg.holes).enumerate() {
-                let first = specs.len();
+                // The loop's walls in order: the run each joins, its tag and where it ends.
+                let mut around: Vec<(usize, Tag, Vec2)> = Vec::new();
                 for (si, sg0) in lp.segs.iter().enumerate() {
                     let pieces = split_seg(sg0, &pts, tol)?;
                     let (n, tag) = (pieces.len(), slab.tag(r, l, si));
                     for (k, sg) in pieces.into_iter().enumerate() {
                         remaining = remaining.checked_sub(1)?;
                         let key = wall_key(&sg)?;
-                        if coalesce {
-                            if let Some(&index) = last.get(&key) {
-                                let run: &mut (usize, usize, Seg2) = runs.get_mut(index)?;
-                                if run.1 == i {
-                                    run.1 = i + 1;
-                                    continue;
-                                }
-                                // Duplicate oriented boundaries in one slab are not
-                                // a valid reason to reconstruct a larger wall.
-                                if run.1 == i + 1 {
-                                    return None;
-                                }
+                        let prior = if coalesce { last.get(&key).copied() } else { None };
+                        let run = match prior.map(|index| runs.get_mut(index).map(|run: &mut Run| (index, run))) {
+                            Some(None) => return None,
+                            Some(Some((index, run))) if run.1 == i => {
+                                run.1 = i + 1;
+                                index
                             }
-                            last.insert(key, runs.len());
-                        } else {
-                            specs.push(lineage::Spec::Wall { tag: tag.piece(k, n), z0, next: specs.len() + 1, at: sg.end() });
-                        }
-                        runs.push((i, i + 1, sg));
+                            // Duplicate oriented boundaries in one slab are not
+                            // a valid reason to reconstruct a larger wall.
+                            Some(Some((_, run))) if run.1 == i + 1 => return None,
+                            _ => {
+                                if coalesce {
+                                    last.insert(key, runs.len());
+                                }
+                                runs.push((i, i + 1, sg, Vec::new()));
+                                runs.len() - 1
+                            }
+                        };
+                        around.push((run, tag.piece(k, n), sg.end()));
                     }
                 }
-                // The loop's last wall runs into its first.
-                if !coalesce && let Some(lineage::Spec::Wall { next, .. }) = specs.last_mut() {
-                    *next = first;
+                // Each wall runs into the next one of its loop, the last into the first.
+                for (k, (run, tag, at)) in around.iter().enumerate() {
+                    let next = around.get((k + 1) % around.len())?.0;
+                    runs.get_mut(*run)?.3.push(lineage::Slab { tag: *tag, next, at: *at });
                 }
             }
         }
     }
     let mut faces: Vec<FaceSpec> = Vec::new();
     let mut sources = Vec::new();
+    let mut specs: Vec<lineage::Spec> = Vec::with_capacity(runs.len());
     let frame_is_orthonormal = plane.origin.is_finite()
         && plane.x.is_finite()
         && plane.y.is_finite()
@@ -1300,7 +1305,7 @@ fn sew_connected_sections(
         && plane.x.dot(plane.y).abs() <= 64. * f64::EPSILON
         && plane.x.dot(d).abs() <= 64. * f64::EPSILON
         && plane.y.dot(d).abs() <= 64. * f64::EPSILON;
-    for (first, end, sg) in runs {
+    for (first, end, sg, over) in runs {
         let (z0, z1) = (levels[first], levels[end]);
         let (a, b) = (sg.start(), sg.end());
         let mut lp3 = Vec::with_capacity(2 + 2 * (end - first));
@@ -1342,6 +1347,7 @@ fn sew_connected_sections(
             plane: generated_plane,
             coalesced: end > first + 1,
         }));
+        specs.push(lineage::Spec::Wall { levels: levels.get(first..=end)?.to_vec(), slabs: over });
     }
     for (z, up, rs) in &caps {
         for (ri, r) in rs.regions.iter().enumerate() {
@@ -1359,11 +1365,16 @@ fn sew_connected_sections(
             specs.push(lineage::Spec::Cap { section: rs.region(ri), z: *z, up: *up });
         }
     }
-    let sewn = crate::sew::sew_touching_with_sources(&faces, &sources);
+    let sewn = crate::sew::sew_touching_with_sources(&faces, &sources).map(|(body, from)| (body, lineage::Built::Sewn { specs, faces: from }));
+    // Generated walls joined on their common supports: the piece's history over the operands,
+    // carried through the joining.
     Some(if coalesce {
-        sewn.and_then(|(body, _)| Ok((body.regularize_generated_planar_faces()?, specs, None)))
+        sewn.and_then(|(body, built)| {
+            let body = history.attach(body.clone(), &[(&body, built)]).regularize_generated_planar_faces()?;
+            Ok((body, lineage::Built::Traced))
+        })
     } else {
-        sewn.map(|(body, from)| (body, specs, from))
+        sewn
     })
 }
 
@@ -1399,7 +1410,7 @@ fn simple_prism_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2
         let pb = prism_tagged(b, d, &plane, tol, ib)?;
         Some((d, plane, pa, pb))
     })?;
-    let history = lineage::Context { op, operands: [a, b], index: [ia.get(), ib.get()], plane, tol, heights: Some([(pa.lo, pa.hi), (pb.lo, pb.hi)]) };
+    let history = lineage::Context::new(op, [a, b], [ia.get(), ib.get()], plane, tol, Some([(pa.lo, pa.hi), (pb.lo, pb.hi)]));
     let (blo, bhi) = heights_of(b, &plane);
     let spans = blo <= pa.lo + tol && bhi >= pa.hi - tol;
     let same = (pb.lo - pa.lo).abs() < tol && (pb.hi - pa.hi).abs() < tol;
@@ -1613,7 +1624,7 @@ fn stack_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2]) -> O
     if slabs.iter().all(|s| s.regions.is_empty()) {
         return Some(Ok(None));
     }
-    let history = lineage::Context { op, operands: [a, b], index: [ia.get(), ib.get()], plane, tol, heights: None };
+    let history = lineage::Context::new(op, [a, b], [ia.get(), ib.get()], plane, tol, None);
     let coalesce = op == BoolOp::Cut
         && !a.regularization_protected
         && !b.regularization_protected
@@ -1801,14 +1812,7 @@ mod planar_tests {
             // Sections nothing is known of: no history, the construction alone is under test.
             let operand = crate::extrude(&Plane::XY, &[rectangle(Vec2::new(-1., -1.), Vec2::new(1., 1.))], 0., 1.).unwrap().pop().unwrap();
             let index = LazyIndex::new(&operand, 0);
-            let history = lineage::Context {
-                op: BoolOp::Cut,
-                operands: [&operand, &operand],
-                index: [index.get(), index.get()],
-                plane: Plane::XY,
-                tol: 1e-7,
-                heights: None,
-            };
+            let history = lineage::Context::new(BoolOp::Cut, [&operand, &operand], [index.get(), index.get()], Plane::XY, 1e-7, None);
             let old = sew_sections(&Plane::XY, Vec3::Z, &[0., 2., 20.], &slabs, 1e-7, false, &history).unwrap().unwrap();
             let merged = sew_sections(&Plane::XY, Vec3::Z, &[0., 2., 20.], &slabs, 1e-7, true, &history).unwrap().unwrap();
             let count = if curved { 2 } else { 4 };

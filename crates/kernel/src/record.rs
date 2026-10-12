@@ -136,6 +136,11 @@ pub(crate) fn build(
     Ok(traced(Body::new(solid)?, counts, faces, edges))
 }
 
+/// The origins of `body`'s edges by identity, from its history `h` (edges in its edge order).
+pub(crate) fn edges_by_identity<'a>(body: &'a Body, h: &'a History) -> impl Iterator<Item = (mt::EdgeID, Vec<EdgeOrigin>)> + 'a {
+    edge_order(body.solid.face_iter()).0.into_iter().zip(&h.edges).map(|(e, p)| (e.id(), p.origins.clone()))
+}
+
 /// The face and edge counts of `bodies`, for [`traced`].
 pub(crate) fn counts(bodies: &[&Body]) -> Vec<(usize, usize)> {
     bodies.iter().map(|b| (b.face_count(), b.edge_count())).collect()
