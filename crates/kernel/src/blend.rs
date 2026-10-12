@@ -209,15 +209,27 @@ fn blend_geometry(
 ) -> Result<(Solid, Rebuild)> {
     let s = setback(r, phi, shape);
     let tol = (size * 1e-7).max(1e-9);
-    // End faces and the side edges at each end. A side edge that the fillet's setback uses up
-    // exactly is consumed: the rail ends at its far vertex (`ca`, `cb`).
+    // The arc centre is r from both faces (inside the material for a convex edge, outside for a
+    // concave one), in the cross-section through `p`.
+    let centre = |p: Vec3| p + t1 * s + n1 * (r * side);
+    // Each end of the blend lies in one more face (the end face, square to the edge or at an
+    // angle) or, for a fillet, in two that meet at the edge's end (Vida, Martin and Várady 1994:
+    // trimlines joined across existing faces): the blend then crosses the edge between them,
+    // which is cut back to the crossing. The rails run parallel to the edge, set back by s in
+    // their side faces, and end in the end plane they reach (`ga` from f1, `gb` from f2). A side
+    // edge that the setback uses up exactly is consumed: the rail ends at its far vertex (`ca`,
+    // `cb`; one end face only).
     struct End {
         v: mt::Vertex,
-        g: usize,
+        g: Vec<usize>,
         e1: mt::Edge,
         e2: mt::Edge,
+        /// The edge between two end faces, and where the blend crosses it.
+        e3: Option<(mt::Edge, Vec3)>,
         a: Vec3,
         b: Vec3,
+        /// The end's section of the blend, from A to B (across both faces when two).
+        planes: Vec<(Vec3, Vec3)>,
         ca: Option<mt::Vertex>,
         cb: Option<mt::Vertex>,
     }
@@ -225,70 +237,98 @@ fn blend_geometry(
     for (v, p) in [(&v0, p0), (&v1, p1)] {
         let at_v: Vec<usize> = (0..faces.len()).filter(|i| faces.get(*i).is_some_and(|f| f.vertex_iter().any(|x| &x == v))).collect();
         let others: Vec<usize> = at_v.iter().copied().filter(|i| *i != i1 && *i != i2).collect();
-        let [g] = others[..] else { return Err(unsupported("each end of the edge must touch exactly one more face")) };
-        let gf = faces.get(g).ok_or_else(|| KernelError::Failed("face".into()))?;
-        let ng = plane_normal(gf).ok_or_else(|| unsupported("the faces at the edge ends must be planar"))?;
-        if shape == Shape::Round && ng.dot(d).abs() < 1.0 - 1e-9 {
-            return Err(unsupported("the faces at the edge ends must be perpendicular to the edge"));
-        }
-        if ng.dot(d).abs() < 1e-9 {
-            return Err(unsupported("an end face parallel to the edge"));
-        }
-        // Each rail is parallel to the original edge and set back by s in its side
-        // face. Slide its endpoint along d until it lies on the actual end plane.
-        let endpoint = |t: Vec3| {
-            let q = p + t * s;
-            if shape == Shape::Flat { q - d * (ng.dot(t) * s / ng.dot(d)) } else { q }
+        // The edge at v that face `fi` shares with face `g`, other than the blended edge.
+        let shared = |fi: usize, g: usize| -> Option<mt::Edge> {
+            let (f, gf) = (faces.get(fi)?, faces.get(g)?);
+            f.edge_iter().find(|e| e.id() != edge.id() && (e.front() == v || e.back() == v) && gf.edge_iter().any(|x| x.id() == e.id()))
         };
-        let (a, b) = (endpoint(t1), endpoint(t2));
-        // Edges at v shared by g with f1 and with f2.
-        let shared = |fi: usize| -> Result<mt::Edge> {
-            let f = faces.get(fi).ok_or_else(|| KernelError::Failed("face".into()))?;
-            f.edge_iter()
-                .find(|e| e.id() != edge.id() && (e.front() == v || e.back() == v) && gf.edge_iter().any(|x| x.id() == e.id()))
-                .ok_or_else(|| unsupported("unexpected corner topology"))
+        let (ga, gb) = match others[..] {
+            [g] => (g, g),
+            [x, y] if shape == Shape::Round && shared(i1, x).is_some() && shared(i2, y).is_some() => (x, y),
+            [x, y] if shape == Shape::Round && shared(i1, y).is_some() && shared(i2, x).is_some() => (y, x),
+            _ => return Err(unsupported("each end of the edge must touch exactly one more face")),
         };
-        let (e1, e2) = (shared(i1)?, shared(i2)?);
+        let normal = |g: usize| -> Result<Vec3> {
+            let n = faces.get(g).and_then(|f| plane_normal(f)).ok_or_else(|| unsupported("the faces at the edge ends must be planar"))?;
+            if n.dot(d).abs() < 1e-9 {
+                return Err(unsupported("an end face parallel to the edge"));
+            }
+            Ok(n)
+        };
+        let (na, nb) = (normal(ga)?, normal(gb)?);
+        // Slide a point of the cross-section through `p` along d onto the end plane through p.
+        let slide = |x: Vec3, n: Vec3| x - d * (n.dot(x - p) / n.dot(d));
+        let (a, b) = (slide(p + t1 * s, na), slide(p + t2 * s, nb));
+        let (e1, e2) = (
+            shared(i1, ga).ok_or_else(|| unsupported("unexpected corner topology"))?,
+            shared(i2, gb).ok_or_else(|| unsupported("unexpected corner topology"))?,
+        );
         let mut consumed: [Option<mt::Vertex>; 2] = [None, None];
-        for (k, (e, q, t, fi)) in [(&e1, a, t1, i1), (&e2, b, t2, i2)].into_iter().enumerate() {
+        for (k, (e, q, fi)) in [(&e1, a, i1), (&e2, b, i2)].into_iter().enumerate() {
             if !matches!(e.curve(), mt::Curve::Line(_)) {
                 return Err(unsupported("the edges at the corners must be straight"));
             }
             let far = if e.front() == v { e.back().clone() } else { e.front().clone() };
-            let other = vtx(&far);
-            let delta = other - p;
-            if shape == Shape::Round {
-                // Fillets retain the square-end check: the original corner edge
-                // must run in the setback direction and have enough length left,
-                // or exactly the setback (the edge is consumed).
-                let along = delta.dot(t);
-                if (delta - t * along).len() > tol * 100.0 + 1e-7 || along < s - tol {
-                    return Err(unsupported("the blend is larger than the neighbouring faces"));
-                }
-                if along <= s + tol
-                    && let Some(slot) = consumed.get_mut(k)
-                {
+            let delta = vtx(&far) - p;
+            let len = delta.len();
+            let dir = delta.normalized().ok_or_else(|| unsupported("zero-length corner edge"))?;
+            let along = (q - p).dot(dir);
+            if (q - p - dir * along).len() > tol * 100.0 + 1e-7 {
+                return Err(unsupported("the blend is larger than the neighbouring faces"));
+            }
+            // A fillet's setback that uses up the side edge exactly consumes it.
+            if shape == Shape::Round && ga == gb && (along - len).abs() <= tol {
+                if let Some(slot) = consumed.get_mut(k) {
                     *slot = Some(far);
                 }
                 continue;
             }
-            let len = delta.len();
-            let dir = delta.normalized().ok_or_else(|| unsupported("zero-length corner edge"))?;
-            let along = (q - p).dot(dir);
-            // An inner rim extends the neighbouring rim edge away from its other
-            // vertex. This is valid only within the trimmed side face.
-            if (q - p - dir * along).len() > tol * 100.0 + 1e-7
-                || along >= len - tol
-                || (along < 0.0 && !faces.get(fi).is_some_and(|f| extension_fits(f, p, q, tol)))
-            {
+            // A rail ending before the old corner extends the neighbouring rim edge away from its
+            // other vertex: valid only within the trimmed side face.
+            if along >= len - tol || (along < 0.0 && !faces.get(fi).is_some_and(|f| extension_fits(f, p, q, tol))) {
                 return Err(unsupported("the blend is larger than the neighbouring faces"));
             }
         }
+        // Across two end faces: where the blend's cylinder crosses the edge between them, on the
+        // blend's side of the axis (between its two rails).
+        let e3 = if ga == gb {
+            None
+        } else {
+            let (Some(fa), Some(fb)) = (faces.get(ga), faces.get(gb)) else { return Err(KernelError::Failed("face".into())) };
+            let e3 = fa
+                .edge_iter()
+                .find(|e| (e.front() == v || e.back() == v) && fb.edge_iter().any(|x| x.id() == e.id()))
+                .ok_or_else(|| unsupported("unexpected corner topology"))?;
+            if !matches!(e3.curve(), mt::Curve::Line(_)) {
+                return Err(unsupported("the edges at the corners must be straight"));
+            }
+            let far = if e3.front() == v { vtx(e3.back()) } else { vtx(e3.front()) };
+            let (len3, u) = (far.dist(p), (far - p).normalized().ok_or_else(|| unsupported("zero-length corner edge"))?);
+            let c0 = centre(p);
+            let perp = |x: Vec3| x - d * x.dot(d);
+            let (w, up) = (perp(p - c0), perp(u));
+            // |w + λ up|² = r²
+            let (qa, qb, qc) = (up.len2(), 2.0 * w.dot(up), w.len2() - r * r);
+            let disc = qb * qb - 4.0 * qa * qc;
+            if qa < 1e-18 || disc < 0.0 {
+                return Err(unsupported("the blend does not cross the edge between the end faces"));
+            }
+            let (ra, rb) = (perp(p + t1 * s - c0), perp(p + t2 * s - c0));
+            let angle = |x: Vec3, y: Vec3| (x.dot(y) / (x.len() * y.len()).max(1e-300)).clamp(-1.0, 1.0).acos();
+            let between = |x: Vec3| (angle(ra, x) + angle(x, rb) - angle(ra, rb)).abs() < 1e-6;
+            let root = [(-qb - disc.sqrt()) / (2.0 * qa), (-qb + disc.sqrt()) / (2.0 * qa)]
+                .into_iter()
+                .filter(|l| *l > tol && *l < len3 - tol)
+                .find(|l| between(w + up * *l))
+                .ok_or_else(|| unsupported("the blend does not cross the edge between the end faces"))?;
+            Some((e3.clone(), p + u * root))
+        };
+        let planes = if ga == gb { vec![(p, na)] } else { vec![(p, na), (p, nb)] };
         let [ca, cb] = consumed;
-        ends.push(End { v: v.clone(), g, e1, e2, a, b, ca, cb });
+        ends.push(End { v: v.clone(), g: if ga == gb { vec![ga] } else { vec![ga, gb] }, e1, e2, e3, a, b, planes, ca, cb });
     }
     let [end0, end1] = &ends[..] else { return Err(KernelError::Failed("ends".into())) };
-    if end0.g == end1.g {
+    if end0.g.iter().any(|g| end1.g.contains(g)) {
         return Err(unsupported("both ends touch the same face"));
     }
     if (end1.a - end0.a).dot(d) <= tol || (end1.b - end0.b).dot(d) <= tol {
@@ -316,42 +356,70 @@ fn blend_geometry(
     let rail_a = used_up(i1, &end0.ca, &end1.ca)?;
     let rail_b = used_up(i2, &end0.cb, &end1.cb)?;
     let vertex = |c: &Option<mt::Vertex>, p: Vec3| c.clone().unwrap_or_else(|| builder::vertex(p3(p)));
-    let a0 = vertex(&end0.ca, end0.a);
-    let b0 = vertex(&end0.cb, end0.b);
-    let a1 = vertex(&end1.ca, end1.a);
-    let b1 = vertex(&end1.cb, end1.b);
-    // Corner curves on the end faces (A → B) and the blend surface. The arc centre is r from
-    // both faces (inside the material for a convex edge, outside for a concave one); the arc's
-    // middle is the point nearest the old edge.
-    let centre = |p: Vec3| p + t1 * s + n1 * (r * side);
-    let arc_mid = |p: Vec3| {
-        let c = centre(p);
-        c + (p - c).normalized().unwrap_or(-n1) * r
-    };
-    let corner = |a: &mt::Vertex, b: &mt::Vertex, p: Vec3| -> mt::Edge {
-        match shape {
-            Shape::Round => builder::circle_arc(a, b, p3(arc_mid(p))),
-            Shape::Flat => builder::line(a, b),
+    // Corner curves on the end faces (A → B): the blend's cross-section through the end vertex,
+    // slid along the edge onto each end plane (an ellipse arc; the circle itself on a square
+    // end face).
+    let section = |p: Vec3, va: &mt::Vertex, vb: &mt::Vertex, from: Vec3, to: Vec3, plane: (Vec3, Vec3)| -> Result<mt::Edge> {
+        if shape == Shape::Flat {
+            return Ok(builder::line(va, vb));
         }
+        let c = centre(p);
+        let mid = c + ((from - c) + (to - c)).normalized().unwrap_or(-n1) * r;
+        let (o, n) = plane;
+        if n.dot(d).abs() >= 1.0 - 1e-12 {
+            return Ok(builder::circle_arc(va, vb, p3(mid)));
+        }
+        let arc = builder::circle_arc(&builder::vertex(p3(from)), &builder::vertex(p3(to)), p3(mid));
+        let den = d.dot(n);
+        // x ↦ x − d ((x − o)·n) / (d·n), column-major.
+        let col = |j: usize| {
+            let ej = [Vec3::X, Vec3::Y, Vec3::Z][j];
+            ej - d * (ej.dot(n) / den)
+        };
+        let (c0, c1, c2) = (col(0), col(1), col(2));
+        let tr = d * (o.dot(n) / den);
+        let mat = mt::Matrix4::new(c0.x, c0.y, c0.z, 0.0, c1.x, c1.y, c1.z, 0.0, c2.x, c2.y, c2.z, 0.0, tr.x, tr.y, tr.z, 1.0);
+        let mut curve = arc.curve();
+        mt::Transformed::transform_by(&mut curve, mat);
+        Ok(mt::Edge::new(va, vb, curve))
     };
-    let c0 = corner(&a0, &b0, p0);
-    let c1 = corner(&a1, &b1, p1);
-    let la = rail_a.clone().unwrap_or_else(|| builder::line(&a0, &a1));
-    let lb = rail_b.clone().unwrap_or_else(|| builder::line(&b0, &b1));
+    let mut corners: Vec<(mt::Vertex, mt::Vertex, Vec<mt::Edge>, Option<mt::Vertex>)> = Vec::new();
+    for (end, p) in [(end0, p0), (end1, p1)] {
+        let (va, vb) = (vertex(&end.ca, end.a), vertex(&end.cb, end.b));
+        let (sa, sb) = (p + t1 * s, p + t2 * s);
+        let (chain, vq) = match (&end.e3, &end.planes[..]) {
+            (None, [plane]) => (vec![section(p, &va, &vb, sa, sb, *plane)?], None),
+            (Some((_, q)), [pa, pb]) => {
+                let vq = builder::vertex(p3(*q));
+                let sq = *q - d * (*q - p).dot(d);
+                (vec![section(p, &va, &vq, sa, sq, *pa)?, section(p, &vq, &vb, sq, sb, *pb)?], Some(vq))
+            }
+            _ => return Err(KernelError::Failed("blend end".into())),
+        };
+        corners.push((va, vb, chain, vq));
+    }
+    let [(a0, b0, c0, q0), (a1, b1, c1, q1)] = &corners[..] else { return Err(KernelError::Failed("ends".into())) };
+    let la = rail_a.clone().unwrap_or_else(|| builder::line(a0, a1));
+    let lb = rail_b.clone().unwrap_or_else(|| builder::line(b0, b1));
 
-    // Substitutions: side edges at the ends now stop at A/B (consumed ones are dropped); the
-    // blended edge moves to A or B.
+    // Substitutions: side edges at the ends now stop at A/B (consumed ones are dropped), an edge
+    // between two end faces stops where the blend crosses it; the blended edge moves to A or B.
     let mut subst: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
     let mut dropped: Vec<mt::EdgeID> = Vec::new();
-    for (end, a, b) in [(end0, &a0, &b0), (end1, &a1, &b1)] {
+    let shorten = |e: &mt::Edge, v: &mt::Vertex, nv: &mt::Vertex| {
+        let (f, bk) = (e.absolute_front(), e.absolute_back());
+        if f == v { builder::line(nv, bk) } else { builder::line(f, nv) }
+    };
+    for (end, a, b, q) in [(end0, a0, b0, q0), (end1, a1, b1, q1)] {
         for (e, nv, used) in [(&end.e1, a, &end.ca), (&end.e2, b, &end.cb)] {
             if used.is_some() {
                 dropped.push(e.id());
                 continue;
             }
-            let (f, bk) = (e.absolute_front(), e.absolute_back());
-            let ne = if f == &end.v { builder::line(nv, bk) } else { builder::line(f, nv) };
-            subst.insert(e.id(), ne);
+            subst.insert(e.id(), shorten(e, &end.v, nv));
+        }
+        if let (Some((e3, _)), Some(q)) = (&end.e3, q) {
+            subst.insert(e3.id(), shorten(e3, &end.v, q));
         }
     }
     // The side edges at the ends are pieces of themselves; the rails and corner curves are new.
@@ -370,10 +438,12 @@ fn blend_geometry(
             let mut m = subst.clone();
             m.insert(edge.id(), lb.clone());
             rebuild_face(f, &m, &[])?
-        } else if i == end0.g {
-            rebuild_face_dropping(f, &subst, &dropped, std::slice::from_ref(&c0))?
-        } else if i == end1.g {
-            rebuild_face_dropping(f, &subst, &dropped, std::slice::from_ref(&c1))?
+        } else if end0.g.contains(&i) {
+            rebuild_face_dropping(f, &subst, &dropped, c0)?
+        } else if end1.g.contains(&i) {
+            rebuild_face_dropping(f, &subst, &dropped, c1)?
+        } else if f.edge_iter().any(|e| subst.contains_key(&e.id())) {
+            rebuild_face(f, &subst, &[])?
         } else {
             (*f).clone()
         };
@@ -382,19 +452,39 @@ fn blend_geometry(
     }
     // The blend face uses each new edge opposite to its neighbour.
     let f1_forward = faces.get(i1).is_some_and(|f| f.boundaries().iter().any(|w| w.edge_iter().any(|e| e.id() == edge.id() && e.front() == &v0)));
-    let wire: mt::Wire = if f1_forward {
-        vec![c0.clone(), lb.clone(), c1.inverse(), la.inverse()].into()
+    let reversed = |chain: &[mt::Edge]| chain.iter().rev().map(|e| e.inverse()).collect::<Vec<_>>();
+    let mut edges_out: Vec<mt::Edge> = Vec::new();
+    if f1_forward {
+        edges_out.extend(c0.iter().cloned());
+        edges_out.push(lb.clone());
+        edges_out.extend(reversed(c1));
+        edges_out.push(la.inverse());
     } else {
-        vec![la.clone(), c1.clone(), lb.inverse(), c0.inverse()].into()
-    };
+        edges_out.push(la.clone());
+        edges_out.extend(c1.iter().cloned());
+        edges_out.push(lb.inverse());
+        edges_out.extend(reversed(c0));
+    }
+    let wire: mt::Wire = edges_out.into();
     let blend_face = match shape {
         Shape::Flat => builder::try_attach_plane(&[wire]).map_err(|e| KernelError::Failed(format!("chamfer face: {e}")))?,
         Shape::Round => {
-            let swept: mt::Face = builder::tsweep(&c0, v3(p1 - p0));
+            // The cylinder, from a cross-section before the first end to one past the second, so
+            // it holds the end sections wherever the end planes slide them.
+            let reach = ends
+                .iter()
+                .flat_map(|e| e.planes.iter().map(|(_, n)| (s + r) * (1.0 - n.dot(d).powi(2)).max(0.0).sqrt() / n.dot(d).abs()))
+                .fold(0.0, f64::max)
+                + r;
+            let start = p0 - d * reach;
+            let (sa, sb) = (start + t1 * s, start + t2 * s);
+            let c = centre(start);
+            let mid = c + ((sa - c) + (sb - c)).normalized().unwrap_or(-n1) * r;
+            let base = builder::circle_arc(&builder::vertex(p3(sa)), &builder::vertex(p3(sb)), p3(mid));
+            let swept: mt::Face = builder::tsweep(&base, v3(p1 - p0 + d * (2.0 * reach)));
             let mut surf = swept.oriented_surface();
             // Outward normal at the arc middle: away from the centre on a convex edge (the
             // centre is in the material), toward it on a concave one.
-            let (c, mid) = (centre(p0), arc_mid(p0));
             let outward = (mid - c) * (-side);
             use mt::{ParametricSurface3D, SearchParameter};
             if let Some((u, v)) = surf.search_parameter(p3(mid), None, 100) {
@@ -1113,8 +1203,16 @@ mod tests {
                 assert!(result.solid.vertex_iter().any(|v| vtx(&v).dist(point) < 1e-8));
             }
             assert!(blend(&body, &pick, 25.0, Shape::Flat, "chamfer").is_err());
-            // Oblique fillet caps need elliptical trims, which this local path does not build.
-            assert!(blend(&body, &pick, 2.0, Shape::Round, "fillet").is_err());
+            // A fillet ends in each sloped end plane along an ellipse: the removed section's
+            // length is taken at its centroid, c from the edge.
+            let rounded = blend(&body, &pick, 2.0, Shape::Round, "fillet").unwrap();
+            let (area, c) =
+                ((1.0 - std::f64::consts::PI / 4.0) * 4.0, 2.0 * (10.0 - 3.0 * std::f64::consts::PI) / (3.0 * (4.0 - std::f64::consts::PI)));
+            let removed = area * (40.0 - 2.0 * slope * c);
+            let actual = crate::measure(&body).unwrap().volume - crate::measure(&rounded).unwrap().volume;
+            // `measure` reads a round about 6e-4 heavy, square ends too.
+            assert!((actual - removed).abs() < 1e-3 * removed, "{actual} vs {removed}");
+            assert!(rounded.validity().is_empty());
         }
     }
 }

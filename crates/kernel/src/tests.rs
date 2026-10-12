@@ -176,9 +176,87 @@ fn fillets_on_several_edges_and_angles() {
     let cut = 24000.0 - measure(&two).unwrap().volume;
     let a = 4.0 * (1.0 - PI / 4.0);
     assert!(cut > a * (20.0 + 30.0 - 2.0) && cut < a * 50.0, "{cut}");
-    // Concave edge: not supported.
+    // Concave edge where a post stands on the plate: the round adds material, its end caps
+    // extending the post's end faces down onto the plate.
     let u = boolean(&b, &box_solid(Vec3::new(10.0, 10.0, 15.0), Vec3::new(20.0, 20.0, 30.0)).unwrap(), BoolOp::Union).unwrap().unwrap();
-    assert!(fillet(&u, &[Vec3::new(15.0, 10.0, 20.0)], 1.0).is_err());
+    let f = fillet(&u, &[Vec3::new(15.0, 10.0, 20.0)], 1.0).unwrap();
+    let added = measure(&f).unwrap().volume - measure(&u).unwrap().volume;
+    assert!(rel(added, (1.0 - PI / 4.0) * 10.0) < 1e-3, "{added}");
+    assert!(f.validity().is_empty());
+    assert_eq!(f.lumps().unwrap().len(), 1);
+}
+
+#[test]
+fn fillet_ends_in_an_end_face_at_an_angle() {
+    // #215: the round ends in the end face's plane along an ellipse (its section) when that face
+    // is not square to the edge. A prism on a trapezoid (0,0) (40,0) (30,20) (0,20), 10 high: the
+    // top edge along y = 0 ends at x = 0 (square) and in the face x = 40 - y/2 (at an angle).
+    let r: f64 = 2.0;
+    let (area, c) = ((1.0 - PI / 4.0) * r * r, r * (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI)));
+    let trapezoid = |far: f64| {
+        let pts = [Vec2::new(0.0, 0.0), Vec2::new(40.0, 0.0), Vec2::new(far, 20.0), Vec2::new(0.0, 20.0)];
+        extrude(&Plane::XY, &[Region2 { outer: Loop2::polygon(&pts), holes: vec![] }], 0.0, 10.0).unwrap().pop().unwrap()
+    };
+    // The removed section's length at depth y into the top face is 40 + (far - 40) y / 20; its
+    // mean over the section is taken at the section's centroid (c from the edge).
+    for far in [30.0, 50.0] {
+        let b = trapezoid(far);
+        let v0 = measure(&b).unwrap().volume;
+        let f = fillet(&b, &[Vec3::new(20.0, 0.0, 10.0)], r).unwrap();
+        let want = v0 - area * (40.0 + (far - 40.0) * c / 20.0);
+        let m = measure(&f).unwrap();
+        assert!(rel(m.volume, want) < 2e-4, "far {far}: {} vs {want}", m.volume);
+        assert_eq!(f.lumps().unwrap().len(), 1);
+        assert!(f.validity().is_empty(), "far {far}: {:?}", f.validity());
+    }
+}
+
+#[test]
+fn fillet_ending_across_two_faces() {
+    // #215: a plate's outline chamfered, then the mitre where two chamfers meet at a corner
+    // rounded. The mitre runs from the top face (ending in it at an angle) down to the corner
+    // where two side faces meet; the round ends across both, cutting back the vertical edge.
+    let (r, k) = (2.0, 5.0);
+    let b = box_solid(Vec3::ZERO, Vec3::new(100.0, 50.0, 20.0)).unwrap();
+    let outline = [Vec3::new(50.0, 0.0, 20.0), Vec3::new(100.0, 25.0, 20.0), Vec3::new(50.0, 50.0, 20.0), Vec3::new(0.0, 25.0, 20.0)];
+    let c = chamfer(&b, &outline, k).unwrap();
+    let f = fillet(&c, &[Vec3::new(k / 2.0, k / 2.0, 20.0 - k / 2.0)], r).unwrap();
+    assert!(f.validity().is_empty(), "{:?}", f.validity());
+    assert_eq!(f.lumps().unwrap().len(), 1);
+    // The removed material, by definition: inside the plate, between the two chamfers and the
+    // round, i.e. outside the round's cylinder and on the corner's side of both lines where it
+    // touches the chamfers (each at the setback s = r cot(φ/2) from the mitre, φ = 120° between
+    // the chamfers). Sampled at pseudo-random points (a regular grid aliases with the region's
+    // thin slivers along the chamfers): about 1.89 mm³, standard error about 0.02.
+    let d = Vec3::new(1.0, 1.0, 1.0).normalized().unwrap();
+    let (n1, n2) = (Vec3::new(0.0, -1.0, 1.0).normalized().unwrap(), Vec3::new(-1.0, 0.0, 1.0).normalized().unwrap());
+    // In each chamfer, square to the mitre and away from the other chamfer.
+    let into = |n: Vec3, other: Vec3| {
+        let t = n.cross(d).normalized().unwrap();
+        if t.dot(other) < 0.0 { t } else { -t }
+    };
+    let (t1, t2) = (into(n1, n2), into(n2, n1));
+    let phi = (-n1.dot(n2)).acos();
+    let s = r / (phi / 2.0).tan();
+    let corner = Vec3::new(0.0, 0.0, 20.0 - k);
+    let axis_at = corner + t1 * s - n1 * r;
+    let removed_at = |q: Vec3| {
+        let u = q - axis_at;
+        q.z - q.x <= 15.0 && q.z - q.y <= 15.0 && (q - corner).dot(t1) < s && (q - corner).dot(t2) < s && (u - d * u.dot(d)).len() > r
+    };
+    let (lo, span) = (Vec3::new(0.0, 0.0, 20.0 - k - 2.0 * r), k + 2.0 * r);
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut unit = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let samples = 4_000_000;
+    let hits = (0..samples).filter(|_| removed_at(lo + Vec3::new(unit(), unit(), unit()) * span)).count();
+    let removed = span.powi(3) * hits as f64 / samples as f64;
+    let lost = measure(&c).unwrap().volume - measure(&f).unwrap().volume;
+    assert!((lost - removed).abs() < 0.07, "{lost} vs {removed}");
 }
 
 #[test]
