@@ -324,6 +324,39 @@ fn fillet_consuming_a_side_face_makes_a_full_round() {
 }
 
 #[test]
+fn fillet_max_finds_the_largest_radius_that_works() {
+    let too_large = |b: &Body, edges: &[Vec3], r: f64| matches!(fillet(b, edges, r), Err(KernelError::TooLarge(_)));
+    // Two rounds on a 6 mm face: up to 3 (a full round), although after the first round at
+    // 3.5 the next edge alone would take only 2.5.
+    let b = box_solid(Vec3::new(14.0, 0.0, 0.0), Vec3::new(28.0, 6.0, 10.0)).unwrap();
+    let mids = [Vec3::new(14.0, 0.0, 5.0), Vec3::new(28.0, 0.0, 5.0), Vec3::new(14.0, 6.0, 5.0), Vec3::new(28.0, 6.0, 5.0)];
+    assert!(too_large(&b, &mids, 3.5));
+    let (r, body) = fillet_max(&b, &mids, 3.5).unwrap();
+    assert_eq!(r, 3.0);
+    assert!(rel(measure(&body).unwrap().volume, 840.0 - (4.0 - PI) * 90.0) < 2e-4);
+    // A 2 mm disc's top edge: up to 2 (the wall used up).
+    let disc = cylinder(Vec3::ZERO, Vec3::Z, 13.0, 2.0).unwrap();
+    let top = [Vec3::new(0.0, 13.0, 2.0), Vec3::new(0.0, -13.0, 2.0)];
+    assert!(too_large(&disc, &top, 2.5));
+    assert_eq!(fillet_max(&disc, &top, 2.5).map(|x| x.0), Some(2.0));
+    // Walls of different heights: at the shortest one's height only that wall would be used up,
+    // which is refused, so the largest radius is just below it (to the search's 3 digits).
+    let notched = boolean(
+        &box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 10.0)).unwrap(),
+        &box_solid(Vec3::new(35.0, -1.0, -1.0), Vec3::new(41.0, 5.0, 3.0)).unwrap(),
+        BoolOp::Cut,
+    )
+    .unwrap()
+    .unwrap();
+    let outline = [Vec3::new(20.0, 0.0, 10.0), Vec3::new(40.0, 15.0, 10.0), Vec3::new(20.0, 30.0, 10.0), Vec3::new(0.0, 15.0, 10.0)];
+    assert!(too_large(&notched, &outline, 8.0));
+    let (r, _) = fillet_max(&notched, &outline, 8.0).unwrap();
+    assert!((r - 6.999).abs() < 1e-9, "{r}");
+    // No edge there: no radius.
+    assert!(fillet_max(&b, &[Vec3::new(500.0, 0.0, 5.0)], 1.0).is_none());
+}
+
+#[test]
 fn tapered_extrudes() {
     // 40 x 40 square, 30 up, 10° outward: a frustum.
     let sq = Region2 {

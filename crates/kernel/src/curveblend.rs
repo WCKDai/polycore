@@ -691,7 +691,7 @@ fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, 
             let (ta, oa) = a.as_ref().map(at).unwrap_or((0.0, 0.0));
             let (tb, ob) = b.as_ref().map(at).unwrap_or((1.0, 0.0));
             if oa > size * 1e-5 || ob > size * 1e-5 || ta < -1e-9 || tb > 1.0 + 1e-9 || tb - ta < 1e-6 {
-                return Err(unsupported("the blend is larger than the neighbouring faces"));
+                return Err(crate::blend::too_large("the blend is larger than the neighbouring faces"));
             }
             let a = a.unwrap_or_else(|| seam.front().clone());
             let b = b.unwrap_or_else(|| seam.back().clone());

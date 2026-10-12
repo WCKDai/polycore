@@ -66,7 +66,7 @@ mod thread_tests;
 mod topo;
 mod tspline;
 
-pub use blend::{ChamferSide, chamfer, chamfer_sides, fillet};
+pub use blend::{ChamferSide, chamfer, chamfer_sides, fillet, fillet_max};
 pub use blend_corner::fillet_radii;
 pub use blend_variable::{fillet_chord, fillet_variable, fillet_variable_points};
 pub use body::{Body, CapSignature, EdgeInfo, FaceInfo, FacePaint, FaceSource, Paint};
@@ -105,6 +105,10 @@ pub enum KernelError {
     Invalid(String),
     #[error("the operation failed: {0}")]
     Failed(String),
+    /// A blend or other size too large for the geometry around it (a smaller size may work);
+    /// shown like any feature that isn't supported yet.
+    #[error("the operation failed: not supported yet: {0}")]
+    TooLarge(String),
     /// The third-party kernel panicked; the model is unchanged.
     #[error("kernel internal error: {0}")]
     Internal(String),
