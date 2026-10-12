@@ -357,7 +357,12 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         };
         match &r {
             Some(body) => {
-                let v = volume(body);
+                // Measured as the operands were: a coarser mesh of a plate with many holes
+                // overstates its volume by more than the slack.
+                let v = match &meshes {
+                    (Some(_), Some(_)) => body.tessellate_with(tol_m, true).map(|m| m.measure().volume).unwrap_or(f64::NAN),
+                    _ => volume(body),
+                };
                 let bounds = match op {
                     BoolOp::Union => v >= va.max(vb) - slack && v <= va + vb + slack,
                     BoolOp::Cut => v >= va - vb - slack && v <= va + slack,

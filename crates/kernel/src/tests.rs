@@ -1799,8 +1799,9 @@ fn loft_section_order_gives_the_same_body() {
 
 #[test]
 fn tangent_holes_pinch_alike() {
-    // Holes at ±15 and ±25 touch along a line (x = ±20); ±30 overlaps ±25. The ±25 wall is cut
-    // in two at the pinch, the same way on both sides (as Fusion counts it).
+    // Holes at ±15 and ±25 touch along a line (x = ±20); ±30 overlaps ±25. A tangent line
+    // contact does not split a face (#307, as the reference kernel counts it): the ±25 wall is one
+    // face on both sides, so 6 planes and 6 hole walls.
     let mut b = box_solid(Vec3::new(-50.0, -20.0, 0.0), Vec3::new(50.0, 20.0, 5.0)).unwrap();
     for x in [15.0, 25.0, 30.0, -15.0, -25.0, -30.0] {
         let plane = Plane::XY.offset(-1.0);
@@ -1809,7 +1810,7 @@ fn tangent_holes_pinch_alike() {
         b = boolean(&b, &t, BoolOp::Cut).unwrap().unwrap();
     }
     let m = measure(&b).unwrap();
-    assert_eq!(m.merged.faces, 14, "{:?}", m.merged);
+    assert_eq!(m.merged.faces, 12, "{:?}", m.merged);
 }
 
 /// A d10 tube bent at R5: the inside of the bend is a horn torus pinched to a point. One torus

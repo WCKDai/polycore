@@ -492,6 +492,24 @@ pub fn merged_topology(b: &Body, mesh: &Mesh) -> Result<TopoCounts> {
             }
         }
     }
+    // Two tangent holes touch along a line that both carry: there four faces meet, two on
+    // each hole's surface. Each surface's two pieces are one face, as for any other edge.
+    for (ei, faces) in &edge_faces {
+        if faces.len() <= 2 || faces.len() > 8 || (keep_split && poly(*ei).is_some_and(|pl| crate::heal::on_split_line(pl, b_keep))) {
+            continue;
+        }
+        for (i, &a) in faces.iter().enumerate() {
+            for &b in faces.iter().skip(i + 1) {
+                let analytic = !matches!(surfs.get(a), Some(Surf::Other(_)) | None);
+                if analytic && same_surface(&surfs, &verts, poly(*ei), a, b, tol * 10.0) {
+                    let (ra, rb) = (find(&mut fp, a), find(&mut fp, b));
+                    if let Some(s) = fp.get_mut(ra) {
+                        *s = rb;
+                    }
+                }
+            }
+        }
+    }
     let mut groups: BTreeMap<usize, usize> = BTreeMap::new();
     let mut face_types: BTreeMap<String, usize> = BTreeMap::new();
     for f in 0..nf {

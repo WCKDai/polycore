@@ -743,6 +743,32 @@ fn crossings(s: &Seg2, t: &Seg2, tol: f64) -> Vec<(f64, f64)> {
 /// crossing and flip the parity of points level with the corner. Arcs decide their own ends
 /// within an angular tolerance (below), so joints with an arc keep that rule.
 fn inside_loop(lp: &Loop2, p: Vec2) -> bool {
+    // A ray through a vertex or grazing an arc's top or bottom is decided by the half-open
+    // rule, which needs both curves meeting there to agree on that point exactly. Arcs read
+    // back from a solid (a patterned hole's two halves) can disagree by a few ulps, so one half
+    // counts the touch and the other misses it. Move the ray off such points: a shift far below
+    // any modelling tolerance cannot change the answer for a point that is not on the loop.
+    let scale = 1.0 + p.x.abs().max(p.y.abs());
+    // A point on the loop keeps the half-open answer.
+    if lp.segs.iter().any(|s| s.point_at(s.closest_param(p)).dist(p) < scale * 1e-9) {
+        return inside_loop_ray(lp, p);
+    }
+    let grazes = |q: Vec2| {
+        let near = |y: f64| (y - q.y).abs() < scale * 1e-9;
+        lp.segs.iter().any(|s| {
+            near(s.start().y)
+                || match *s {
+                    Seg2::Arc { center, radius, .. } => near(center.y + radius) || near(center.y - radius),
+                    _ => false,
+                }
+        })
+    };
+    let ray = [0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0].into_iter().map(|k| Vec2::new(p.x, p.y + k * scale * 1e-7)).find(|q| !grazes(*q)).unwrap_or(p);
+    inside_loop_ray(lp, ray)
+}
+
+/// [`inside_loop`] with the ray along +x from `p` taken as given.
+fn inside_loop_ray(lp: &Loop2, p: Vec2) -> bool {
     let mut odd = false;
     let nexts = lp.segs.iter().skip(1).chain(lp.segs.first());
     for (seg, next) in lp.segs.iter().zip(nexts) {
@@ -2158,6 +2184,26 @@ mod planar_tests {
             assert!(inside_loop(&lp, Vec2::new(5.0, 0.0)));
             assert!(!inside_loop(&lp, Vec2::new(-5.0, 0.0)));
             assert!(!inside_loop(&lp, Vec2::new(-5.0, -10.0)));
+        }
+        // #307: a circle read back as two halves whose centres disagree by a few ulps, split
+        // at its bottom. A ray grazing that bottom must not count one half's touch only.
+        let halves = Loop2 {
+            segs: vec![
+                Seg2::Arc { center: Vec2::new(0.0, 25.0), radius: 5.0, start: -std::f64::consts::FRAC_PI_2, sweep: std::f64::consts::PI },
+                Seg2::Arc {
+                    center: Vec2::new(2.9e-15, 25.000000000000004),
+                    radius: 4.99999999999999,
+                    start: std::f64::consts::FRAC_PI_2,
+                    sweep: std::f64::consts::PI,
+                },
+            ],
+        };
+        for lp in [halves.clone(), halves.reversed()] {
+            for x in [-30.0, -5.0, -0.1] {
+                assert!(!inside_loop(&lp, Vec2::new(x, 20.0)), "{x}");
+                assert!(!inside_loop(&lp, Vec2::new(x, 30.0)), "{x}");
+            }
+            assert!(inside_loop(&lp, Vec2::new(0.0, 25.0)));
         }
     }
 
