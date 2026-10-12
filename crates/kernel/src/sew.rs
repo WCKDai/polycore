@@ -363,7 +363,8 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
             }
             for e in l {
                 let (a, b) = e.ends();
-                if !a.is_finite() || !b.is_finite() || a.dist(b) < 1e-9 {
+                // Ends that weld to one vertex would make truck panic on a zero-length edge (#268).
+                if !a.is_finite() || !b.is_finite() || a.dist(b) < 1e-9 || key(a) == key(b) {
                     return Err(KernelError::Invalid("sew: a degenerate edge".into()));
                 }
             }
