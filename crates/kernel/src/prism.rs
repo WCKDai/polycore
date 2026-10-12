@@ -121,35 +121,28 @@ pub fn extrude_planar_regions(plane: &Plane, regions: &[Region2], start: f64, en
 struct Prism {
     lo: f64,
     hi: f64,
-    regions: Vec<Region2>,
-    tags: Vec<Vec<Vec<Tag>>>,
-}
-
-impl Prism {
-    fn new(lo: f64, hi: f64, section: Section) -> Prism {
-        Prism { lo, hi, regions: section.regions, tags: section.tags }
-    }
-
-    fn section(&self) -> Section {
-        Section { regions: self.regions.clone(), tags: self.tags.clone() }
-    }
+    section: Section,
 }
 
 /// What a section's segment was made from, for the history of what is built over it: an
 /// operand's cap edge (`edge`, by its place in the operand's edge order), the wall face beside it
 /// (`wall`), and the operand's vertices (by [`Index`]) the segment starts and ends at (`None`
-/// where it was split off a longer one). `None` fields: not known (no history then).
+/// where it was split off a longer one). Where the wall ends with a slab of a stepped operand, at
+/// a cap whose outline runs along the whole segment, `far` is the operand's edge there (the
+/// segment may have been read off a cap at another level). `None` fields: not known (no history
+/// then).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Tag {
     pub operand: usize,
     pub wall: Option<usize>,
     pub edge: Option<usize>,
+    pub far: Option<usize>,
     pub start: Option<usize>,
     pub end: Option<usize>,
 }
 
 /// A segment nothing is known of.
-const BLANK: Tag = Tag { operand: 0, wall: None, edge: None, start: None, end: None };
+const BLANK: Tag = Tag { operand: 0, wall: None, edge: None, far: None, start: None, end: None };
 
 impl Tag {
     /// The segment run the other way.
@@ -160,6 +153,12 @@ impl Tag {
     /// Piece `k` of `n` the segment was split into, in its direction.
     fn piece(self, k: usize, n: usize) -> Tag {
         Tag { start: if k == 0 { self.start } else { None }, end: if k + 1 == n { self.end } else { None }, ..self }
+    }
+
+    /// The segment beside `wall` instead (`None`: not known). Its edge and vertices were read
+    /// beside the wall it leaves, so they are dropped with it.
+    fn beside(self, wall: Option<usize>) -> Tag {
+        if wall == self.wall { self } else { Tag { operand: self.operand, wall, ..BLANK } }
     }
 }
 
@@ -240,6 +239,58 @@ impl Section {
         out
     }
 
+    /// Each segment's tag mapped by `f`.
+    fn retag(&mut self, f: impl Fn(Tag) -> Tag) {
+        for t in self.tags.iter_mut().flatten().flatten() {
+            *t = f(*t);
+        }
+    }
+
+    /// Mark each segment that runs end to end along a segment of the outline of one of `caps`
+    /// (the operand's caps ending its slab) read beside the same wall with that segment's edge
+    /// as its `far` edge: there the wall meets that cap. A segment along none, or along segments
+    /// of different edges, stays unmarked; so do those past `budget` (segment pairs compared).
+    fn mark_far(&mut self, caps: &[&Section], tol: f64, budget: &mut usize) {
+        let mut by_wall: std::collections::HashMap<usize, Vec<(Seg2, Option<usize>)>> = std::collections::HashMap::new();
+        for (segs, tags) in caps.iter().map(|c| c.segments()) {
+            for (seg, tag) in segs.into_iter().zip(tags) {
+                if let Some(w) = tag.wall {
+                    by_wall.entry(w).or_default().push((seg, tag.edge));
+                }
+            }
+        }
+        for (reg, tags) in self.regions.iter().zip(&mut self.tags) {
+            for (lp, tags) in std::iter::once(&reg.outer).chain(&reg.holes).zip(tags) {
+                for (seg, tag) in lp.segs.iter().zip(tags) {
+                    let Some(beside) = tag.wall.and_then(|w| by_wall.get(&w)) else { continue };
+                    let Some(left) = budget.checked_sub(beside.len()) else { return };
+                    *budget = left;
+                    // The one edge it runs along (`Some(None)`: along none, or not one edge).
+                    let mut along: Option<Option<usize>> = None;
+                    for (_, edge) in beside.iter().filter(|(t, _)| runs_along(seg, t, tol)) {
+                        along = match along {
+                            None => Some(*edge),
+                            Some(e) if e == *edge => Some(e),
+                            Some(_) => Some(None),
+                        };
+                    }
+                    if let Some(Some(e)) = along {
+                        tag.far = Some(e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Segments beside a wall another crosses between levels `lo` and `hi` are not beside it
+    /// all the way: their walls are not known.
+    fn drop_crossed(&mut self, stations: &Stations, lo: f64, hi: f64, tol: f64) {
+        self.retag(|t| match t.wall {
+            Some(w) if stations.across(w, lo, hi, tol) => t.beside(None),
+            _ => t,
+        });
+    }
+
     /// Loops oriented: outers counter-clockwise, holes clockwise; the tags following their
     /// segments.
     fn oriented(&self) -> Section {
@@ -276,18 +327,26 @@ pub(crate) struct Index {
     between: std::collections::HashMap<(usize, usize), Vec<usize>>,
     /// Each vertex's number (first seen along the edge order).
     vertices: std::collections::HashMap<mt::VertexID, usize>,
+    /// Each vertex's point, by number.
+    points: Vec<Vec3>,
+    /// Per edge (edge order): whether it is a line.
+    lines: Vec<bool>,
 }
 
 impl Index {
     fn new(b: &Body, operand: usize) -> Index {
         let (edges, bounds) = crate::body::edge_order(b.solid.face_iter());
         let mut vertices = std::collections::HashMap::new();
+        let mut points = Vec::new();
         for e in &edges {
             for v in [e.absolute_front(), e.absolute_back()] {
-                let next = vertices.len();
-                vertices.entry(v.id()).or_insert(next);
+                if let std::collections::hash_map::Entry::Vacant(slot) = vertices.entry(v.id()) {
+                    slot.insert(points.len());
+                    points.push(from_p3(v.point()));
+                }
             }
         }
+        let lines = edges.iter().map(|e| matches!(e.curve(), mt::Curve::Line(_))).collect();
         let mut between: std::collections::HashMap<(usize, usize), Vec<usize>> = std::collections::HashMap::new();
         for (i, fs) in bounds.iter().enumerate() {
             match fs.as_slice() {
@@ -301,7 +360,7 @@ impl Index {
             .zip(bounds)
             .map(|(e, fs)| (fs, vertices.get(&e.absolute_front().id()).copied(), vertices.get(&e.absolute_back().id()).copied()))
             .collect();
-        Index { operand, edges: crate::record::edge_index(&b.solid), bounds, between, vertices }
+        Index { operand, edges: crate::record::edge_index(&b.solid), bounds, between, vertices, points, lines }
     }
 
     /// The tag of the segments read off edge `e` (as it runs in a wire) of cap face `cap`.
@@ -312,7 +371,14 @@ impl Index {
             [x, y] if *y == cap => Some(*x),
             _ => None,
         });
-        Tag { operand: self.operand, wall, edge, start: self.vertices.get(&e.front().id()).copied(), end: self.vertices.get(&e.back().id()).copied() }
+        Tag {
+            operand: self.operand,
+            wall,
+            edge,
+            far: None,
+            start: self.vertices.get(&e.front().id()).copied(),
+            end: self.vertices.get(&e.back().id()).copied(),
+        }
     }
 
     /// The loops of cap face `f` (number `cap`) as segments, each with its tag; `None` where an
@@ -332,6 +398,76 @@ impl Index {
         }
         Some(loops)
     }
+}
+
+/// Where an operand's walls along a direction end other than at its caps: at edges between two
+/// walls that do not run along the direction (between pieces of one surface an earlier operation
+/// left apart). A section segment carried through a level keeps the wall it was read beside
+/// only where these say so, as its operand's prism or slab is read.
+struct Stations {
+    /// Each wall's highest level.
+    tops: std::collections::HashMap<usize, f64>,
+    /// Per wall, the edges across it: the other wall and the edge's lowest and highest levels.
+    /// A curve other than a line spans every level.
+    cross: std::collections::HashMap<usize, Vec<(usize, f64, f64)>>,
+}
+
+impl Stations {
+    /// From the operand's walls (by face number, with their highest levels).
+    fn new(index: &Index, tops: std::collections::HashMap<usize, f64>, d: Vec3, plane: &Plane, tol: f64) -> Stations {
+        let mut cross: std::collections::HashMap<usize, Vec<(usize, f64, f64)>> = std::collections::HashMap::new();
+        for (i, (fs, front, back)) in index.bounds.iter().enumerate() {
+            let [f, g] = fs[..] else { continue };
+            if f == g || !tops.contains_key(&f) || !tops.contains_key(&g) {
+                continue;
+            }
+            let ends = front.and_then(|v| index.points.get(v)).zip(back.and_then(|v| index.points.get(v)));
+            let (lo, hi) = match ends {
+                Some((p, q)) if index.lines.get(i) == Some(&true) => {
+                    let run = *q - *p;
+                    if (run - d * run.dot(d)).len() < tol {
+                        continue; // Along the direction: between walls over two segments.
+                    }
+                    let (h, k) = (plane.height(*p), plane.height(*q));
+                    (h.min(k), h.max(k))
+                }
+                _ => (f64::NEG_INFINITY, f64::INFINITY),
+            };
+            cross.entry(f).or_default().push((g, lo, hi));
+            cross.entry(g).or_default().push((f, lo, hi));
+        }
+        Stations { tops, cross }
+    }
+
+    /// The edges across wall `w`.
+    fn of(&self, w: usize) -> &[(usize, f64, f64)] {
+        self.cross.get(&w).map_or(&[], Vec::as_slice)
+    }
+
+    /// Does wall `w` meet another wall across it between levels `lo` and `hi` (not at them)?
+    fn across(&self, w: usize, lo: f64, hi: f64, tol: f64) -> bool {
+        self.of(w).iter().any(|(_, l, h)| *l < hi - tol && *h > lo + tol)
+    }
+
+    /// The wall over a section segment beside wall `w` just past level `z`, when the segment
+    /// runs on through `z` without meeting a cap there: `w` itself when nothing crosses it at
+    /// `z`, and it reaches past; the one wall across it at `z` when it ends there; else not
+    /// known.
+    fn past(&self, w: usize, z: f64, tol: f64) -> Option<usize> {
+        let at: std::collections::BTreeSet<usize> =
+            self.of(w).iter().filter(|(_, l, h)| (*l - z).abs() < tol && (*h - z).abs() < tol).map(|(y, _, _)| *y).collect();
+        let reaches = self.tops.get(&w).is_some_and(|t| *t > z + tol);
+        match (at.len(), reaches) {
+            (0, true) => Some(w),
+            (1, false) => at.first().copied(),
+            _ => None,
+        }
+    }
+}
+
+/// The highest level of face `f`'s vertices.
+fn top_of(f: &mt::Face, plane: &Plane) -> f64 {
+    f.vertex_iter().map(|v| plane.height(from_p3(v.point()))).fold(f64::NEG_INFINITY, f64::max)
 }
 
 /// Certify that a curved wall is swept along `d` from its surface representation.
@@ -439,6 +575,7 @@ fn prism_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
     let mut tops: Vec<(usize, &mt::Face)> = Vec::new();
     let mut top_h = Vec::new();
     let mut bottom_h = Vec::new();
+    let mut walls = std::collections::HashMap::new();
     let mut wall_work = 262_144;
     let mut curve_work = 2_000_000usize;
     for (fi, f) in b.solid.face_iter().enumerate() {
@@ -463,11 +600,13 @@ fn prism_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
             if n.dot(d).abs() > 1e-9 {
                 return None;
             }
+            walls.insert(fi, top_of(f, plane));
             continue;
         }
         if !wall_along(&surf, d, tol, &mut wall_work) {
             return None;
         }
+        walls.insert(fi, top_of(f, plane));
     }
     // One height for every top (and bottom) cap.
     if top_h.iter().any(|h| (h - hi).abs() > tol) || bottom_h.iter().any(|h| (h - lo).abs() > tol) || !(lo.is_finite() && hi > lo + tol) {
@@ -483,7 +622,8 @@ fn prism_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
         section.regions.extend(one.regions);
         section.tags.extend(one.tags);
     }
-    Some(Prism::new(lo, hi, section))
+    section.drop_crossed(&Stations::new(index.get(), walls, d, plane, tol), lo, hi, tol);
+    Some(Prism { lo, hi, section })
 }
 
 /// The loop with the largest area is the outer one.
@@ -495,6 +635,19 @@ fn split_outer<T>(mut loops: Vec<(Loop2, T)>) -> Option<((Loop2, T), Vec<(Loop2,
 
 fn heights_of(b: &Body, plane: &Plane) -> (f64, f64) {
     b.solid.vertex_iter().map(|v| plane.height(from_p3(v.point()))).fold((f64::INFINITY, f64::NEG_INFINITY), |m, h| (m.0.min(h), m.1.max(h)))
+}
+
+/// Does `s` run along `t` from end to end? Two lines, `s`'s ends on `t`; two arcs of one
+/// circle, `s`'s ends and middle on `t`.
+fn runs_along(s: &Seg2, t: &Seg2, tol: f64) -> bool {
+    let on = |p: Vec2| t.point_at(t.closest_param(p)).dist(p) < tol;
+    match (*s, *t) {
+        (Seg2::Line { .. }, Seg2::Line { .. }) => on(s.start()) && on(s.end()),
+        (Seg2::Arc { center: c, radius: r, .. }, Seg2::Arc { center: d, radius: q, .. }) => {
+            c.dist(d) < tol && (r - q).abs() < tol && on(s.start()) && on(s.end()) && on(s.point_at(0.5))
+        }
+        _ => false,
+    }
 }
 
 /// Points where two segments cross (parameters on each), lines and arcs only.
@@ -895,9 +1048,9 @@ fn sew_stack(plane: &Plane, d: Vec3, pa: &Prism, pb: &Prism, tol: f64, history: 
     for w in levels.windows(2) {
         let (z0, z1) = (*w.first()?, *w.get(1)?);
         let s = match (covers(pa, z0, z1), covers(pb, z0, z1)) {
-            (true, true) => boolean2d_tagged(&pa.section(), &pb.section(), BoolOp::Union, tol)?,
-            (true, false) => pa.section(),
-            (false, true) => pb.section(),
+            (true, true) => boolean2d_tagged(&pa.section, &pb.section, BoolOp::Union, tol)?,
+            (true, false) => pa.section.clone(),
+            (false, true) => pb.section.clone(),
             (false, false) => return None,
         };
         slabs.push(s.oriented());
@@ -1225,14 +1378,14 @@ fn simple_prism_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2
     if !ok {
         return None;
     }
-    let section = boolean2d_tagged(&pa.section(), &pb.section(), op, tol)?;
+    let section = boolean2d_tagged(&pa.section, &pb.section, op, tol)?;
     let regions = &section.regions;
     if regions.is_empty() {
         return Some(Ok(None));
     }
     let (lo, hi) = if stacked {
         // Different sections (a boss hanging over a plate's edge): sewn slab by slab.
-        let (u, x, y) = (area(regions), area(&pa.regions), area(&pb.regions));
+        let (u, x, y) = (area(regions), area(&pa.section.regions), area(&pb.section.regions));
         if (u - x).abs() > tol * (1.0 + u) || (u - y).abs() > tol * (1.0 + u) {
             return sew_stack(&plane, d, &pa, &pb, tol, &history).map(|r| r.map(Some));
         }
@@ -1280,6 +1433,7 @@ fn stack_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
         return None;
     }
     let mut events = Vec::new();
+    let mut walls = std::collections::HashMap::new();
     let mut wall_work = 262_144;
     let mut curve_work = 2_000_000;
     let mut segments = usize::MAX;
@@ -1296,11 +1450,10 @@ fn stack_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
             if n.dot(d).abs() > 1e-9 {
                 return None;
             }
-        } else {
-            if !wall_along(&surf, d, tol, &mut wall_work) {
-                return None;
-            }
+        } else if !wall_along(&surf, d, tol, &mut wall_work) {
+            return None;
         }
+        walls.insert(fi, top_of(f, plane));
     }
     let mut levels: Vec<f64> = events.iter().map(|(z, _, _)| *z).collect();
     levels.sort_by(f64::total_cmp);
@@ -1308,9 +1461,21 @@ fn stack_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
     if levels.len() < 2 || levels.len() > 64 || levels.iter().any(|z| !z.is_finite()) {
         return None;
     }
+    let stations = Stations::new(index.get(), walls, d, plane, tol);
     let mut current = Section::default();
-    let mut stack = Vec::new();
+    let mut stack: Vec<Prism> = Vec::new();
+    let mut budget = MAX_PLANAR_PAIRS;
     for (i, z) in levels.iter().enumerate() {
+        // The caps here end the slab below: its walls meet them.
+        if let Some(below) = stack.last_mut() {
+            let caps: Vec<&Section> = events.iter().filter(|(h, _, _)| (*h - *z).abs() < tol).map(|(_, _, s)| s).collect();
+            below.section.mark_far(&caps, tol, &mut budget);
+        }
+        // The segments carried here run on past it, beside the walls there.
+        current.retag(|t| match t.wall {
+            Some(w) => t.beside(stations.past(w, *z, tol)),
+            None => t,
+        });
         // Remove terminating material before adding any material starting here.
         for up in [true, false] {
             for (_, _, section) in events.iter().filter(|(h, u, _)| (*h - *z).abs() < tol && *u == up) {
@@ -1324,7 +1489,8 @@ fn stack_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
         if let Some(next) = levels.get(i + 1)
             && !current.regions.is_empty()
         {
-            stack.push(Prism::new(*z, *next, current.oriented()));
+            current.drop_crossed(&stations, *z, *next, tol);
+            stack.push(Prism { lo: *z, hi: *next, section: current.oriented() });
         }
     }
     (current.regions.is_empty() && !stack.is_empty()).then_some(stack)
@@ -1347,7 +1513,7 @@ fn stack_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2]) -> O
         return None;
     }
     fn section(ps: &[Prism], lo: f64, hi: f64, tol: f64) -> Section {
-        ps.iter().find(|p| p.lo <= lo + tol && p.hi >= hi - tol).map(Prism::section).unwrap_or_default()
+        ps.iter().find(|p| p.lo <= lo + tol && p.hi >= hi - tol).map(|p| p.section.clone()).unwrap_or_default()
     }
     let tol = (a.size().max(b.size()) * 1e-7).max(1e-9) * 10.0;
     let mut dirs: Vec<Vec3> = Vec::new();
@@ -1451,11 +1617,11 @@ mod planar_tests {
         assert!(stock.face_count() > 2048 && stock.validity().is_empty());
         let before: Vec<_> = stock.solid.vertex_iter().map(|v| (v.id(), v.point())).collect();
         let recovered = prism_of(&stock, Vec3::Z, &Plane::XY, 1e-5).expect("large simple line prism remains supported");
-        assert_eq!(recovered.regions.len(), 1);
-        assert_eq!(recovered.regions[0].outer.segs.len(), count);
-        assert!(recovered.regions[0].outer.segs.iter().all(|s| matches!(s, Seg2::Line { .. })));
+        assert_eq!(recovered.section.regions.len(), 1);
+        assert_eq!(recovered.section.regions[0].outer.segs.len(), count);
+        assert!(recovered.section.regions[0].outer.segs.iter().all(|s| matches!(s, Seg2::Line { .. })));
         let area = count as f64 * radius * radius * (std::f64::consts::TAU / count as f64).sin() / 2.;
-        assert!((recovered.regions[0].area() - area).abs() < area * 1e-12);
+        assert!((recovered.section.regions[0].area() - area).abs() < area * 1e-12);
         assert!((recovered.lo - 0.).abs() < 1e-8 && (recovered.hi - 2.).abs() < 1e-8);
         let cutter = crate::box_solid(Vec3::new(-1001., -1001., -1.), Vec3::new(1001., 1001., 3.)).unwrap();
         assert!(
@@ -1677,9 +1843,9 @@ mod planar_tests {
         assert_eq!(b.len(), 1);
         assert!((a[0].lo - 0.0).abs() < tol && (a[0].hi - 35.0).abs() < tol);
         assert!((b[0].lo - 30.0).abs() < tol && (b[0].hi - 35.6).abs() < tol);
-        assert_eq!(a[0].regions[0].holes.len(), 1);
-        assert_eq!(b[0].regions[0].holes.len(), 1);
-        assert!((a[0].regions[0].area() - (1200.0 - 25.0 * std::f64::consts::PI)).abs() < 1e-8);
+        assert_eq!(a[0].section.regions[0].holes.len(), 1);
+        assert_eq!(b[0].section.regions[0].holes.len(), 1);
+        assert!((a[0].section.regions[0].area() - (1200.0 - 25.0 * std::f64::consts::PI)).abs() < 1e-8);
         assert!(simple_prism_boolean(&stock, &tool, BoolOp::Cut).is_none());
         let result = stack_boolean(&stock, &tool, BoolOp::Cut).expect("qualified overlapping stacks").unwrap().unwrap();
         assert_eq!(result.shell_count(), 1);
@@ -1824,7 +1990,12 @@ mod planar_tests {
         for tools in [[&low, &high], [&high, &low]] {
             let mut result = stock.clone();
             for tool in tools {
-                result = stack_boolean(&result, tool, BoolOp::Cut).expect("exact stack path").unwrap().unwrap();
+                let target = result;
+                result = stack_boolean(&target, tool, BoolOp::Cut).expect("exact stack path").unwrap().unwrap();
+                // The second cut's target has walls in pieces across its slabs, followed level by
+                // level: its history is exact.
+                let exact = crate::boolean_record::tests::Reach { made: 0., moved: 0. };
+                crate::boolean_record::tests::checked(&result, &[&target, tool], 1e-3, exact, &|_| false);
             }
             assert!(result.validity().is_empty());
             assert_eq!(result.shell_count(), 1);

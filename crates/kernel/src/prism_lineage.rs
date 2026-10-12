@@ -188,15 +188,15 @@ impl Context<'_> {
 
     /// The origins of the edge between the wall over a segment tagged `t` and a cap lying on the
     /// operand faces `cap`: the operand's edge between the wall and its own cap there (the very
-    /// edge the segment was read off, when that is one), else where the wall meets the cap (all of
-    /// the faces it lies on).
+    /// edge the segment was read off, or the one it runs along where its slab ends, when that is
+    /// one), else where the wall meets the cap (all of the faces it lies on).
     fn cap_edge(&self, t: Tag, cap: &BTreeSet<FaceOrigin>) -> Option<Vec<EdgeOrigin>> {
         let (x, w) = (t.operand, t.wall?);
         let own: Vec<usize> =
             cap.iter().filter_map(|o| if let Face { operand, face } = *o { (operand == x).then_some(face) } else { None }).collect();
-        if let Some(e) = t.edge
-            && self.index.get(x)?.bounds.get(e).is_some_and(|(fs, _, _)| fs.contains(&w) && fs.iter().any(|f| own.contains(f)))
-        {
+        let index = self.index.get(x)?;
+        let beside = |e: &usize| index.bounds.get(*e).is_some_and(|(fs, _, _)| fs.contains(&w) && fs.iter().any(|f| own.contains(f)));
+        if let Some(e) = [t.edge, t.far].into_iter().flatten().find(beside) {
             return Some(vec![EdgeOrigin::Edge { operand: x, edge: e }]);
         }
         let along: Vec<usize> = own.iter().flat_map(|c| self.edges_between(x, [w, *c], None)).collect();

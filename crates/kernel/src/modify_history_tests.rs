@@ -422,14 +422,22 @@ fn fillet_after_box_cuts() {
     }
 }
 
-/// A chamfer right after a box cut whose cutter's cut goes the prism way: the cutter's walls meet
-/// the cut body's walls where a segment was split off.
+/// A chamfer right after a box cut, its cutter's cut going the prism way along the edge: the
+/// cutter's walls meet the cut body's walls where a segment was split off. The cut body's ends
+/// have their outlines in collinear edges (pocket, step, bite), each matched by the segment
+/// running along it; walls the cut left in pieces across the slabs (step, slot, bite) are
+/// followed through the levels where one piece gives way to the next. Composed with the cut,
+/// over the block and the tool.
 #[test]
 fn chamfer_after_box_cuts() {
+    let b = cube();
     let at = Vec3::new(5.0, 0.0, 20.0);
-    for (name, cut, _) in box_cuts().into_iter().filter(|(name, ..)| matches!(*name, "notch" | "hole")) {
+    for (name, cut, tool) in box_cuts() {
         let r = crate::chamfer(&cut, &[at], 2.0).unwrap();
         let h = verified(&r, &cut, reach(2.0 * 1.5));
         assert_eq!(with(h, &[edge(edge_at(&cut, at))]).len(), 1, "{name}: {h:?}");
+        let mut through = h.clone();
+        through.substitute(0, cut.history().unwrap()).unwrap();
+        through.check(&r, &[&b, &tool]).unwrap();
     }
 }
