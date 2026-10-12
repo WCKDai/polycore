@@ -373,16 +373,51 @@ fn shell_planar(b: &Body, open: &[Vec3], thickness: f64) -> Result<Body> {
         return Err(KernelError::Invalid("select at least one face to remove".into()));
     }
     let margin = thickness + size * 0.05;
+    shell_opened(b, &healed, open, &opened, thickness, margin).map_err(|e| match rim_without_thickness(&healed, &opened, thickness) {
+        Some(r) => unsupported_shell(&format!(
+            "the rim would have no thickness: an open face meets a round of radius {r:.4} mm tangentially, and the shell is {thickness:.4} mm thick (make the round smaller than the thickness)"
+        )),
+        None => e,
+    })
+}
+
+/// The radius of a convex round (cylinder or torus) that meets an open face tangentially and
+/// is at least `thickness`: the cavity's wall then passes through the rim where the round meets
+/// the open face, leaving nothing between them.
+fn rim_without_thickness(b: &Body, opened: &[usize], thickness: f64) -> Option<f64> {
+    use mt::{BoundedCurve, ParametricCurve};
+    let faces: Vec<&mt::Face> = b.solid.face_iter().collect();
+    let tol = (b.size() * 1e-7).max(1e-9) * 100.0;
+    opened.iter().filter_map(|fi| faces.get(*fi)).find_map(|open| {
+        let plane = crate::offset::surf_of(open, tol)?;
+        faces.iter().filter(|g| !std::ptr::eq(**g, *open)).find_map(|g| {
+            let round = crate::offset::surf_of(g, tol)?;
+            let r = match round {
+                crate::offset::Surf::Cylinder { r, convex: true, .. } | crate::offset::Surf::Torus { r, convex: true, .. } => r,
+                _ => return None,
+            };
+            let shared = g.edge_iter().find(|e| open.edge_iter().any(|x| x.id() == e.id()))?;
+            let c = shared.curve();
+            let (t0, t1) = c.range_tuple();
+            let mid = from_p3(c.subs((t0 + t1) / 2.0));
+            let tangent = plane.normal(mid)?.dot(round.normal(mid)?) > 1.0 - 1e-6;
+            (tangent && r >= thickness - tol).then_some(r)
+        })
+    })
+}
+
+fn shell_opened(b: &Body, healed: &Body, open: &[Vec3], opened: &[usize], thickness: f64, margin: f64) -> Result<Body> {
+    let size = healed.size();
     // Open faces pushed out past the body: the simple way, unless a face tangent to an open
     // one (a fillet along its edge) can't follow; then every face moves in (tangencies keep)
     // and the opening is the open face's copy swept out through the body.
-    let cavity = match offset_planar(&healed, |fi, _| if opened.contains(&fi) { margin } else { -thickness }) {
+    let cavity = match offset_planar(healed, |fi, _| if opened.contains(&fi) { margin } else { -thickness }) {
         Ok(c) => c,
-        Err(e) => return shell_by_opening(&healed, &opened, thickness, margin).map_err(|_| e),
+        Err(e) => return shell_by_opening(healed, opened, thickness, margin).map_err(|_| e),
     };
-    let r = crate::ops::boolean(&healed, &cavity, crate::BoolOp::Cut);
+    let r = crate::ops::boolean(healed, &cavity, crate::BoolOp::Cut);
     if r.is_err()
-        && let Ok(x) = shell_by_opening(&healed, &opened, thickness, margin)
+        && let Ok(x) = shell_by_opening(healed, opened, thickness, margin)
     {
         return Ok(x);
     }

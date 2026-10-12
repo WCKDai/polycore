@@ -1930,3 +1930,20 @@ fn shell_of_a_pocket_whose_floor_falls_to_a_drain() {
     let m = measure(&s).unwrap();
     assert!(rel(m.volume, want) < 1e-4, "{} vs {want}", m.volume);
 }
+
+#[test]
+fn shell_open_beside_a_round_as_large_as_the_wall_is_refused() {
+    // Opening the bottom of a box whose bottom outline is rounded: the cavity's side walls stand
+    // the thickness in from the outside, where a round at least that large meets the bottom, so
+    // the rim would have no thickness. Smaller rounds leave a rim.
+    let b = box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 10.0)).unwrap();
+    let loop_ = [Vec3::new(20.0, 0.0, 0.0), Vec3::new(40.0, 15.0, 0.0), Vec3::new(20.0, 30.0, 0.0), Vec3::new(0.0, 15.0, 0.0)];
+    let bottom = [Vec3::new(20.0, 15.0, 0.0)];
+    for r in [2.0, 2.4] {
+        let f = fillet(&b, &loop_, r).unwrap();
+        let e = shell(&f, &bottom, 2.0).unwrap_err();
+        assert!(e.to_string().starts_with("the operation failed: not supported yet: the rim"), "{r}: {e}");
+    }
+    let f = fillet(&b, &loop_, 1.5).unwrap();
+    assert!(shell(&f, &bottom, 2.0).unwrap().validity().is_empty());
+}

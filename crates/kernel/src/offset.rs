@@ -42,7 +42,7 @@ fn tube_centre(o: Vec3, a: Vec3, big: f64, h: f64, p: Vec3) -> Option<Vec3> {
 
 impl Surf {
     /// Outward unit normal of the surface at `p` (on or near it).
-    fn normal(&self, p: Vec3) -> Option<Vec3> {
+    pub(crate) fn normal(&self, p: Vec3) -> Option<Vec3> {
         match *self {
             Surf::Plane { n, .. } => Some(n),
             Surf::Cylinder { o, a, convex, .. } => {
