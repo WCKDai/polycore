@@ -737,9 +737,21 @@ fn crossings(s: &Seg2, t: &Seg2, tol: f64) -> Vec<(f64, f64)> {
 
 /// Ray parity against analytic lines/arcs. Fragment classification must not depend on a
 /// display chord tolerance: a tiny tool can sit between a circular boundary and its chords.
+/// Loops are closed only within the chaining tolerance (an arrangement's own output joins its
+/// pieces within `10 · tol`), so a gap where one line ends and the next begins is closed by a
+/// straight connector: a ray through the gap would otherwise slip out of the loop without a
+/// crossing and flip the parity of points level with the corner. Arcs decide their own ends
+/// within an angular tolerance (below), so joints with an arc keep that rule.
 fn inside_loop(lp: &Loop2, p: Vec2) -> bool {
     let mut odd = false;
-    for seg in &lp.segs {
+    let nexts = lp.segs.iter().skip(1).chain(lp.segs.first());
+    for (seg, next) in lp.segs.iter().zip(nexts) {
+        if let (Seg2::Line { b: a, .. }, Seg2::Line { a: b, .. }) = (*seg, *next)
+            && (a.y > p.y) != (b.y > p.y)
+            && a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y) > p.x
+        {
+            odd = !odd;
+        }
         match *seg {
             Seg2::Line { a, b } => {
                 if (a.y > p.y) != (b.y > p.y) {
@@ -2147,6 +2159,36 @@ mod planar_tests {
             assert!(!inside_loop(&lp, Vec2::new(-5.0, 0.0)));
             assert!(!inside_loop(&lp, Vec2::new(-5.0, -10.0)));
         }
+    }
+
+    /// Loops are closed only within the chaining tolerance. A ray level with one end of such a
+    /// gap slipped through it without a crossing, so a point beside the loop counted as inside:
+    /// a sheet shrunk by a parameter change (sketch solver residuals of 1e-13 mm) lost a bend
+    /// zone that way and its unfold failed.
+    #[test]
+    fn ray_parity_closes_the_gaps_chaining_leaves() {
+        let gap = 1e-13;
+        let square = Loop2 {
+            segs: vec![
+                Seg2::Line { a: Vec2::new(0.0, 0.0), b: Vec2::new(10.0, 0.0) },
+                Seg2::Line { a: Vec2::new(10.0, 0.0), b: Vec2::new(10.0, 10.0) },
+                Seg2::Line { a: Vec2::new(10.0, 10.0), b: Vec2::new(0.0, 10.0) },
+                Seg2::Line { a: Vec2::new(0.0, 10.0), b: Vec2::new(0.0, 5.0 + gap) },
+                Seg2::Line { a: Vec2::new(0.0, 5.0), b: Vec2::new(0.0, 0.0) },
+            ],
+        };
+        for lp in [square.clone(), square.reversed()] {
+            assert!(!inside_loop(&lp, Vec2::new(-5.0, 5.0)));
+            assert!(inside_loop(&lp, Vec2::new(5.0, 5.0)));
+            assert!(!inside_loop(&lp, Vec2::new(15.0, 5.0)));
+        }
+        // A neighbour with an edge level with the gap joins the square instead of being
+        // dropped as if it lay inside it (which left the outline open: no result at all).
+        let a = Region2 { outer: square, holes: vec![] };
+        let b = rectangle(Vec2::new(-4.0, 2.0), Vec2::new(0.0, 5.0));
+        let union = planar_regions_boolean(&[a], &[b], BoolOp::Union, 1e-7).unwrap();
+        assert_eq!(union.len(), 1);
+        assert!((union[0].area().abs() - 112.0).abs() < 1e-9, "{}", union[0].area());
     }
     #[test]
     fn tiny_tool_between_circle_and_display_chord_is_not_lost() {
