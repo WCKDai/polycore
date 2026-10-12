@@ -698,7 +698,7 @@ fn smooth_chain(solid: &Solid, edge: &mt::Edge) -> Option<Vec<mt::EdgeID>> {
     Some(ids)
 }
 
-fn edge_mid(e: &mt::Edge) -> Option<Vec3> {
+pub(crate) fn edge_mid(e: &mt::Edge) -> Option<Vec3> {
     use mt::{BoundedCurve, ParametricCurve};
     let c = e.curve();
     let (t0, t1) = c.range_tuple();

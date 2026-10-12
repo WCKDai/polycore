@@ -372,7 +372,40 @@ fn build(
             *slot = v;
         }
     }
-    let vb: Vec<mt::Vertex> = pb.iter().map(|p| builder::vertex(p3(*p))).collect();
+    // Model vertices at the joints (the second half of a circle starts at none).
+    let mut joint_vertex: Vec<Option<mt::Vertex>> = (0..k)
+        .map(|i| if i == 0 || owner.get(i) != owner.get(i - 1) { owner.get(i).and_then(|o| edges.get(*o)).map(|e| e.front().clone()) } else { None })
+        .collect();
+    if open {
+        joint_vertex.push(edges.last().map(|e| e.back().clone()));
+    }
+    let loop_ids: Vec<mt::EdgeID> = edges.iter().map(|e| e.id()).collect();
+    let on_face = |e: &mt::Edge| f.edge_iter().any(|x| x.id() == e.id());
+    // A blend as tall as its walls uses them up: each wall seam ends exactly where the
+    // wall-side rail would, at a vertex of the walls' far boundary, which becomes the rail.
+    let wall_end: Vec<Option<mt::Vertex>> = joint_vertex
+        .iter()
+        .zip(&pb)
+        .map(|(v, target)| {
+            let v = v.as_ref()?;
+            faces.iter().flat_map(|g| g.edge_iter()).find_map(|e| {
+                if loop_ids.contains(&e.id()) || on_face(&e) || !(e.front() == v || e.back() == v) || !matches!(e.curve(), mt::Curve::Line(_)) {
+                    return None;
+                }
+                let other = if e.front() == v { e.back().clone() } else { e.front().clone() };
+                (from_p3(other.point()).dist(*target) <= tol * 10.0).then_some(other)
+            })
+        })
+        .collect();
+    let used_up = wall_end.iter().filter(|x| x.is_some()).count();
+    if used_up > 0 && (used_up != nj || open) {
+        return Err(unsupported("the blend uses up only part of the walls"));
+    }
+    let walls_used_up = used_up > 0;
+    let vb: Vec<mt::Vertex> = match walls_used_up {
+        true => wall_end.into_iter().flatten().collect(),
+        false => pb.iter().map(|p| builder::vertex(p3(*p))).collect(),
+    };
     let centre = |i: usize| centres.get(i).copied().unwrap_or_default();
     let profile_mid = |i: usize| {
         let (Some(p), c) = (joint_point(i), centre(i)) else { return Vec3::ZERO };
@@ -442,21 +475,34 @@ fn build(
     if face_rails.iter().zip(&collapsed).any(|(r, c)| r.is_none() && !c) {
         return Err(KernelError::Failed("rail".into()));
     }
-    let wall_rails: Vec<mt::Edge> =
-        (0..k).map(|i| rail(&vb, i, &wall_off)).collect::<Option<_>>().ok_or_else(|| KernelError::Failed("rail".into()))?;
+    let wall_rails: Vec<mt::Edge> = if walls_used_up {
+        // Each piece's wall rail is the wall's far edge between the joints, where the offset
+        // rail lies (checked at the piece's middle).
+        (0..k)
+            .map(|i| -> Result<mt::Edge> {
+                let (Some(a), Some(b), Some(s), Some(wf)) = (vb.get(i), vb.get(nxt(i)), segs.get(i), walls.get(i)) else {
+                    return Err(KernelError::Failed("rail".into()));
+                };
+                let mid = match *s {
+                    Seg::Line { a, b } => (a + b) * 0.5,
+                    Seg::Arc { mid, .. } => mid,
+                };
+                let want = wall_off(mid, s);
+                let g = faces.get(*wf).ok_or_else(|| KernelError::Failed("wall".into()))?;
+                g.edge_iter()
+                    .find(|e| (e.front() == a && e.back() == b) || (e.front() == b && e.back() == a))
+                    .filter(|e| crate::blend::edge_mid(e).is_some_and(|m| m.dist(want) <= tol * 10.0))
+                    .map(|e| if e.front() == a { e.clone() } else { e.inverse() })
+                    .ok_or_else(|| unsupported("the blend uses up walls whose far edge is not where the blend ends"))
+            })
+            .collect::<Result<_>>()?
+    } else {
+        (0..k).map(|i| rail(&vb, i, &wall_off)).collect::<Option<_>>().ok_or_else(|| KernelError::Failed("rail".into()))?
+    };
     // Seams between neighbouring walls at the joints get shorter.
-    // Model vertices at the joints (the second half of a circle starts at none).
-    let mut joint_vertex: Vec<Option<mt::Vertex>> = (0..k)
-        .map(|i| if i == 0 || owner.get(i) != owner.get(i - 1) { owner.get(i).and_then(|o| edges.get(*o)).map(|e| e.front().clone()) } else { None })
-        .collect();
-    if open {
-        joint_vertex.push(edges.last().map(|e| e.back().clone()));
-    }
     // At a run's ends the face's next loop edges stop at the face-side point.
-    let on_face = |e: &mt::Edge| f.edge_iter().any(|x| x.id() == e.id());
     let mut seam_subst: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
     let mut seam_ends: HashMap<mt::EdgeID, (mt::Edge, Option<mt::Vertex>, Option<mt::Vertex>)> = HashMap::new();
-    let loop_ids: Vec<mt::EdgeID> = edges.iter().map(|e| e.id()).collect();
     for (i, v) in joint_vertex.iter().enumerate() {
         let Some(v) = v else { continue };
         for g in faces {
@@ -476,6 +522,10 @@ fn build(
                     return Err(unsupported("the wall seams must be straight"));
                 }
                 let face_side = on_face(&e);
+                // A used-up wall goes, seams and all.
+                if walls_used_up && !face_side {
+                    continue;
+                }
                 let target = if face_side { pa.get(i) } else { pb.get(i) }.copied().unwrap_or_default();
                 let along = (from_p3(other.point()) - from_p3(v.point())).dot(target - from_p3(v.point()));
                 let reach = (target - from_p3(v.point())).len2();
@@ -558,6 +608,9 @@ fn build(
         let rebuilt = if gi == fi {
             rebuild(g, &face_rails)?
         } else if walls.contains(&gi) {
+            if walls_used_up {
+                continue;
+            }
             let wr: Vec<Option<mt::Edge>> = wall_rails.iter().cloned().map(Some).collect();
             rebuild(g, &wr)?
         } else if g.edge_iter().any(|e| seam_subst.contains_key(&e.id())) {

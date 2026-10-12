@@ -182,6 +182,37 @@ fn fillets_on_several_edges_and_angles() {
 }
 
 #[test]
+fn loop_fillet_as_tall_as_its_wall_consumes_it() {
+    // The removed cross-section (a square of side r less a quarter disc) and its centroid's
+    // distance from the wall: r(10 − 3π) / (3(4 − π)).
+    let spandrel = |r: f64| ((1.0 - PI / 4.0) * r * r, r * (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI)));
+    // #190: a disc 13 in radius and 2 high, its top circle rounded by 2. Pappus for the ring.
+    let disc = cylinder(Vec3::ZERO, Vec3::Z, 13.0, 2.0).unwrap();
+    let f = fillet(&disc, &[Vec3::new(0.0, 13.0, 2.0), Vec3::new(0.0, -13.0, 2.0)], 2.0).unwrap();
+    let (a, c) = spandrel(2.0);
+    let want = PI * 169.0 * 2.0 - a * 2.0 * PI * (13.0 - c);
+    let m = measure(&f).unwrap();
+    assert!(rel(m.volume, want) < 2e-4, "{} vs {want}", m.volume);
+    // Top, round and bottom: the wall is gone.
+    assert_eq!(m.merged.faces, 3, "{:?}", m.merged);
+    assert!(f.validity().is_empty(), "{:?}", f.validity());
+    // A 40 x 30 x 5 plate, its whole top outline rounded by 5 (mitred at the corners).
+    let plate = box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 5.0)).unwrap();
+    let top = [Vec3::new(20.0, 0.0, 5.0), Vec3::new(40.0, 15.0, 5.0), Vec3::new(20.0, 30.0, 5.0), Vec3::new(0.0, 15.0, 5.0)];
+    let f = fillet(&plate, &top, 5.0).unwrap();
+    let (a, c) = spandrel(5.0);
+    let want = 6000.0 - a * 2.0 * ((40.0 - 2.0 * c) + (30.0 - 2.0 * c));
+    let m = measure(&f).unwrap();
+    assert!(rel(m.volume, want) < 2e-4, "{} vs {want}", m.volume);
+    assert!(f.validity().is_empty(), "{:?}", f.validity());
+    // Taller than the wall: still refused, the body unchanged.
+    for r in [2.0 + 1e-3, 2.5] {
+        let e = fillet(&disc, &[Vec3::new(0.0, 13.0, 2.0), Vec3::new(0.0, -13.0, 2.0)], r).unwrap_err();
+        assert!(e.to_string().contains("taller than the walls"), "{r}: {e}");
+    }
+}
+
+#[test]
 fn fillet_consuming_a_side_face_makes_a_full_round() {
     // 14 x 6 x 10: r = 3 on the four vertical edges uses up both 6 mm end faces (#199).
     let b = box_solid(Vec3::new(14.0, 0.0, 0.0), Vec3::new(28.0, 6.0, 10.0)).unwrap();
