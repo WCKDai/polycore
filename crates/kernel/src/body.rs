@@ -1005,9 +1005,16 @@ impl Body {
 
 impl Body {
     /// The separate pieces of a body: each outer shell with the voids inside it. A body in one
-    /// piece comes back as itself.
+    /// piece comes back as itself. Pieces of a body in several carry their history over
+    /// `[self]` (their faces and edges are its own), so whoever names them can follow it.
     pub fn lumps(&self) -> Result<Vec<Body>> {
-        self.lumps_with_clearance(0.0)
+        let pieces = self.lumps_with_clearance(0.0)?;
+        if pieces.len() < 2 {
+            return Ok(pieces);
+        }
+        let counts = [(self.face_count(), self.edge_count())];
+        let histories = crate::boolean_record::parts_of(&pieces, self);
+        Ok(pieces.into_iter().zip(histories).map(|(piece, history)| piece.with_checked_history(history, &counts)).collect())
     }
 
     /// Whether this body and `other` share material or touch (within a fine mesh tolerance).
