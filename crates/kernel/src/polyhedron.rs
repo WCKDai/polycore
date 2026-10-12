@@ -532,7 +532,7 @@ fn shell_opened(b: &Body, healed: &Body, open: &[Vec3], opened: &[usize], thickn
     match r {
         Ok(Some(r)) => {
             // Over `[healed]`, the cavity's faces offsets of the faces they line; then over `[b]`.
-            Ok(record::after(hollowed(r, &healed, offsets(&cavity)), &healed, &record::counts(&[b])))
+            Ok(record::after(hollowed(r, healed, offsets(&cavity)), healed, &record::counts(&[b])))
         }
         Ok(None) => Err(KernelError::Failed("the shell removed everything".into())),
         // Healing can leave faces the boolean dislikes (revolved patches): the body as it was,
