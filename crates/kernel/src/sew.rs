@@ -88,7 +88,7 @@ impl Cache {
         let (va, vb) = (self.vertex(a), self.vertex(b));
         let made = match *e {
             EdgeSpec::Line { .. } => builder::line(&va, &vb),
-            EdgeSpec::Arc { mid, .. } => builder::circle_arc(&va, &vb, p3(mid)),
+            EdgeSpec::Arc { mid, .. } => arc_edge(&va, &vb, mid),
         };
         self.edges.insert((ka, kb, mid, sheet), made.clone());
         made
@@ -396,7 +396,7 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
                 }
                 SurfSpec::Extruded { a, b, mid, dir } => {
                     let (va, vb) = (builder::vertex(p3(a)), builder::vertex(p3(b)));
-                    let tmp: mt::Face = builder::tsweep(&builder::circle_arc(&va, &vb, p3(mid)), v3(dir));
+                    let tmp: mt::Face = builder::tsweep(&arc_edge(&va, &vb, mid), v3(dir));
                     curved(tmp.oriented_surface(), wires, f.probe, fi)?
                 }
             };
@@ -423,6 +423,43 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
             body.solid.face_iter().map(|f| source_ids.get(&f.id()).filter(|(o, _)| *o == f.orientation()).map(|(_, s)| (*s).clone())).collect();
         Ok((body.with_face_sources(sources.map(|_| std::sync::Arc::new(mapped))), from))
     })
+}
+
+/// Below this sagitta-to-half-chord ratio an arc is built as its exact rational quadratic from
+/// its ends and midpoint. truck's three-point arc (circumcentre, then a turn about it) misses
+/// its own ends on very flat arcs: one 12 mm long with a 0.08 µm sagitta (a 225 m radius) ends
+/// about 1e-6 mm off its vertex, and a planar face holding it far from the origin could not be
+/// given a plane (its wire's points no longer closed).
+const FLAT_ARC: f64 = 1e-2;
+
+/// The arc from `a` to `b` through `mid`: the exact rational quadratic for a flat arc, truck's
+/// three-point arc otherwise (and should the curve be refused, which its exact ends make
+/// impossible).
+fn arc_edge(a: &mt::Vertex, b: &mt::Vertex, mid: Vec3) -> mt::Edge {
+    let (pa, pb) = (a.point(), b.point());
+    let (pa, pb) = (Vec3::new(pa.x, pa.y, pa.z), Vec3::new(pb.x, pb.y, pb.z));
+    flat_arc(pa, pb, mid)
+        .and_then(|curve| mt::Edge::try_new(a, b, mt::Curve::NurbsCurve(curve)).ok())
+        .unwrap_or_else(|| builder::circle_arc(a, b, p3(mid)))
+}
+
+/// A flat arc (see [`FLAT_ARC`]) through its midpoint `mid` as one rational quadratic: the middle
+/// control point on the line from the chord's midpoint through `mid`, 2 / (1 − t²) as far, weight
+/// (1 − t²) / (1 + t²), where t is the sagitta over the half chord. None for a deeper arc, or
+/// when `mid` is not halfway along the chord.
+fn flat_arc(a: Vec3, b: Vec3, mid: Vec3) -> Option<mt::NurbsCurve<mt::Vector4>> {
+    let m = (a + b) * 0.5;
+    let half = a.dist(b) / 2.0;
+    let chord = (b - a).normalized()?;
+    let bow = mid - m;
+    let t = bow.len() / half;
+    if !(half > 1e-9) || !(t < FLAT_ARC) || bow.dot(chord).abs() > 1e-9 * half.max(1.0) {
+        return None;
+    }
+    let w = (1.0 - t * t) / (1.0 + t * t);
+    let apex = m + bow * (2.0 / (1.0 - t * t));
+    let h = |p: Vec3, w: f64| mt::Vector4::new(p.x * w, p.y * w, p.z * w, w);
+    Some(mt::NurbsCurve::new(mt::BSplineCurve::new(mt::KnotVec::bezier_knot(2), vec![h(a, 1.0), h(apex, w), h(b, 1.0)])))
 }
 
 /// A curved face on `surf`, turned so its normal at the probe points outward.
@@ -508,6 +545,42 @@ mod tests {
         let mut hostile = outer.clone();
         hostile[0].loops = vec![Vec::new(); 500_001];
         assert!(sew(&hostile).unwrap_err().to_string().contains("budget"));
+    }
+
+    #[test]
+    fn flat_arcs_far_from_the_origin_keep_their_ends_and_their_faces_planes() {
+        // A 12 x 30 x 2 slab 1000 mm out whose y = 0 side bows 0.00008 mm (a 225 m radius).
+        for (o, bow) in [(Vec3::new(1000.0, 500.0, 0.0), 8e-5), (Vec3::new(-1238.4, 4.0, 14.0), 8e-5), (Vec3::ZERO, 0.5)] {
+            let p = |x: f64, y: f64, z: f64| o + Vec3::new(x, y, z);
+            let (a, b, c, d) = (p(0., 0., 0.), p(12., 0., 0.), p(12., 30., 0.), p(0., 30., 0.));
+            let up = Vec3::new(0., 0., 2.);
+            let (e, f, g, h) = (a + up, b + up, c + up, d + up);
+            let (m0, m1) = (p(6., -bow, 0.), p(6., -bow, 2.));
+            let line = |a, b| EdgeSpec::Line { a, b };
+            let plane = |l: Vec<EdgeSpec>| FaceSpec { loops: vec![l], surface: SurfSpec::Plane, probe: None };
+            let wall = FaceSpec {
+                loops: vec![vec![EdgeSpec::Arc { a, b, mid: m0 }, line(b, f), EdgeSpec::Arc { a: f, b: e, mid: m1 }, line(e, a)]],
+                surface: SurfSpec::Extruded { a, b, mid: m0, dir: up },
+                probe: Some((p(6., -bow, 1.), Vec3::new(0., -1., 0.))),
+            };
+            let faces = vec![
+                plane(vec![line(a, d), line(d, c), line(c, b), EdgeSpec::Arc { a: b, b: a, mid: m0 }]),
+                plane(vec![EdgeSpec::Arc { a: e, b: f, mid: m1 }, line(f, g), line(g, h), line(h, e)]),
+                wall,
+                quad(b, c, g, f),
+                quad(c, d, h, g),
+                quad(d, a, e, h),
+            ];
+            let body = sew(&faces).unwrap_or_else(|e| panic!("{o:?} {bow}: {e}"));
+            assert!(body.validity().is_empty(), "{o:?}");
+            // The circular segment added to the slab (the measure follows flat arcs by chords).
+            let r = (36.0 + bow * bow) / (2.0 * bow);
+            let half = (6.0 / r).asin();
+            let segment = r * r * (half - half.sin() * half.cos());
+            let want = (360.0 + segment) * 2.0;
+            let got = crate::measure(&body).unwrap().volume;
+            assert!((got - want).abs() < 1e-4 * want, "{o:?} {bow}: {got} vs {want}");
+        }
     }
 
     #[test]
