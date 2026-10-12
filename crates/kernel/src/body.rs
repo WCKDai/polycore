@@ -33,6 +33,8 @@ pub struct Body {
     pub(crate) splits: Option<std::sync::Arc<Vec<Vec<Vec3>>>>,
     /// Exact construction/import source identities, in this body's face order.
     pub(crate) face_sources: Option<std::sync::Arc<Vec<Option<FaceSource>>>>,
+    /// Sticky transient veto: authored face boundaries must survive later rebuilds.
+    pub(crate) regularization_protected: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -360,6 +362,7 @@ impl Body {
             && self.paint == other.paint
             && self.splits == other.splits
             && self.face_sources == other.face_sources
+            && self.regularization_protected == other.regularization_protected
     }
 
     pub(crate) fn new(solid: Solid) -> Result<Body> {
@@ -398,7 +401,13 @@ impl Body {
             paint: None,
             splits: None,
             face_sources: None,
+            regularization_protected: false,
         })
+    }
+
+    pub(crate) fn inherit_regularization_protection(mut self, input: &Body) -> Self {
+        self.regularization_protected |= input.regularization_protected;
+        self
     }
 
     pub fn face_sources(&self) -> Option<&[Option<FaceSource>]> {
@@ -628,6 +637,7 @@ impl Body {
     /// The same body with the lines its faces were split along on purpose.
     pub fn with_split_lines(mut self, s: Option<std::sync::Arc<Vec<Vec<Vec3>>>>) -> Body {
         self.splits = s.filter(|l| !l.is_empty());
+        self.regularization_protected |= self.splits.is_some();
         self
     }
 
@@ -652,6 +662,7 @@ impl Body {
             })
             .filter(|p| p.opacity < 1.0 || !p.faces.is_empty())
             .map(std::sync::Arc::new);
+        self.regularization_protected |= self.paint().is_some_and(|paint| !paint.faces.is_empty());
         self
     }
 
@@ -1063,7 +1074,7 @@ impl Body {
                             })
                             .collect()
                     });
-                    Ok(result.with_face_sources(sources.map(std::sync::Arc::new)))
+                    Ok(result.with_face_sources(sources.map(std::sync::Arc::new)).inherit_regularization_protection(self))
                 })
                 .collect()
         })
@@ -1077,3 +1088,7 @@ mod lump_tests;
 #[cfg(test)]
 #[path = "refine_cache_tests.rs"]
 mod refine_cache_tests;
+
+#[cfg(test)]
+#[path = "regularization_protection_tests.rs"]
+mod regularization_protection_tests;
