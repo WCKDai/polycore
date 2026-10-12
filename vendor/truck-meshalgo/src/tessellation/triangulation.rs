@@ -344,8 +344,10 @@ fn get_mindiff(u: f64, u0: f64, up: f64) -> f64 {
     (-2..=2).map(closure).min_by(abs_diff(u0)).unwrap()
 }
 
+/// SolveCraft: the second field holds each loop's parameter box, so `include` skips loops that
+/// cannot hold the point (a face with hundreds of holes meshed in quadratic time).
 #[derive(Debug, Default, Clone)]
-struct PolyBoundary(Vec<Vec<Point2>>);
+struct PolyBoundary(Vec<Vec<Point2>>, Vec<BoundingBox<Point2>>);
 
 fn normalize_range(curve: &mut Vec<Point2>, compidx: usize, (u0, u1): (f64, f64)) {
     let p = curve[0];
@@ -485,16 +487,26 @@ impl PolyBoundary {
                 closed.push(connect_edges([vec0, vec1, vec2, vec3]));
             }
         }
-        Self(closed)
+        let boxes = closed.iter().map(|curve| curve.iter().collect()).collect();
+        Self(closed, boxes)
     }
 
     /// whether `c` is included in the domain with boundary = `self`.
     fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
         let r = Vector2::new(f64::cos(t), f64::sin(t));
+        // SolveCraft: a closed loop whose box is clear of `c` winds zero times around it, and
+        // no crossing with it lies within the tolerance of `c`: it changes nothing here.
+        let margin = 2.0 * TOLERANCE;
+        let near = |bdb: &BoundingBox<Point2>| {
+            let (min, max) = (bdb.min(), bdb.max());
+            !(c.x < min.x - margin || c.x > max.x + margin || c.y < min.y - margin || c.y > max.y + margin)
+        };
         self.0
             .iter()
-            .flat_map(|vec| vec.iter().circular_tuple_windows())
+            .zip(&self.1)
+            .filter(|(_, bdb)| near(bdb))
+            .flat_map(|(vec, _)| vec.iter().circular_tuple_windows())
             .try_fold(0_i32, move |counter, (p0, p1)| {
                 let a = p0 - c;
                 let b = p1 - c;

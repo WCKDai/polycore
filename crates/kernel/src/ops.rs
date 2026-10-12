@@ -588,6 +588,43 @@ fn by_lumps(la: Vec<Body>, lb: Vec<Body>, op: BoolOp) -> Result<Option<Body>> {
     join_pieces(out)
 }
 
+/// Bodies whose bounding boxes are clearly apart, as one body of several pieces, without any
+/// intersection work (many identical pattern tools, #261). `None` when any two may meet, or a
+/// body is a mesh: the caller unions those the usual way.
+pub fn union_apart(bodies: &[Body]) -> Result<Option<Body>> {
+    if bodies.len() < 2 || bodies.len() > 10_000 || bodies.iter().any(Body::is_mesh) {
+        return Ok(None);
+    }
+    let mut boxes = Vec::with_capacity(bodies.len());
+    for b in bodies {
+        // A coarse mesh is enough: the chord tolerance bounds how far the true surface lies
+        // outside it, and the box grows by twice that.
+        let tol = (b.size() * 0.02).max(1e-3);
+        let bb = b.tessellate(tol)?.bounds();
+        if bb.is_empty() {
+            return Ok(None);
+        }
+        let pad = Vec3::new(1.0, 1.0, 1.0) * (2.0 * tol);
+        boxes.push(solvecraft_geom::Aabb3 { min: bb.min - pad, max: bb.max + pad });
+    }
+    // Sweep along x: only boxes whose x ranges overlap are compared.
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by(|&i, &j| boxes.get(i).map(|b| b.min.x).unwrap_or(0.0).total_cmp(&boxes.get(j).map(|b| b.min.x).unwrap_or(0.0)));
+    for (k, &i) in order.iter().enumerate() {
+        let Some(a) = boxes.get(i) else { continue };
+        for &j in order.iter().skip(k + 1) {
+            let Some(b) = boxes.get(j) else { continue };
+            if b.min.x > a.max.x {
+                break;
+            }
+            if a.min.y <= b.max.y && b.min.y <= a.max.y && a.min.z <= b.max.z && b.min.z <= a.max.z {
+                return Ok(None);
+            }
+        }
+    }
+    join_pieces(bodies.to_vec())
+}
+
 /// Bodies (apart from each other) as one body of several pieces.
 pub(crate) fn join_pieces(pieces: Vec<Body>) -> Result<Option<Body>> {
     match pieces.len() {
