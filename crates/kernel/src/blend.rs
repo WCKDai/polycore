@@ -43,10 +43,15 @@ pub(crate) fn plane_normal(f: &mt::Face) -> Option<Vec3> {
 /// Replace edges in a face's oriented boundary (by id, keeping orientation), and insert extra
 /// edges where consecutive edges no longer connect.
 pub(crate) fn rebuild_face(f: &mt::Face, subst: &HashMap<mt::EdgeID, mt::Edge>, connectors: &[mt::Edge]) -> Result<mt::Face> {
+    rebuild_face_dropping(f, subst, &[], connectors)
+}
+
+/// [`rebuild_face`], also leaving out the `dropped` edges (consumed by a blend).
+fn rebuild_face_dropping(f: &mt::Face, subst: &HashMap<mt::EdgeID, mt::Edge>, dropped: &[mt::EdgeID], connectors: &[mt::Edge]) -> Result<mt::Face> {
     let mut wires = Vec::new();
     for w in f.absolute_boundaries() {
         let mut edges: Vec<mt::Edge> = Vec::new();
-        for e in w.edge_iter() {
+        for e in w.edge_iter().filter(|e| !dropped.contains(&e.id())) {
             let ne = match subst.get(&e.id()) {
                 Some(n) => {
                     // `n` was built in the orientation of the stored edge; match this use.
@@ -201,7 +206,8 @@ fn blend_geometry(
 ) -> Result<Solid> {
     let s = setback(r, phi, shape);
     let tol = (size * 1e-7).max(1e-9);
-    // End faces and the side edges at each end.
+    // End faces and the side edges at each end. A side edge that the fillet's setback uses up
+    // exactly is consumed: the rail ends at its far vertex (`ca`, `cb`).
     struct End {
         v: mt::Vertex,
         g: usize,
@@ -209,6 +215,8 @@ fn blend_geometry(
         e2: mt::Edge,
         a: Vec3,
         b: Vec3,
+        ca: Option<mt::Vertex>,
+        cb: Option<mt::Vertex>,
     }
     let mut ends: Vec<End> = Vec::new();
     for (v, p) in [(&v0, p0), (&v1, p1)] {
@@ -238,18 +246,26 @@ fn blend_geometry(
                 .ok_or_else(|| unsupported("unexpected corner topology"))
         };
         let (e1, e2) = (shared(i1)?, shared(i2)?);
-        for (e, q, t, fi) in [(&e1, a, t1, i1), (&e2, b, t2, i2)] {
+        let mut consumed: [Option<mt::Vertex>; 2] = [None, None];
+        for (k, (e, q, t, fi)) in [(&e1, a, t1, i1), (&e2, b, t2, i2)].into_iter().enumerate() {
             if !matches!(e.curve(), mt::Curve::Line(_)) {
                 return Err(unsupported("the edges at the corners must be straight"));
             }
-            let other = if e.front() == v { vtx(e.back()) } else { vtx(e.front()) };
+            let far = if e.front() == v { e.back().clone() } else { e.front().clone() };
+            let other = vtx(&far);
             let delta = other - p;
             if shape == Shape::Round {
                 // Fillets retain the square-end check: the original corner edge
-                // must run in the setback direction and have enough length left.
+                // must run in the setback direction and have enough length left,
+                // or exactly the setback (the edge is consumed).
                 let along = delta.dot(t);
-                if (delta - t * along).len() > tol * 100.0 + 1e-7 || along <= s + tol {
+                if (delta - t * along).len() > tol * 100.0 + 1e-7 || along < s - tol {
                     return Err(unsupported("the blend is larger than the neighbouring faces"));
+                }
+                if along <= s + tol
+                    && let Some(slot) = consumed.get_mut(k)
+                {
+                    *slot = Some(far);
                 }
                 continue;
             }
@@ -265,7 +281,8 @@ fn blend_geometry(
                 return Err(unsupported("the blend is larger than the neighbouring faces"));
             }
         }
-        ends.push(End { v: v.clone(), g, e1, e2, a, b });
+        let [ca, cb] = consumed;
+        ends.push(End { v: v.clone(), g, e1, e2, a, b, ca, cb });
     }
     let [end0, end1] = &ends[..] else { return Err(KernelError::Failed("ends".into())) };
     if end0.g == end1.g {
@@ -274,10 +291,32 @@ fn blend_geometry(
     if (end1.a - end0.a).dot(d) <= tol || (end1.b - end0.b).dot(d) <= tol {
         return Err(unsupported("the blend is larger than the neighbouring faces"));
     }
-    let a0 = builder::vertex(p3(end0.a));
-    let b0 = builder::vertex(p3(end0.b));
-    let a1 = builder::vertex(p3(end1.a));
-    let b1 = builder::vertex(p3(end1.b));
+    // A side face whose corner edges are consumed at both ends is used up: its remaining edge,
+    // parallel to the old edge at the setback, becomes the rail and the face is removed.
+    let used_up = |fi: usize, c0: &Option<mt::Vertex>, c1: &Option<mt::Vertex>| -> Result<Option<mt::Edge>> {
+        let (Some(x0), Some(x1)) = (c0, c1) else {
+            return match (c0, c1) {
+                (None, None) => Ok(None),
+                _ => Err(unsupported("the blend uses up a neighbouring face at one end only")),
+            };
+        };
+        let f = faces.get(fi).ok_or_else(|| KernelError::Failed("face".into()))?;
+        if f.boundaries().len() != 1 || f.edge_iter().count() != 4 {
+            return Err(unsupported("the blend uses up a neighbouring face with more edges"));
+        }
+        let rail = f
+            .edge_iter()
+            .find(|e| matches!(e.curve(), mt::Curve::Line(_)) && ((e.front() == x0 && e.back() == x1) || (e.front() == x1 && e.back() == x0)))
+            .ok_or_else(|| unsupported("the blend uses up a neighbouring face with more edges"))?;
+        Ok(Some(if rail.front() == x0 { rail.clone() } else { rail.inverse() }))
+    };
+    let rail_a = used_up(i1, &end0.ca, &end1.ca)?;
+    let rail_b = used_up(i2, &end0.cb, &end1.cb)?;
+    let vertex = |c: &Option<mt::Vertex>, p: Vec3| c.clone().unwrap_or_else(|| builder::vertex(p3(p)));
+    let a0 = vertex(&end0.ca, end0.a);
+    let b0 = vertex(&end0.cb, end0.b);
+    let a1 = vertex(&end1.ca, end1.a);
+    let b1 = vertex(&end1.cb, end1.b);
     // Corner curves on the end faces (A → B) and the blend surface. The arc centre is r from
     // both faces (inside the material for a convex edge, outside for a concave one); the arc's
     // middle is the point nearest the old edge.
@@ -294,13 +333,19 @@ fn blend_geometry(
     };
     let c0 = corner(&a0, &b0, p0);
     let c1 = corner(&a1, &b1, p1);
-    let la = builder::line(&a0, &a1);
-    let lb = builder::line(&b0, &b1);
+    let la = rail_a.clone().unwrap_or_else(|| builder::line(&a0, &a1));
+    let lb = rail_b.clone().unwrap_or_else(|| builder::line(&b0, &b1));
 
-    // Substitutions: side edges at the ends now stop at A/B; the blended edge moves to A or B.
+    // Substitutions: side edges at the ends now stop at A/B (consumed ones are dropped); the
+    // blended edge moves to A or B.
     let mut subst: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
+    let mut dropped: Vec<mt::EdgeID> = Vec::new();
     for (end, a, b) in [(end0, &a0, &b0), (end1, &a1, &b1)] {
-        for (e, nv) in [(&end.e1, a), (&end.e2, b)] {
+        for (e, nv, used) in [(&end.e1, a, &end.ca), (&end.e2, b, &end.cb)] {
+            if used.is_some() {
+                dropped.push(e.id());
+                continue;
+            }
             let (f, bk) = (e.absolute_front(), e.absolute_back());
             let ne = if f == &end.v { builder::line(nv, bk) } else { builder::line(f, nv) };
             subst.insert(e.id(), ne);
@@ -308,6 +353,9 @@ fn blend_geometry(
     }
     let mut new_faces: Vec<mt::Face> = Vec::with_capacity(faces.len() + 1);
     for (i, f) in faces.iter().enumerate() {
+        if (i == i1 && rail_a.is_some()) || (i == i2 && rail_b.is_some()) {
+            continue;
+        }
         let nf = if i == i1 {
             let mut m = subst.clone();
             m.insert(edge.id(), la.clone());
@@ -317,9 +365,9 @@ fn blend_geometry(
             m.insert(edge.id(), lb.clone());
             rebuild_face(f, &m, &[])?
         } else if i == end0.g {
-            rebuild_face(f, &subst, std::slice::from_ref(&c0))?
+            rebuild_face_dropping(f, &subst, &dropped, std::slice::from_ref(&c0))?
         } else if i == end1.g {
-            rebuild_face(f, &subst, std::slice::from_ref(&c1))?
+            rebuild_face_dropping(f, &subst, &dropped, std::slice::from_ref(&c1))?
         } else {
             (*f).clone()
         };
