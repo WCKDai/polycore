@@ -1110,6 +1110,13 @@ fn split_seg(seg: &Seg2, pts: &[Vec2], tol: f64) -> Option<Vec<Seg2>> {
     let mut ts: Vec<f64> = pts
         .iter()
         .filter_map(|p| {
+            // A point within `tol` of an arc is within `tol` of its circle: the others need no
+            // (sampled) projection.
+            if let Seg2::Arc { center, radius, .. } = seg
+                && (p.dist(*center) - radius).abs() >= tol
+            {
+                return None;
+            }
             let t = seg.closest_param(*p);
             (t > 1e-9 && t < 1.0 - 1e-9 && seg.point_at(t).dist(*p) < tol).then_some(t)
         })

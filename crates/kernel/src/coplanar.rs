@@ -13,9 +13,10 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Vec3;
+use solidcraft_geom::{Aabb3, Vec3};
 use truck_modeling::{self as mt, builder};
 
+use crate::body::shell_groups::boxes_separate;
 use crate::body::{Body, Solid, from_p3, p3, v3};
 use crate::history::{Change, EdgeOrigin, FaceOrigin, FaceProv, History};
 use crate::{BoolOp, KernelError, Result, guard, record};
@@ -243,11 +244,67 @@ fn slab_beyond(n: Vec3, d: f64, depth: f64, extent: f64) -> Result<Body> {
     crate::extrude(&pl, &[r], 0.0, depth)?.pop().ok_or_else(|| KernelError::Failed("slab".into()))
 }
 
-/// Do the bodies have planar faces in a common plane?
-pub(crate) fn has_coincident_faces(a: &Body, b: &Body) -> bool {
-    let tol = (a.size().max(b.size()) * 1e-7).max(1e-9);
+/// The box of a face's boundary sampled to within `tol` of each curve: the face, planar, lies
+/// within `tol` of it. `None` when the boundary can't be sampled.
+fn face_box(f: &mt::Face, tol: f64) -> Option<Aabb3> {
+    use mt::{BoundedCurve, ParameterDivision1D};
+    const MAX_POINTS: usize = 100_000;
+    guard("face box", || {
+        let mut bb = Aabb3::EMPTY;
+        let mut count = 0usize;
+        for e in f.edge_iter() {
+            let points = match e.curve() {
+                mt::Curve::Line(_) => vec![e.front().point(), e.back().point()],
+                // The division checks its deviation at midpoints only (as in blend.rs).
+                c => c.parameter_division(c.range_tuple(), tol * 0.25).1,
+            };
+            count = count.saturating_add(points.len());
+            if count > MAX_POINTS {
+                return Err(KernelError::Failed("face box: too many boundary points".into()));
+            }
+            for p in points {
+                bb.add(from_p3(p));
+            }
+        }
+        if bb.is_empty() {
+            return Err(KernelError::Failed("face box: no boundary".into()));
+        }
+        Ok(bb)
+    })
+    .ok()
+}
+
+/// The planes (normal, offset) in which a planar face of `a` and one of `b` coincide, as `a`'s
+/// face lies in them, each with whether `b`'s face points the same way. Faces in a common plane but apart from
+/// each other (the tops of two posts standing on one floor) don't coincide: they need no
+/// pushing apart. A face whose extent can't be found counts as meeting every face in its plane.
+pub(crate) fn coincident_planes(a: &Body, b: &Body) -> Vec<(Vec3, f64, bool)> {
+    let size = a.size().max(b.size());
+    let tol = (size * 1e-7).max(1e-9) * 10.0;
+    let sample = (size * 1e-4).max(tol);
+    let (fa, fb): (Vec<&mt::Face>, Vec<&mt::Face>) = (a.solid.face_iter().collect(), b.solid.face_iter().collect());
     let (pa, pb) = (planes(a), planes(b));
-    pa.iter().any(|(_, x)| pb.iter().any(|(_, y)| x.n.dot(y.n).abs() > 1.0 - 1e-9 && (x.d - y.d * x.n.dot(y.n)).abs() < tol * 10.0))
+    let (mut boxes_a, mut boxes_b): (Vec<Option<Option<Aabb3>>>, Vec<Option<Option<Aabb3>>>) = (vec![None; fa.len()], vec![None; fb.len()]);
+    let mut found: Vec<(Vec3, f64, bool)> = Vec::new();
+    for (ia, x) in &pa {
+        for (ib, y) in &pb {
+            let cos = x.n.dot(y.n);
+            if cos.abs() <= 1.0 - 1e-9 || (x.d - y.d * cos).abs() >= tol {
+                continue;
+            }
+            let same = cos > 0.0;
+            if found.iter().any(|(n, d, s)| *s == same && n.dot(x.n) > 1.0 - 1e-9 && (d - x.d).abs() < tol) {
+                continue;
+            }
+            let ba = boxes_a.get_mut(*ia).and_then(|b| *b.get_or_insert_with(|| fa.get(*ia).and_then(|f| face_box(f, sample))));
+            let bb = boxes_b.get_mut(*ib).and_then(|b| *b.get_or_insert_with(|| fb.get(*ib).and_then(|f| face_box(f, sample))));
+            // Each box is within `sample` of its face.
+            if !ba.zip(bb).is_some_and(|(p, q)| boxes_separate(p, q, 2.0 * sample)) {
+                found.push((x.n, x.d, same));
+            }
+        }
+    }
+    found
 }
 
 /// Retry a failed boolean with coincident planar faces pushed apart. `None` when there are no
@@ -255,22 +312,12 @@ pub(crate) fn has_coincident_faces(a: &Body, b: &Body) -> bool {
 pub(crate) fn boolean_apart(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
     let size = a.size().max(b.size());
     let tol = (size * 1e-7).max(1e-9);
-    let (pa, pb) = (planes(a), planes(b));
-    let mut same: Vec<(Vec3, f64)> = Vec::new();
-    let mut back: Vec<(Vec3, f64)> = Vec::new();
-    for (_, x) in &pa {
-        for (_, y) in &pb {
-            if (x.d - y.d * x.n.dot(y.n)).abs() < tol * 10.0 && x.n.dot(y.n).abs() > 1.0 - 1e-9 {
-                let list = if x.n.dot(y.n) > 0.0 { &mut same } else { &mut back };
-                if !list.iter().any(|(n, d)| n.dot(x.n) > 1.0 - 1e-9 && (d - x.d).abs() < tol * 10.0) {
-                    list.push((x.n, x.d));
-                }
-            }
-        }
-    }
-    if same.is_empty() && back.is_empty() {
+    let coincident = coincident_planes(a, b);
+    if coincident.is_empty() {
         return None;
     }
+    let same: Vec<(Vec3, f64)> = coincident.iter().filter(|(_, _, s)| *s).map(|(n, d, _)| (*n, *d)).collect();
+    let back: Vec<(Vec3, f64)> = coincident.iter().filter(|(_, _, s)| !*s).map(|(n, d, _)| (*n, *d)).collect();
     let (d1, d2) = (size * 0.0137, size * 0.0229);
     let counts = record::counts(&[a, b]);
     let run = || -> Result<Option<Body>> {

@@ -386,19 +386,27 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             return Ok(Some(body));
         }
     }
-    if !APART.with(|c| c.get()) && crate::coplanar::has_coincident_faces(a, b) {
+    // Coincident planar faces: push them apart (exactly). Tried once, before the general
+    // boolean; why it failed is reported if everything else fails too.
+    let mut apart_failed = String::new();
+    if !APART.with(|c| c.get()) {
         APART.with(|c| c.set(true));
         let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::boolean_apart(a, b, op));
         APART.with(|c| c.set(false));
-        if let Some(Ok(Some(body))) = r {
-            let (ok, _) = check(&body);
-            if ok {
-                merge(diagnostics);
-                let mut event = BooleanFallback::new(BooleanStrategy::CoplanarSeparation);
-                event.face_shift_mm = size * 0.0229;
-                record(event);
-                return Ok(Some(body));
+        match r {
+            Some(Ok(Some(body))) => {
+                let (ok, v) = check(&body);
+                if ok {
+                    merge(diagnostics);
+                    let mut event = BooleanFallback::new(BooleanStrategy::CoplanarSeparation);
+                    event.face_shift_mm = size * 0.0229;
+                    record(event);
+                    return Ok(Some(body));
+                }
+                apart_failed = format!("; faces pushed apart gave an implausible volume {v:.4}");
             }
+            Some(Err(e)) => apart_failed = format!("; {e}"),
+            Some(Ok(None)) | None => {}
         }
     }
     // Bores on a common cylinder (a pad's bore around the hole it is joined over).
@@ -459,28 +467,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             return Ok(None);
         }
     }
-    // Coincident planar faces: push them apart (exactly) and try again.
-    if !APART.with(|c| c.get()) {
-        APART.with(|c| c.set(true));
-        let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::boolean_apart(a, b, op));
-        APART.with(|c| c.set(false));
-        match r {
-            Some(Ok(Some(body))) => {
-                let (ok, v) = check(&body);
-                if ok {
-                    merge(diagnostics);
-                    let mut event = BooleanFallback::new(BooleanStrategy::CoplanarSeparation);
-                    event.face_shift_mm = size * 0.0229;
-                    record(event);
-                    return Ok(Some(body));
-                }
-                last = format!("{last}; faces pushed apart gave an implausible volume {v:.4}");
-            }
-            Some(Ok(None)) => {}
-            Some(Err(e)) => last = format!("{last}; {e}"),
-            None => {}
-        }
-    }
+    last.push_str(&apart_failed);
     // Coincident faces defeat the B-rep boolean; bodies with only planar faces have an exact
     // polygon fallback.
     match crate::polybool::planar_boolean(a, b, op) {

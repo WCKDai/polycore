@@ -10,7 +10,7 @@ mod planar_regularize;
 #[path = "planar_sources.rs"]
 mod planar_sources;
 #[path = "shell_groups.rs"]
-mod shell_groups;
+pub(crate) mod shell_groups;
 
 pub(crate) type Solid = mt::Solid;
 
