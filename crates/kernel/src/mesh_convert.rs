@@ -9,6 +9,10 @@ use crate::{Body, KernelError, Result};
 
 const MAX_TRIANGLES: usize = 50_000;
 const MAX_BOUNDARY: usize = 8192;
+/// Nesting certification runs two planar booleans per pair of boundary loops,
+/// so the loop count (not the segment count) bounds its cost: 50 loops (an
+/// outline with 49 holes) is at most 1225 pairs and 2450 booleans.
+const MAX_LOOPS: usize = 50;
 
 fn invalid(message: &str) -> KernelError {
     KernelError::Invalid(format!("mesh conversion: {message}"))
@@ -289,6 +293,12 @@ fn extrusion(mesh: &crate::meshbody::TriMesh, axis: Vec3, tolerance: f64) -> Res
 }
 
 fn certify_nesting(raw: &[Loop2], fitted: &[Loop2], epsilon: f64, size: f64) -> Result<()> {
+    if raw.len() > MAX_LOOPS {
+        return Err(KernelError::Invalid(format!(
+            "mesh conversion: too complex to convert ({} boundary loops; at most {MAX_LOOPS} are supported)",
+            raw.len()
+        )));
+    }
     let mut work = 0usize;
     for (i, a) in raw.iter().enumerate() {
         for (j, b) in raw.iter().enumerate().skip(i + 1) {
@@ -467,5 +477,33 @@ mod tests {
         let fitted = fit_loop(&points, 0.05, 1e-6);
         assert_eq!(fitted.segs.len(), 2);
         assert!(certify_nesting(&[outer.clone(), inner], &[outer, fitted], 1e-6, 3.).is_err());
+    }
+
+    fn perforated_plate(rows: usize, cols: usize) -> Body {
+        let w = cols as f64 * 4. + 2.;
+        let h = rows as f64 * 4. + 2.;
+        let holes = (0..rows)
+            .flat_map(|r| (0..cols).map(move |c| (r, c)))
+            .map(|(r, c)| {
+                let (x, y) = (c as f64 * 4. + 2., r as f64 * 4. + 2.);
+                Loop2::polygon(&[Vec2::new(x, y), Vec2::new(x + 2., y), Vec2::new(x + 2., y + 2.), Vec2::new(x, y + 2.)]).reversed()
+            })
+            .collect();
+        let outer = Loop2::polygon(&[Vec2::new(0., 0.), Vec2::new(w, 0.), Vec2::new(w, h), Vec2::new(0., h)]);
+        crate::extrude_planar_regions(&Plane::XY, &[Region2 { outer, holes }], 0., 3.).unwrap()
+    }
+
+    #[test]
+    fn many_holes_are_refused_promptly_instead_of_stalling() {
+        // 400 holes would be ~80k loop pairs and ~160k planar booleans.
+        let mesh = mesh_of(&perforated_plate(20, 20));
+        let start = std::time::Instant::now();
+        let err = convert_prismatic_mesh(&mesh, 0.05).unwrap_err().to_string();
+        assert!(err.contains("too complex to convert"), "{err}");
+        assert!(start.elapsed() < std::time::Duration::from_secs(10), "took {:?}", start.elapsed());
+        // At the limit, a plate still converts in bounded time.
+        let mesh = mesh_of(&perforated_plate(7, 7));
+        let result = convert_prismatic_mesh(&mesh, 0.05).unwrap();
+        assert!((crate::measure(&result).unwrap().volume - (30. * 30. - 49. * 4.) * 3.).abs() < 1e-6);
     }
 }
