@@ -1,10 +1,12 @@
-//! Sewing a solid from face descriptions: each face is its boundary loops (lines and circular
-//! arcs, counter-clockwise about the outward normal; holes clockwise) and its surface (planar,
-//! revolved from a line, or extruded from an arc). Vertices and edges at the same places are
-//! shared, so the faces close into one shell without booleans — for solids whose faces are
-//! known exactly, such as folded sheet metal.
+//! Sewing a solid from face descriptions: each face is its boundary loops (lines, circular
+//! arcs and cubic Bézier chains, counter-clockwise about the outward normal; holes clockwise)
+//! and its surface (planar, revolved from a line, extruded from an arc, or ruled between two
+//! Bézier chains). Vertices and edges at the same places are shared, so the faces close into
+//! one shell without booleans — for solids whose faces are known exactly, such as folded
+//! sheet metal.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use mt::builder;
 use solidcraft_geom::Vec3;
@@ -13,8 +15,11 @@ use truck_modeling as mt;
 use crate::body::{Body, Solid, p3, v3};
 use crate::{KernelError, Result, guard};
 
+/// Most control points of one Bézier chain edge.
+pub const MAX_CHAIN_POINTS: usize = 3 * 1024 + 1;
+
 /// A boundary edge.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum EdgeSpec {
     Line {
         a: Vec3,
@@ -26,18 +31,56 @@ pub enum EdgeSpec {
         b: Vec3,
         mid: Vec3,
     },
+    /// A chain of cubic Bézier pieces: 3n + 1 control points (n ≥ 1); the curve passes
+    /// through `ctrl[0]`, `ctrl[3]`, … `ctrl[3n]`. For curves with no exact line, arc or conic
+    /// form, such as a cut-out edge traced across a sheet metal bend.
+    Chain {
+        ctrl: Arc<[Vec3]>,
+    },
 }
 
 impl EdgeSpec {
     fn ends(&self) -> (Vec3, Vec3) {
-        match *self {
-            EdgeSpec::Line { a, b } | EdgeSpec::Arc { a, b, .. } => (a, b),
+        match self {
+            EdgeSpec::Line { a, b } | EdgeSpec::Arc { a, b, .. } => (*a, *b),
+            EdgeSpec::Chain { ctrl } => (ctrl.first().copied().unwrap_or(Vec3::ZERO), ctrl.last().copied().unwrap_or(Vec3::ZERO)),
+        }
+    }
+
+    /// The same edge, run the other way.
+    pub fn reversed(&self) -> EdgeSpec {
+        match self {
+            EdgeSpec::Line { a, b } => EdgeSpec::Line { a: *b, b: *a },
+            EdgeSpec::Arc { a, b, mid } => EdgeSpec::Arc { a: *b, b: *a, mid: *mid },
+            EdgeSpec::Chain { ctrl } => EdgeSpec::Chain { ctrl: ctrl.iter().rev().copied().collect() },
+        }
+    }
+
+    /// A point telling apart edges with the same ends, whichever way they run.
+    fn mid_key(&self) -> Option<Key> {
+        match self {
+            EdgeSpec::Line { .. } => None,
+            EdgeSpec::Arc { mid, .. } => Some(key(*mid)),
+            EdgeSpec::Chain { ctrl } => {
+                let n = ctrl.len().max(1) as f64;
+                Some(key(ctrl.iter().fold(Vec3::ZERO, |s, p| s + *p) * (1.0 / n)))
+            }
+        }
+    }
+
+    fn valid(&self) -> bool {
+        match self {
+            EdgeSpec::Line { a, b } => a.is_finite() && b.is_finite(),
+            EdgeSpec::Arc { a, b, mid } => a.is_finite() && b.is_finite() && mid.is_finite(),
+            EdgeSpec::Chain { ctrl } => {
+                ctrl.len() >= 4 && ctrl.len() <= MAX_CHAIN_POINTS && (ctrl.len() - 1) % 3 == 0 && ctrl.iter().all(|p| p.is_finite())
+            }
         }
     }
 }
 
 /// A face's surface.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SurfSpec {
     /// The plane of the boundary.
     Plane,
@@ -45,6 +88,9 @@ pub enum SurfSpec {
     Revolved { a: Vec3, b: Vec3, axis_origin: Vec3, axis: Vec3, angle: f64 },
     /// The surface an arc sweeps moving along `dir`.
     Extruded { a: Vec3, b: Vec3, mid: Vec3, dir: Vec3 },
+    /// The straight lines joining equal parameters of two Bézier chains with the same number
+    /// of pieces, `a` and `b` running the same way; both chains lie on it as boundary edges.
+    Ruled { a: EdgeSpec, b: EdgeSpec },
 }
 
 /// A face: boundary loops, surface, and a point on it with its outward normal (curved faces).
@@ -72,26 +118,50 @@ impl Cache {
     fn vertex(&mut self, p: Vec3) -> mt::Vertex {
         self.verts.entry(key(p)).or_insert_with(|| builder::vertex(p3(p))).clone()
     }
-    fn edge(&mut self, e: &EdgeSpec, sheet: usize) -> mt::Edge {
+    fn edge(&mut self, e: &EdgeSpec, sheet: usize) -> Result<mt::Edge> {
         let (a, b) = e.ends();
-        let mid = match e {
-            EdgeSpec::Arc { mid, .. } => Some(key(*mid)),
-            EdgeSpec::Line { .. } => None,
-        };
+        let mid = e.mid_key();
         let (ka, kb) = (key(a), key(b));
         if let Some(found) = self.edges.get(&(ka, kb, mid, sheet)) {
-            return found.clone();
+            return Ok(found.clone());
         }
         if let Some(found) = self.edges.get(&(kb, ka, mid, sheet)) {
-            return found.inverse();
+            return Ok(found.inverse());
         }
         let (va, vb) = (self.vertex(a), self.vertex(b));
-        let made = match *e {
+        let made = match e {
             EdgeSpec::Line { .. } => builder::line(&va, &vb),
-            EdgeSpec::Arc { mid, .. } => arc_edge(&va, &vb, mid),
+            EdgeSpec::Arc { mid, .. } => arc_edge(&va, &vb, *mid),
+            EdgeSpec::Chain { .. } => {
+                let curve = self.chain(e)?;
+                mt::Edge::try_new(&va, &vb, mt::Curve::BSplineCurve(curve)).map_err(|e| KernelError::Failed(format!("sew: chain edge: {e}")))?
+            }
         };
         self.edges.insert((ka, kb, mid, sheet), made.clone());
-        made
+        Ok(made)
+    }
+
+    /// A Bézier chain as a cubic B-spline (triple inner knots) ending on the shared vertices.
+    fn chain(&mut self, e: &EdgeSpec) -> Result<mt::BSplineCurve<mt::Point3>> {
+        let EdgeSpec::Chain { ctrl } = e else { return Err(KernelError::Invalid("sew: not a Bézier chain".into())) };
+        if !e.valid() {
+            return Err(KernelError::Invalid("sew: a Bézier chain needs 3n + 1 finite control points".into()));
+        }
+        let n = (ctrl.len() - 1) / 3;
+        let mut knots = vec![0.0; 4];
+        for i in 1..n {
+            knots.extend([i as f64; 3]);
+        }
+        knots.extend([n as f64; 4]);
+        let mut pts: Vec<mt::Point3> = ctrl.iter().map(|p| p3(*p)).collect();
+        let (a, b) = e.ends();
+        if let Some(first) = pts.first_mut() {
+            *first = self.vertex(a).point();
+        }
+        if let Some(last) = pts.last_mut() {
+            *last = self.vertex(b).point();
+        }
+        mt::BSplineCurve::try_new(mt::KnotVec::from(knots), pts).map_err(|e| KernelError::Failed(format!("sew: chain curve: {e}")))
     }
 }
 
@@ -366,7 +436,7 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
             for e in l {
                 let (a, b) = e.ends();
                 // Ends that weld to one vertex would make truck panic on a zero-length edge (#268).
-                if !a.is_finite() || !b.is_finite() || a.dist(b) < 1e-9 || key(a) == key(b) {
+                if !e.valid() || !a.is_finite() || !b.is_finite() || a.dist(b) < 1e-9 || key(a) == key(b) {
                     return Err(KernelError::Invalid("sew: a degenerate edge".into()));
                 }
             }
@@ -382,22 +452,34 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
                 .iter()
                 .enumerate()
                 .map(|(li, l)| {
-                    l.iter().enumerate().map(|(ei, e)| cache.edge(e, sheets.get(&(fi, li, ei)).copied().unwrap_or(0))).collect::<Vec<_>>().into()
+                    l.iter()
+                        .enumerate()
+                        .map(|(ei, e)| cache.edge(e, sheets.get(&(fi, li, ei)).copied().unwrap_or(0)))
+                        .collect::<Result<Vec<_>>>()
+                        .map(Into::into)
                 })
-                .collect();
-            let face = match f.surface {
+                .collect::<Result<_>>()?;
+            let face = match &f.surface {
                 SurfSpec::Plane => builder::try_attach_plane(&wires).map_err(|e| KernelError::Failed(format!("sew: face {fi}: {e}")))?,
                 SurfSpec::Revolved { a, b, axis_origin, axis, angle } => {
                     let k = axis.normalized().ok_or_else(|| KernelError::Invalid("sew: axis".into()))?;
-                    let (va, vb) = (builder::vertex(p3(a)), builder::vertex(p3(b)));
-                    let swept: mt::Shell = builder::rsweep(&builder::line(&va, &vb), p3(axis_origin), v3(k), mt::Rad(angle));
+                    let (va, vb) = (builder::vertex(p3(*a)), builder::vertex(p3(*b)));
+                    let swept: mt::Shell = builder::rsweep(&builder::line(&va, &vb), p3(*axis_origin), v3(k), mt::Rad(*angle));
                     let tmp = swept.face_iter().next().cloned().ok_or_else(|| KernelError::Failed("sew: revolved surface".into()))?;
                     curved(tmp.oriented_surface(), wires, f.probe, fi)?
                 }
                 SurfSpec::Extruded { a, b, mid, dir } => {
-                    let (va, vb) = (builder::vertex(p3(a)), builder::vertex(p3(b)));
-                    let tmp: mt::Face = builder::tsweep(&arc_edge(&va, &vb, mid), v3(dir));
+                    let (va, vb) = (builder::vertex(p3(*a)), builder::vertex(p3(*b)));
+                    let tmp: mt::Face = builder::tsweep(&arc_edge(&va, &vb, *mid), v3(*dir));
                     curved(tmp.oriented_surface(), wires, f.probe, fi)?
+                }
+                SurfSpec::Ruled { a, b } => {
+                    let (ca, cb) = (cache.chain(a)?, cache.chain(b)?);
+                    if ca.control_points().len() != cb.control_points().len() {
+                        return Err(KernelError::Invalid("sew: ruled chains differ in pieces".into()));
+                    }
+                    let surface = mt::Surface::BSplineSurface(mt::BSplineSurface::homotopy(ca, cb));
+                    curved(surface, wires, f.probe, fi)?
                 }
             };
             out.push(face);
@@ -594,5 +676,62 @@ mod tests {
         assert!((m.volume - 24.0).abs() < 1e-9, "{}", m.volume);
         assert_eq!(body.face_count(), 6);
         assert!(sew(&faces[..5]).is_err());
+    }
+
+    /// A 4 × 3 × 2 box whose +x wall bulges out as the cubic (4,0) (5,0) (5,3) (4,3), given as a
+    /// chain of its two halves at the bottom (`z = 0`) and the top, the wall ruled between them.
+    fn bulged_box(bottom: EdgeSpec, top: EdgeSpec) -> Vec<FaceSpec> {
+        let p = |x: f64, y: f64, z: f64| Vec3::new(x, y, z);
+        let (a, b, c, d) = (p(0., 0., 0.), p(4., 0., 0.), p(4., 3., 0.), p(0., 3., 0.));
+        let (e, f, g, h) = (p(0., 0., 2.), p(4., 0., 2.), p(4., 3., 2.), p(0., 3., 2.));
+        let line = |a: Vec3, b: Vec3| EdgeSpec::Line { a, b };
+        let flat = |edges: Vec<EdgeSpec>| FaceSpec { loops: vec![edges], surface: SurfSpec::Plane, probe: None };
+        vec![
+            flat(vec![line(a, d), line(d, c), bottom.reversed(), line(b, a)]),
+            flat(vec![line(e, f), top.clone(), line(g, h), line(h, e)]),
+            quad(a, b, f, e),
+            quad(c, d, h, g),
+            quad(d, a, e, h),
+            FaceSpec {
+                loops: vec![vec![bottom.clone(), line(c, g), top.reversed(), line(f, b)]],
+                surface: SurfSpec::Ruled { a: bottom, b: top },
+                probe: Some((p(4.75, 1.5, 1.0), Vec3::X)),
+            },
+        ]
+    }
+
+    /// The bulge's cubic split at its middle (de Casteljau), at height `z`.
+    fn bulge(z: f64) -> EdgeSpec {
+        let ctrl = [(4.0, 0.0), (4.5, 0.0), (4.75, 0.75), (4.75, 1.5), (4.75, 2.25), (4.5, 3.0), (4.0, 3.0)];
+        EdgeSpec::Chain { ctrl: ctrl.iter().map(|(x, y)| Vec3::new(*x, *y, z)).collect() }
+    }
+
+    #[test]
+    fn a_ruled_wall_between_bezier_chains_closes_the_solid() {
+        let body = sew(&bulged_box(bulge(0.0), bulge(2.0))).unwrap();
+        assert_eq!(body.face_count(), 6);
+        assert!(body.validity().is_empty(), "{:?}", body.validity());
+        // x = 4 + 3t(1 − t), y = 3(3t² − 2t³): the bulge adds ∫ (x − 4) dy = 54 ∫ t²(1 − t)² dt
+        // = 1.8 to the 4 × 3 section; the solid is that section 2 high.
+        let m = crate::measure(&body).unwrap();
+        assert!((m.volume - 27.6).abs() < 2e-3, "{}", m.volume);
+        assert!((m.bbox.max.x - 4.75).abs() < 1e-3, "{:?}", m.bbox);
+    }
+
+    #[test]
+    fn hostile_bezier_chains_are_refused() {
+        let chain = |ctrl: Vec<Vec3>| EdgeSpec::Chain { ctrl: ctrl.into() };
+        let EdgeSpec::Chain { ctrl } = bulge(2.0) else { panic!() };
+        // Not 3n + 1 control points; a control point that is not a number; too many pieces.
+        let mut nan = ctrl.to_vec();
+        nan[2].x = f64::NAN;
+        let long: Vec<Vec3> = (0..MAX_CHAIN_POINTS + 3).map(|i| Vec3::new(4.0, 3.0 * i as f64 / (MAX_CHAIN_POINTS + 2) as f64, 2.0)).collect();
+        for top in [chain(ctrl[..6].to_vec()), chain(ctrl[..3].to_vec()), chain(Vec::new()), chain(nan), chain(long)] {
+            assert!(sew(&bulged_box(bulge(0.0), top)).is_err());
+        }
+        // A ruled wall needs chains with the same number of pieces.
+        let whole = chain(vec![Vec3::new(4.0, 0.0, 2.0), Vec3::new(5.0, 0.0, 2.0), Vec3::new(5.0, 3.0, 2.0), Vec3::new(4.0, 3.0, 2.0)]);
+        let e = sew(&bulged_box(bulge(0.0), whole)).unwrap_err().to_string();
+        assert!(e.contains("ruled chains differ"), "{e}");
     }
 }
