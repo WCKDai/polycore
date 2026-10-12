@@ -557,8 +557,15 @@ pub(crate) fn bore_union(a: &Body, b: &Body, accept: &dyn Fn(&Body) -> bool) -> 
                 let cut = crate::build::cylinder(at(lo, 0.0, 0.0), c.axis, c.radius, hi - lo)?;
                 crate::ops::boolean(&joined, &cut, BoolOp::Cut)
             };
-            match run() {
-                Ok(Some(r)) if accept(&r) => return Some(r),
+            let (result, diagnostics) = crate::capture_boolean_diagnostics(run);
+            match result {
+                Ok(Some(r)) if accept(&r) => {
+                    crate::boolean_diagnostics::merge(diagnostics);
+                    let mut event = crate::BooleanFallback::new(crate::BooleanStrategy::CommonBore);
+                    event.face_shift_mm = d;
+                    crate::boolean_diagnostics::record(event);
+                    return Some(r);
+                }
                 _ => continue,
             }
         }

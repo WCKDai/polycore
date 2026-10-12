@@ -5,6 +5,7 @@ use solvecraft_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{Body, Solid, from_p3};
+use crate::boolean_diagnostics::{BooleanFallback, BooleanStrategy, capture_boolean_diagnostics, merge, record};
 use crate::{KernelError, Result, guard};
 
 #[cfg(test)]
@@ -192,7 +193,7 @@ pub(crate) fn narrowing_bores() -> bool {
 /// everything or an intersection of disjoint bodies. Results are checked against volume bounds
 /// and retried with shifted copies and other tolerances when they fail or look wrong.
 pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
-    let mut r = boolean_whole(a, b, op);
+    let (mut r, mut diagnostics) = capture_boolean_diagnostics(|| boolean_whole(a, b, op));
     // Bodies in several pieces: when the whole failed (or came out empty), a piece at a time.
     let retry = match &r {
         Err(_) => true,
@@ -201,10 +202,13 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     };
     if retry && (a.solid.boundaries().len() > 1 || b.solid.boundaries().len() > 1) {
         let (la, lb) = (a.lumps()?, b.lumps()?);
-        if (la.len() > 1 || lb.len() > 1)
-            && let Ok(Some(x)) = by_lumps(la, lb, op)
-        {
-            r = Ok(Some(x));
+        if la.len() > 1 || lb.len() > 1 {
+            let (pieces, report) = capture_boolean_diagnostics(|| by_lumps(la, lb, op));
+            if let Ok(Some(x)) = pieces {
+                r = Ok(Some(x));
+                diagnostics = report;
+                diagnostics.push(BooleanFallback::new(BooleanStrategy::Piecewise));
+            }
         }
     }
     if op == BoolOp::Union
@@ -215,7 +219,11 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         // Prefer the exact polygon result; reject an edge-only pinch if it cannot
         // form a closed solid without displacing either operand.
         r = match crate::polybool::planar_boolean(a, b, op) {
-            Ok(Some(exact)) if preserves_planar_surfaces(a, b, &exact) => Ok(Some(exact)),
+            Ok(Some(exact)) if preserves_planar_surfaces(a, b, &exact) => {
+                diagnostics = Default::default();
+                diagnostics.events.push(BooleanFallback::new(BooleanStrategy::PlanarFallback));
+                Ok(Some(exact))
+            }
             _ => Err(KernelError::Invalid(
                 "join cannot preserve the original faces; check for zero-thickness edge contact or add intentional overlap".into(),
             )),
@@ -224,6 +232,9 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     r = r.map(|result| result.map(|body| body.inherit_regularization_protection(a).inherit_regularization_protection(b)));
     if matches!(op, BoolOp::Cut | BoolOp::Union) {
         r = r.and_then(|result| result.map(|body| body.with_preserved_boolean_planar_sources(a, b, op == BoolOp::Cut)).transpose());
+    }
+    if r.is_ok() {
+        merge(diagnostics);
     }
     r
 }
@@ -353,11 +364,15 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     }
     if !APART.with(|c| c.get()) && crate::coplanar::has_coincident_faces(a, b) {
         APART.with(|c| c.set(true));
-        let r = crate::coplanar::boolean_apart(a, b, op);
+        let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::boolean_apart(a, b, op));
         APART.with(|c| c.set(false));
         if let Some(Ok(Some(body))) = r {
             let (ok, _) = check(&body);
             if ok {
+                merge(diagnostics);
+                let mut event = BooleanFallback::new(BooleanStrategy::CoplanarSeparation);
+                event.face_shift_mm = size * 0.0229;
+                record(event);
                 return Ok(Some(body));
             }
         }
@@ -365,13 +380,15 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Bores on a common cylinder (a pad's bore around the hole it is joined over).
     if op == BoolOp::Union && !BORES.with(|c| c.get()) && crate::coplanar::has_coincident_cylinders(a, b) {
         BORES.with(|c| c.set(true));
-        let r = crate::coplanar::bore_union(a, b, &|body| check(body).0);
+        let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::bore_union(a, b, &|body| check(body).0));
         BORES.with(|c| c.set(false));
         if let Some(body) = r {
+            merge(diagnostics);
             return Ok(Some(body));
         }
     }
     let mut empty_votes = 0;
+    let mut empty_diagnostics = crate::BooleanDiagnostics::default();
     let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
     for (attempt, j) in JITTER.iter().enumerate() {
         let shift = mt::Vector3::new(j[0], j[1], j[2]) * (size * 0.01);
@@ -397,12 +414,29 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             match r {
                 Ok(s) if s.boundaries().is_empty() || s.face_iter().next().is_none() => {
                     empty_votes += 1;
+                    if attempt > 0 || k != 2e-3 {
+                        let mut event =
+                            BooleanFallback::new(if attempt > 0 { BooleanStrategy::ShiftedOperands } else { BooleanStrategy::RefinedTolerance });
+                        event.translation_mm = Vec3::new(j[0], j[1], j[2]).len() * (size * 0.01);
+                        event.tolerance_mm = tol;
+                        empty_diagnostics.push(event);
+                    }
                     last = "empty result".into();
                 }
                 Ok(s) => match guard("boolean result", || Body::new(crate::heal::heal_keep(s, size, &keep))) {
                     Ok(body) => {
                         let (ok, v) = check(&body);
                         if ok {
+                            if attempt > 0 || k != 2e-3 {
+                                let mut event = BooleanFallback::new(if attempt > 0 {
+                                    BooleanStrategy::ShiftedOperands
+                                } else {
+                                    BooleanStrategy::RefinedTolerance
+                                });
+                                event.translation_mm = Vec3::new(j[0], j[1], j[2]).len() * (size * 0.01);
+                                event.tolerance_mm = tol;
+                                record(event);
+                            }
                             return Ok(Some(body));
                         }
                         last = format!("implausible result volume {v:.4}");
@@ -413,18 +447,23 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             }
         }
         if empty_votes >= 2 && op != BoolOp::Union {
+            merge(empty_diagnostics);
             return Ok(None);
         }
     }
     // Coincident planar faces: push them apart (exactly) and try again.
     if !APART.with(|c| c.get()) {
         APART.with(|c| c.set(true));
-        let r = crate::coplanar::boolean_apart(a, b, op);
+        let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::boolean_apart(a, b, op));
         APART.with(|c| c.set(false));
         match r {
             Some(Ok(Some(body))) => {
                 let (ok, v) = check(&body);
                 if ok {
+                    merge(diagnostics);
+                    let mut event = BooleanFallback::new(BooleanStrategy::CoplanarSeparation);
+                    event.face_shift_mm = size * 0.0229;
+                    record(event);
                     return Ok(Some(body));
                 }
                 last = format!("{last}; faces pushed apart gave an implausible volume {v:.4}");
@@ -440,11 +479,15 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         Ok(Some(body)) => {
             let (ok, v) = check(&body);
             if ok {
+                record(BooleanFallback::new(BooleanStrategy::PlanarFallback));
                 return Ok(Some(body));
             }
             last = format!("planar fallback gave an implausible volume {v:.4}");
         }
-        Ok(None) => return Ok(None),
+        Ok(None) => {
+            record(BooleanFallback::new(BooleanStrategy::PlanarFallback));
+            return Ok(None);
+        }
         Err(e) => last = format!("{last}; {e}"),
     }
     // Last resort: nudge the tool by a micron-scale screw motion (turned 2e-6 rad about a
@@ -453,17 +496,31 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     if !APART.with(|c| c.get()) {
         APART.with(|c| c.set(true));
         let c = b.solid.vertex_iter().fold(Vec3::ZERO, |acc, v| acc + from_p3(v.point())) * (1.0 / b.solid.vertex_iter().count().max(1) as f64);
-        let r = transform(b, Vec3::new(0.61, -0.37, 0.71) * (size * 2e-6), c, Vec3::new(0.27, 0.83, -0.49), 2e-6).and_then(|nb| boolean(a, &nb, op));
+        let translation = Vec3::new(0.61, -0.37, 0.71) * (size * 2e-6);
+        let (r, diagnostics) =
+            capture_boolean_diagnostics(|| transform(b, translation, c, Vec3::new(0.27, 0.83, -0.49), 2e-6).and_then(|nb| boolean(a, &nb, op)));
         APART.with(|c| c.set(false));
         match r {
             Ok(Some(body)) => {
                 let (ok, v) = check(&body);
                 if ok {
+                    merge(diagnostics);
+                    let mut event = BooleanFallback::new(BooleanStrategy::ToolNudge);
+                    event.translation_mm = translation.len();
+                    event.rotation_rad = 2e-6;
+                    record(event);
                     return Ok(Some(body));
                 }
                 last = format!("{last}; the nudged tool gave an implausible volume {v:.4}");
             }
-            Ok(None) => return Ok(None),
+            Ok(None) => {
+                merge(diagnostics);
+                let mut event = BooleanFallback::new(BooleanStrategy::ToolNudge);
+                event.translation_mm = translation.len();
+                event.rotation_rad = 2e-6;
+                record(event);
+                return Ok(None);
+            }
             Err(e) => last = format!("{last}; nudged: {e}"),
         }
     }

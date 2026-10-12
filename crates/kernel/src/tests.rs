@@ -324,7 +324,10 @@ fn drain_pads_flush_under_a_floor_with_a_hole() {
     // The ring's part inside the floor adds nothing: 5 mm of ring below it either way.
     let v_ring = PI * (400.0 - 100.0) * 5.0;
     for (z0, z1) in [(-5.0, 0.0), (-5.0, 2.0)] {
-        let u = boolean(&floor, &ring(z0, z1), BoolOp::Union).unwrap().unwrap();
+        let (result, diagnostics) = capture_boolean_diagnostics(|| boolean(&floor, &ring(z0, z1), BoolOp::Union));
+        let u = result.unwrap().unwrap();
+        assert!(diagnostics.events.iter().any(|event| event.strategy == BooleanStrategy::CommonBore), "{diagnostics:?}");
+        assert!(diagnostics.events.iter().all(|event| event.translation_mm.is_finite() && event.face_shift_mm.is_finite()));
         let v = measure(&u).unwrap().volume;
         assert!(rel(v, v_floor + v_ring) < 2e-5, "ring {z0}..{z1}: {v} vs {}", v_floor + v_ring);
         assert!(u.validity().is_empty(), "{:?}", u.validity());
