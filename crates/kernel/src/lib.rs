@@ -64,6 +64,7 @@ mod sweep_path;
 #[cfg(test)]
 mod thread_tests;
 mod topo;
+mod tspline;
 
 pub use blend::{ChamferSide, chamfer, chamfer_sides, fillet};
 pub use blend_corner::fillet_radii;
@@ -96,6 +97,7 @@ pub use surfaces::{copy_faces, extend, patch_edges, patch_region, stitch, thicke
 pub use sweep_path::sweep_path;
 pub use topo::{CylinderFace, cylinder_face_at};
 pub use topo::{TopoCounts, merged_topology, seam_flags};
+pub use tspline::tspline_sheet;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum KernelError {

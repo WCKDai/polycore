@@ -22,7 +22,7 @@ impl Body {
 }
 
 /// A body of faces as they are (no orientation fix: a surface has no inside).
-fn surface_body(faces: Vec<mt::Face>) -> Body {
+pub(crate) fn surface_body(faces: Vec<mt::Face>) -> Body {
     surface_of(mt::Shell::from(faces))
 }
 
