@@ -87,3 +87,9 @@ SolidCraft changes:
   exposing the effective sample count so host paint callbacks can match it.
 - `src/winit.rs`: use that same effective count for depth and resolve attachments.
 - Other backends retain requested MSAA, without another adapter or device probe.
+- `src/lib.rs`: clamp MSAA to the largest sample count the device supports for the surface and
+  depth formats (`supported_msaa_samples`, `RenderState::msaa_supported`): a saved 8x on a
+  device without it failed pipeline validation, a panic at start.
+- `src/setup.rs`: the default device requests `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` when
+  the adapter has it, so 2x and 8x work where the adapter supports them (WebGPU only
+  guarantees 1x and 4x).
