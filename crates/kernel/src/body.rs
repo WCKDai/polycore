@@ -120,6 +120,11 @@ fn mesh_shells(solid: &Solid, tol: f64) -> Vec<MeshedShell> {
 /// `None` when nothing needs splitting or the parameters don't match the surface.
 #[allow(clippy::type_complexity)]
 fn refined(pm: &PolygonMesh, surf: &mt::Surface, tol: f64) -> Option<Vec<[(Vec3, Vec3); 3]>> {
+    refined_with_cache(pm, surf, tol, true)
+}
+
+#[allow(clippy::type_complexity)]
+fn refined_with_cache(pm: &PolygonMesh, surf: &mt::Surface, tol: f64, memoize: bool) -> Option<Vec<[(Vec3, Vec3); 3]>> {
     use mt::{ParametricSurface, ParametricSurface3D};
     let (pos, uvs, nor) = (pm.positions(), pm.uv_coords(), pm.normals());
     if uvs.is_empty() {
@@ -148,6 +153,15 @@ fn refined(pm: &PolygonMesh, surf: &mt::Surface, tol: f64) -> Option<Vec<[(Vec3,
     // Edges on the face's boundary are shared with the next face: never split them.
     let k = |x: &V| ((x.1.0 * 1e9).round() as i64, (x.1.1 * 1e9).round() as i64);
     let ek = |a: &V, b: &V| if k(a) < k(b) { (k(a), k(b)) } else { (k(b), k(a)) };
+    // Only exact finite values identify reusable evaluations. In particular,
+    // the rounded UV keys used for boundary incidence cannot identify a point
+    // whose derivatives or midpoint may be reused.
+    let vertex_key = |v: &V| {
+        let values = [v.0.x, v.0.y, v.0.z, v.1.0, v.1.1, v.2.x, v.2.y, v.2.z];
+        values.iter().all(|x| x.is_finite()).then(|| values.map(f64::to_bits))
+    };
+    let cache_limit = cap * 3;
+    let mut singular_cache = std::collections::HashMap::<(u64, u64), bool>::new();
     let mut changed = false;
     for _ in 0..4 {
         let mut uses: std::collections::HashMap<((i64, i64), (i64, i64)), u32> = std::collections::HashMap::new();
@@ -156,34 +170,60 @@ fn refined(pm: &PolygonMesh, surf: &mt::Surface, tol: f64) -> Option<Vec<[(Vec3,
                 *uses.entry(e).or_default() += 1;
             }
         }
-        let at = |a: &V, b: &V| -> Option<V> {
-            if uses.get(&ek(a, b)).copied().unwrap_or(0) < 2 {
-                return None;
+        let mut edge_cache = std::collections::HashMap::<([u64; 8], [u64; 8]), Option<V>>::new();
+        let mut at = |a: &V, b: &V| -> Option<V> {
+            let key = if memoize { vertex_key(a).zip(vertex_key(b)).map(|(a, b)| if a < b { (a, b) } else { (b, a) }) } else { None };
+            if let Some(key) = key
+                && let Some(value) = edge_cache.get(&key)
+            {
+                return *value;
             }
-            // Not at a degenerate point (a cone's apex: its parameters there are arbitrary).
-            let singular = |x: &V| {
-                let (du, dv) = (surf.uder(x.1.0, x.1.1), surf.vder(x.1.0, x.1.1));
-                let c = du.cross(dv);
-                c.x * c.x + c.y * c.y + c.z * c.z
-                    <= 1e-12 * (du.x * du.x + du.y * du.y + du.z * du.z + dv.x * dv.x + dv.y * dv.y + dv.z * dv.z).powi(2) + 1e-300
+            let mut calculate = || -> Option<V> {
+                if uses.get(&ek(a, b)).copied().unwrap_or(0) < 2 {
+                    return None;
+                }
+                // Not at a degenerate point (a cone's apex: its parameters there are arbitrary).
+                let mut singular = |x: &V| {
+                    let key = (x.1.0.to_bits(), x.1.1.to_bits());
+                    let cacheable = memoize && x.1.0.is_finite() && x.1.1.is_finite();
+                    if cacheable && let Some(value) = singular_cache.get(&key) {
+                        return *value;
+                    }
+                    let (du, dv) = (surf.uder(x.1.0, x.1.1), surf.vder(x.1.0, x.1.1));
+                    let c = du.cross(dv);
+                    let value = c.x * c.x + c.y * c.y + c.z * c.z
+                        <= 1e-12 * (du.x * du.x + du.y * du.y + du.z * du.z + dv.x * dv.x + dv.y * dv.y + dv.z * dv.z).powi(2) + 1e-300;
+                    if cacheable && singular_cache.len() < cache_limit {
+                        singular_cache.insert(key, value);
+                    }
+                    value
+                };
+                if singular(a) || singular(b) {
+                    return None;
+                }
+                let (u, v) = ((a.1.0 + b.1.0) / 2.0, (a.1.1 + b.1.1) / 2.0);
+                let q = from_p3(surf.subs(u, v));
+                // Within tolerance, or so far off that the parameters wrapped (a seam).
+                let sag = q.dist((a.0 + b.0) * 0.5);
+                if sag <= tol || sag >= 0.5 * a.0.dist(b.0) {
+                    return None;
+                }
+                let n = surf.normal(u, v);
+                let mut n = Vec3::new(n.x, n.y, n.z);
+                // Keep the mesh's normal side.
+                if n.dot(a.2 + b.2) < 0.0 {
+                    n = -n;
+                }
+                Some((q, (u, v), n))
             };
-            if singular(a) || singular(b) {
-                return None;
+            let value = calculate();
+            if let Some(key) = key
+                && edge_cache.len() < cache_limit
+                && value.is_none_or(|v| vertex_key(&v).is_some())
+            {
+                edge_cache.insert(key, value);
             }
-            let (u, v) = ((a.1.0 + b.1.0) / 2.0, (a.1.1 + b.1.1) / 2.0);
-            let q = from_p3(surf.subs(u, v));
-            // Within tolerance, or so far off that the parameters wrapped (a seam).
-            let sag = q.dist((a.0 + b.0) * 0.5);
-            if sag <= tol || sag >= 0.5 * a.0.dist(b.0) {
-                return None;
-            }
-            let n = surf.normal(u, v);
-            let mut n = Vec3::new(n.x, n.y, n.z);
-            // Keep the mesh's normal side.
-            if n.dot(a.2 + b.2) < 0.0 {
-                n = -n;
-            }
-            Some((q, (u, v), n))
+            value
         };
         let mut next = Vec::with_capacity(tris.len());
         let mut any = false;
@@ -658,11 +698,15 @@ impl Body {
                 let flip = !face.orientation();
                 let base = u32::try_from(out.positions.len()).unwrap_or(u32::MAX);
                 // Curved faces: split triangles that cut through the surface.
-                if refine
-                    && let Some(sf) = solid_faces.get(fi)
-                    && !matches!(sf.surface(), mt::Surface::Plane(_))
-                    && let Some(tris) = refined(&pm, &sf.surface(), tol)
-                {
+                let refinement = if refine {
+                    solid_faces.get(fi).and_then(|sf| {
+                        let surface = sf.surface();
+                        if matches!(surface, mt::Surface::Plane(_)) { None } else { refined(&pm, &surface, tol) }
+                    })
+                } else {
+                    None
+                };
+                if let Some(tris) = refinement {
                     let fid = u32::try_from(fi).unwrap_or(u32::MAX);
                     for t in tris {
                         let mut idx = [0u32; 3];
@@ -1029,3 +1073,7 @@ impl Body {
 #[cfg(test)]
 #[path = "body_lump_tests.rs"]
 mod lump_tests;
+
+#[cfg(test)]
+#[path = "refine_cache_tests.rs"]
+mod refine_cache_tests;
