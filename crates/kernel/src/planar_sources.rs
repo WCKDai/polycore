@@ -2,7 +2,7 @@
 //! No tessellated face names, centroids, or nearest-plane choices are used.
 use super::{Body, FaceSource, from_p3};
 use crate::{KernelError, Result, guard};
-use solvecraft_geom::{Plane, Vec3};
+use solidcraft_geom::{Plane, Vec3};
 use std::sync::Arc;
 use truck_modeling as mt;
 
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn pocket_cut_removes_internal_wall_faces_in_actual_topology() {
-        use solvecraft_geom::{Loop2, Region2, Vec2};
+        use solidcraft_geom::{Loop2, Region2, Vec2};
         let region = Region2 {
             outer: Loop2::polygon(&[Vec2::new(-30., -27.), Vec2::new(30., -27.), Vec2::new(30., 27.), Vec2::new(-30., 27.)]),
             holes: vec![],

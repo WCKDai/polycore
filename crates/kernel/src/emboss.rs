@@ -5,7 +5,7 @@ use crate::numbered::NumberedRegion;
 use crate::offset::{Surf, surf_of};
 use crate::record::Operand;
 use crate::{KernelError, Result, guard};
-use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling::{self as mt, Transformed, builder};
 
 fn fail(s: &str) -> KernelError {

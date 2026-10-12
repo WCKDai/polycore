@@ -1,9 +1,9 @@
-//! Robustness checks on random inputs (`solvecraft-cli fuzz`, docs/robustness.md): a small
+//! Robustness checks on random inputs (`solidcraft-cli fuzz`, docs/robustness.md): a small
 //! seeded random generator, and the boolean volume identity on random pairs of primitives
 //! placed on a coarse grid, so coincident faces and tangencies come up often.
 
 use serde::Serialize;
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 
 use crate::{Body, BoolOp, boolean, box_solid, cylinder, measure, sphere, torus};
 

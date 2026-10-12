@@ -4,7 +4,7 @@
 //! between stations, mitred at the corners.
 
 use mt::builder;
-use solvecraft_geom::{Plane, Region2, Vec2, Vec3};
+use solidcraft_geom::{Plane, Region2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, p3};
@@ -298,7 +298,7 @@ fn smooth_walls(plane: &Plane, profile: &NumberedLoop, st: &[Station], expected:
 
 #[cfg(test)]
 mod tests {
-    use solvecraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+    use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 
     use super::sweep_path;
 

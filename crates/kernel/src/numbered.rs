@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use solvecraft_geom::{Loop2, Region2, Seg2};
+use solidcraft_geom::{Loop2, Region2, Seg2};
 
 /// The loops of `regions` in profile order: each region's outer loop, then its holes.
 pub(crate) fn profile_loops(regions: &[Region2]) -> impl Iterator<Item = &Loop2> {

@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
@@ -232,14 +232,14 @@ fn slab_beyond(n: Vec3, d: f64, depth: f64, extent: f64) -> Result<Body> {
     let u = n.any_perp();
     let w = n.cross(u);
     let o = n * d;
-    let pl = solvecraft_geom::Plane::new(o, u, w).ok_or_else(|| KernelError::Failed("slab plane".into()))?;
-    let sq = solvecraft_geom::Loop2::polygon(&[
-        solvecraft_geom::Vec2::new(-extent, -extent),
-        solvecraft_geom::Vec2::new(extent, -extent),
-        solvecraft_geom::Vec2::new(extent, extent),
-        solvecraft_geom::Vec2::new(-extent, extent),
+    let pl = solidcraft_geom::Plane::new(o, u, w).ok_or_else(|| KernelError::Failed("slab plane".into()))?;
+    let sq = solidcraft_geom::Loop2::polygon(&[
+        solidcraft_geom::Vec2::new(-extent, -extent),
+        solidcraft_geom::Vec2::new(extent, -extent),
+        solidcraft_geom::Vec2::new(extent, extent),
+        solidcraft_geom::Vec2::new(-extent, extent),
     ]);
-    let r = solvecraft_geom::Region2 { outer: sq, holes: vec![] };
+    let r = solidcraft_geom::Region2 { outer: sq, holes: vec![] };
     crate::extrude(&pl, &[r], 0.0, depth)?.pop().ok_or_else(|| KernelError::Failed("slab".into()))
 }
 

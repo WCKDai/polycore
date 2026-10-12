@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::blend::{plane_normal, unsupported, vtx};
@@ -1142,7 +1142,7 @@ mod tests {
 
     #[test]
     fn sloped_basin_rim_fillets() {
-        use solvecraft_geom::{Loop2, Plane, Vec2};
+        use solidcraft_geom::{Loop2, Plane, Vec2};
         let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
         let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
         let pocket =
@@ -1170,7 +1170,7 @@ mod tests {
 
     #[test]
     fn sloped_rim_fillets_cannot_extend_outside_the_material() {
-        use solvecraft_geom::{Loop2, Plane, Vec2};
+        use solidcraft_geom::{Loop2, Plane, Vec2};
         for margin in [0.5, 1.0] {
             let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
             let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
@@ -1190,7 +1190,7 @@ mod tests {
 
     #[test]
     fn chamfers_meet_on_unequal_sloped_rim_walls() {
-        use solvecraft_geom::{Loop2, Plane, Vec2};
+        use solidcraft_geom::{Loop2, Plane, Vec2};
         for margin in [1.0, 4.0] {
             let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
             let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
@@ -1229,7 +1229,7 @@ mod tests {
 
     #[test]
     fn equal_slope_rim_loops_cannot_escape_the_face() {
-        use solvecraft_geom::{Loop2, Plane, Vec2};
+        use solidcraft_geom::{Loop2, Plane, Vec2};
         let rectangle = |x0, y0, x1, y1| Loop2::polygon(&[Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)]);
         let slab = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 30.0)).unwrap();
         let pocket =

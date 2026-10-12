@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use solvecraft_geom::{Plane, Region2, Vec2, Vec3};
+use solidcraft_geom::{Plane, Region2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use super::{Index, Section, Tag, dist_to, inside};

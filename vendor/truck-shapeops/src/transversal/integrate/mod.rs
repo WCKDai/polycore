@@ -55,7 +55,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     lineage: &mut Lineage<C, S>,
 ) -> Option<[Shell<Point3, C, S>; 2]> {
     nonpositive_tolerance!(tol);
-    // SolveCraft: robust meshing (boundaries from earlier operations lie on surfaces only
+    // SolidCraft: robust meshing (boundaries from earlier operations lie on surfaces only
     // within tolerance).
     let poly_shell0 = shell0.robust_triangulation(tol);
     let poly_shell1 = shell1.robust_triangulation(tol);
@@ -70,7 +70,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     cls1.integrate_by_component();
     let [mut and0, mut or0, unknown0] = cls0.and_or_unknown();
     unknown0.into_iter().try_for_each(|face| {
-        // SolveCraft: no panics (wasm can't catch them).
+        // SolidCraft: no panics (wasm can't catch them).
         let pt = face.boundaries().first()?.vertex_iter().next()?.point();
         let dir = hash::take_one_unit(pt);
         let count = poly_shell1.iter().try_fold(0, |count, face| {
@@ -86,7 +86,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     })?;
     let [mut and1, mut or1, unknown1] = cls1.and_or_unknown();
     unknown1.into_iter().try_for_each(|face| {
-        // SolveCraft: no panics (wasm can't catch them).
+        // SolidCraft: no panics (wasm can't catch them).
         let pt = face.boundaries().first()?.vertex_iter().next()?.point();
         let dir = hash::take_one_unit(pt);
         let count = poly_shell0.iter().try_fold(0, |count, face| {
@@ -123,7 +123,7 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     boolean(solid0, solid1, tol, |[_, or]| or).map(|(solid, _)| solid)
 }
 
-/// SolveCraft: AND operation between two solids, with where each face and edge of the result
+/// SolidCraft: AND operation between two solids, with where each face and edge of the result
 /// came from (operand 0 is `solid0`, operand 1 is `solid1`): the same result as [`and`], and
 /// its history, `None` when a face or edge of it was not recorded. The operands must not share
 /// faces or edges.
@@ -135,7 +135,7 @@ pub fn and_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     boolean(solid0, solid1, tol, |[and, _]| and)
 }
 
-/// SolveCraft: OR operation between two solids, with where each face and edge of the result
+/// SolidCraft: OR operation between two solids, with where each face and edge of the result
 /// came from (operand 0 is `solid0`, operand 1 is `solid1`): the same result as [`or`], and
 /// its history, `None` when a face or edge of it was not recorded. The operands must not share
 /// faces or edges.
@@ -170,7 +170,7 @@ fn boolean<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     Some((solid, history))
 }
 
-// SolveCraft: truck's connected components come out in hash order of face addresses, so the
+// SolidCraft: truck's connected components come out in hash order of face addresses, so the
 // result's face order changed from run to run. Keep the shell's own order instead.
 fn components_in_order<C, S>(shell: &Shell<Point3, C, S>) -> Vec<Shell<Point3, C, S>> {
     let pos: rustc_hash::FxHashMap<_, usize> = shell.face_iter().enumerate().map(|(i, f)| (f.id(), i)).collect();

@@ -1,8 +1,8 @@
 # Vendored third-party crates
 
-Copies of third-party crates that SolveCraft builds with local fixes, wired in with
+Copies of third-party crates that SolidCraft builds with local fixes, wired in with
 `[patch.crates-io]` in the workspace `Cargo.toml`. They keep their own licence; changed lines
-are marked `SolveCraft:` in the source.
+are marked `SolidCraft:` in the source.
 
 ## truck-shapeops 0.4.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
@@ -31,7 +31,7 @@ Changes:
 
 ## truck-stepio 0.3.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
-Only the writer (`out`) is used; SolveCraft reads STEP with its own reader.
+Only the writer (`out`) is used; SolidCraft reads STEP with its own reader.
 
 Changes:
 - `out/geometry.rs`: an `INTERSECTION_CURVE`'s second surface was written at the first

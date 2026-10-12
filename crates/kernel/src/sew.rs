@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use mt::builder;
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{Body, Solid, p3, v3};

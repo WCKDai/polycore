@@ -21,7 +21,7 @@ where
 {
     let surface = face.surface();
     let pt = wire.front_vertex().unwrap().point();
-    // SolveCraft: intersection-curve points lie on the surface only within the tolerance; fall
+    // SolidCraft: intersection-curve points lie on the surface only within the tolerance; fall
     // back to the nearest parameter when the exact search fails.
     let p: Point2 = surface
         .search_parameter(pt, None, 100)
@@ -87,7 +87,7 @@ where
     }
     negative_wires.into_iter().try_for_each(|chunk| {
         let pt = chunk.poly.front();
-        // SolveCraft: the innermost piece that holds the loop (nested intersection loops, such
+        // SolidCraft: the innermost piece that holds the loop (nested intersection loops, such
         // as both walls of a tube crossing one face), never the loop's own twin.
         let hole = -chunk.poly.area();
         let op = crate::tr!(

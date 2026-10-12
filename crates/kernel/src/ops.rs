@@ -1,7 +1,7 @@
 //! Operations on bodies: booleans and rigid transforms.
 
 use serde::{Deserialize, Serialize};
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use truck_modeling as mt;
 
 use std::collections::HashMap;
@@ -51,7 +51,7 @@ fn halton(mut i: usize, b: usize) -> f64 {
 
 /// Fraction of sample points where `result` disagrees with `op` applied to `a` and `b`
 /// (membership by ray parity). Samples cover the overlap box densely and the union box lightly.
-fn mismatch(a: &solvecraft_geom::Mesh, b: &solvecraft_geom::Mesh, result: &solvecraft_geom::Mesh, op: BoolOp) -> Option<f64> {
+fn mismatch(a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh, result: &solidcraft_geom::Mesh, op: BoolOp) -> Option<f64> {
     if a.triangles.len() + b.triangles.len() + result.triangles.len() > 60_000 {
         return None;
     }
@@ -64,7 +64,7 @@ fn mismatch(a: &solvecraft_geom::Mesh, b: &solvecraft_geom::Mesh, result: &solve
     // operands' boundaries, where ray parity cannot classify membership reliably.
     let gap = all.diagonal().max(1.0) * 1e-9;
     if hi.x - lo.x > gap && hi.y - lo.y > gap && hi.z - lo.z > gap {
-        boxes.push((solvecraft_geom::Aabb3 { min: lo, max: hi }, 900));
+        boxes.push((solidcraft_geom::Aabb3 { min: lo, max: hi }, 900));
     }
     let (ia_idx, ib_idx, ir_idx) = (a.inside_index(), b.inside_index(), result.inside_index());
     let (mut n, mut bad) = (0usize, 0usize);
@@ -89,12 +89,12 @@ fn mismatch(a: &solvecraft_geom::Mesh, b: &solvecraft_geom::Mesh, result: &solve
 
 /// How one body sits relative to another, from sample points: (fraction of `b`'s samples
 /// inside `a`, fraction of `a`'s samples inside `b`).
-fn overlap(a: &solvecraft_geom::Mesh, b: &solvecraft_geom::Mesh) -> Option<(f64, f64)> {
+fn overlap(a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh) -> Option<(f64, f64)> {
     if a.triangles.len() + b.triangles.len() > 80_000 {
         return None;
     }
     let (ia, ib) = (a.inside_index(), b.inside_index());
-    let frac = |inner: &solvecraft_geom::Mesh, inner_i: &solvecraft_geom::InsideIndex, outer_i: &solvecraft_geom::InsideIndex| -> Option<f64> {
+    let frac = |inner: &solidcraft_geom::Mesh, inner_i: &solidcraft_geom::InsideIndex, outer_i: &solidcraft_geom::InsideIndex| -> Option<f64> {
         let bx = inner.bounds();
         let s = bx.size();
         let (mut n, mut hit) = (0usize, 0usize);
@@ -120,8 +120,8 @@ fn trivial(
     a: &Body,
     b: &Body,
     op: BoolOp,
-    ma: &solvecraft_geom::Mesh,
-    mb: &solvecraft_geom::Mesh,
+    ma: &solidcraft_geom::Mesh,
+    mb: &solidcraft_geom::Mesh,
     counts: &[(usize, usize)],
 ) -> Option<Option<Body>> {
     let (b_in_a, a_in_b) = overlap(ma, mb)?;
@@ -286,14 +286,14 @@ fn planar_surfaces_match(a: &Body, b: &Body, result: &Body) -> bool {
 /// Smallest side of the box where the bodies' vertex boxes overlap (infinite when they don't).
 fn meeting_size(a: &Body, b: &Body) -> f64 {
     let bbox = |x: &Body| {
-        let mut bb = solvecraft_geom::Aabb3::EMPTY;
+        let mut bb = solidcraft_geom::Aabb3::EMPTY;
         for v in x.solid.vertex_iter() {
             bb.add(from_p3(v.point()));
         }
         bb
     };
     let (ba, bb) = (bbox(a), bbox(b));
-    let s = solvecraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) }.size();
+    let s = solidcraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) }.size();
     if s.x > 0.0 && s.y > 0.0 && s.z > 0.0 { s.x.min(s.y).min(s.z) } else { f64::INFINITY }
 }
 
@@ -660,7 +660,7 @@ pub fn union_apart(bodies: &[Body]) -> Result<Option<Body>> {
             return Ok(None);
         }
         let pad = Vec3::new(1.0, 1.0, 1.0) * (2.0 * tol);
-        boxes.push(solvecraft_geom::Aabb3 { min: bb.min - pad, max: bb.max + pad });
+        boxes.push(solidcraft_geom::Aabb3 { min: bb.min - pad, max: bb.max + pad });
     }
     // Sweep along x: only boxes whose x ranges overlap are compared.
     let mut order: Vec<usize> = (0..boxes.len()).collect();
@@ -851,7 +851,7 @@ pub fn transform(body: &Body, translate: Vec3, origin: Vec3, axis: Vec3, angle: 
 
 /// Split a body with a plane: the parts on the positive and the negative side of the plane
 /// (only the non-empty ones).
-pub fn split_by_plane(body: &Body, plane: &solvecraft_geom::Plane) -> Result<Vec<Body>> {
+pub fn split_by_plane(body: &Body, plane: &solidcraft_geom::Plane) -> Result<Vec<Body>> {
     let mut out = Vec::new();
     for positive in [true, false] {
         out.extend(half_space(body, plane, positive)?);
@@ -861,26 +861,26 @@ pub fn split_by_plane(body: &Body, plane: &solvecraft_geom::Plane) -> Result<Vec
 
 /// The part of a body on one side of a plane (`None` when nothing is there): its intersection
 /// with [`half_box`] (whose history it carries, over the body and the box).
-pub(crate) fn half_space(body: &Body, plane: &solvecraft_geom::Plane, positive: bool) -> Result<Option<Body>> {
+pub(crate) fn half_space(body: &Body, plane: &solidcraft_geom::Plane, positive: bool) -> Result<Option<Body>> {
     boolean(body, &half_box(body, plane, positive)?, BoolOp::Intersect)
 }
 
 /// A box covering everything of `body` on one side of a plane, its start cap in the plane.
-pub(crate) fn half_box(body: &Body, plane: &solvecraft_geom::Plane, positive: bool) -> Result<Body> {
+pub(crate) fn half_box(body: &Body, plane: &solidcraft_geom::Plane, positive: bool) -> Result<Body> {
     body.require_brep("split")?;
     let size = body.size();
-    let mut bb = solvecraft_geom::Aabb3::EMPTY;
+    let mut bb = solidcraft_geom::Aabb3::EMPTY;
     for v in body.solid.vertex_iter() {
         bb.add(crate::body::from_p3(v.point()));
     }
     let reach = (bb.diagonal() + plane.origin.dist(bb.center())) * 2.0 + size;
     let c = plane.to_local(bb.center());
-    let sq = solvecraft_geom::Region2 {
-        outer: solvecraft_geom::Loop2::polygon(&[
-            solvecraft_geom::Vec2::new(c.x - reach, c.y - reach),
-            solvecraft_geom::Vec2::new(c.x + reach, c.y - reach),
-            solvecraft_geom::Vec2::new(c.x + reach, c.y + reach),
-            solvecraft_geom::Vec2::new(c.x - reach, c.y + reach),
+    let sq = solidcraft_geom::Region2 {
+        outer: solidcraft_geom::Loop2::polygon(&[
+            solidcraft_geom::Vec2::new(c.x - reach, c.y - reach),
+            solidcraft_geom::Vec2::new(c.x + reach, c.y - reach),
+            solidcraft_geom::Vec2::new(c.x + reach, c.y + reach),
+            solidcraft_geom::Vec2::new(c.x - reach, c.y + reach),
         ]),
         holes: vec![],
     };

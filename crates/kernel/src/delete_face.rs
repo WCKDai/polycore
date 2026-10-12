@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3};
@@ -301,7 +301,7 @@ pub fn delete_faces(body: &Body, faces: &[usize]) -> Result<Body> {
 
 #[cfg(test)]
 mod tests {
-    use solvecraft_geom::Vec3;
+    use solidcraft_geom::Vec3;
 
     use super::delete_faces;
     use crate::{BoolOp, boolean, box_solid, chamfer, cylinder, fillet};

@@ -224,7 +224,7 @@ fn shortcut_clearance_refuses_curved_contact_hidden_between_mesh_vertices() {
 }
 
 fn certified_lump_witness() -> Body {
-    use solvecraft_geom::{Loop2, Plane, Region2, Vec2};
+    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
     // The current trimmed lower prism: a rectangular tool with a circular stop
     // removed. Its cap footprint differs materially from the original sketch.
     let region = Region2 {

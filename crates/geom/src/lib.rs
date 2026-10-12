@@ -1,4 +1,4 @@
-//! Geometry foundation for SolveCraft: 2D/3D vectors, sketch planes, axis-aligned boxes,
+//! Geometry foundation for SolidCraft: 2D/3D vectors, sketch planes, axis-aligned boxes,
 //! triangle meshes with their measures (volume, area, centroid), and freeform surface maths
 //! (B-spline basis and NURBS surfaces in [`bspline`], T-splines in [`tspline`]). Units are
 //! millimetres.
@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bspline;
+pub mod env;
 mod mesh;
 mod plane;
 mod profile;

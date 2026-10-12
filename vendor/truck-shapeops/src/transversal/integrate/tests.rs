@@ -20,7 +20,7 @@ fn punched_cube() {
     obj::write(&poly, file).unwrap();
 }
 
-// SolveCraft: boolean history.
+// SolidCraft: boolean history.
 
 use crate::{EdgeOrigin, FaceIndex, History};
 

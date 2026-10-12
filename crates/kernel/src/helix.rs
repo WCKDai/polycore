@@ -1,7 +1,7 @@
 //! Helical sweeps (coils, springs) and lofts to a point (pyramids, cones).
 
 use mt::builder;
-use solvecraft_geom::{Loop2, Mesh, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Mesh, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, Solid, p3};
@@ -118,7 +118,7 @@ fn smooth_helix(plane: &Plane, profile: &NumberedLoop, o: Vec3, k: Vec3, pitch: 
     }
     let n = ((turns * STATIONS_PER_TURN).ceil() as usize).clamp(4, 4800);
     let total = std::f64::consts::TAU * turns;
-    let at = |i: usize, q: solvecraft_geom::Vec2| {
+    let at = |i: usize, q: solidcraft_geom::Vec2| {
         let a = total * i as f64 / n as f64;
         let w = plane.to_world(q);
         o + rot(w - o, k, a) + k * (pitch * a / std::f64::consts::TAU)
@@ -251,7 +251,7 @@ pub fn loft_to_point(plane: &Plane, lp: &Loop2, apex: Vec3) -> Result<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solvecraft_geom::Vec2;
+    use solidcraft_geom::Vec2;
 
     #[test]
     fn coil_volume_is_section_times_helix_length() {

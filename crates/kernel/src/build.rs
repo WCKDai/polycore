@@ -1,7 +1,7 @@
 //! Building bodies: extrude and revolve planar regions, primitives.
 
 use mt::builder;
-use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
@@ -136,7 +136,7 @@ fn region_ok(r: &Region2) -> Result<()> {
             }
             Seg2::Cubic { p0, p1, p2, p3 } => p0.is_finite() && p1.is_finite() && p2.is_finite() && p3.is_finite(),
             Seg2::Conic { a, apex, b, w } => a.is_finite() && apex.is_finite() && b.is_finite() && w.is_finite() && w > 1e-9,
-            Seg2::Bezier { n, p } => (4..=solvecraft_geom::MAX_BEZIER_DEGREE as u8).contains(&n) && p.iter().all(|q| q.is_finite()),
+            Seg2::Bezier { n, p } => (4..=solidcraft_geom::MAX_BEZIER_DEGREE as u8).contains(&n) && p.iter().all(|q| q.is_finite()),
         };
         if !ok {
             return Err(KernelError::Invalid("non-finite profile".into()));

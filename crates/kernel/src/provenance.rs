@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use solvecraft_geom::{Mesh, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Mesh, Plane, Region2, Seg2, Vec2, Vec3};
 
 use crate::Result;
 use crate::body::Body;
@@ -396,7 +396,7 @@ pub fn compose(prov: &mut History, operand: usize, tool: &[FaceOrigin]) {
 
 #[cfg(test)]
 mod tests {
-    use solvecraft_geom::Vec3;
+    use solidcraft_geom::Vec3;
 
     use super::{Change, FaceOrigin, trace};
     use crate::{BoolOp, boolean, box_solid, cylinder};
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn provenance_of_sweeps_blends_and_shells() {
-        use solvecraft_geom::{Loop2, Plane, Region2, Vec2};
+        use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
 
         use super::{History, blend_origins, compose, extrude_origins, offset_origins, revolve_origins};
         let plane = Plane::named("XY").unwrap();

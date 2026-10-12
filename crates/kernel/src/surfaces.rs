@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use mt::{BoundedCurve, InnerSpace, MetricSpace, ParametricCurve, ParametricSurface3D, SearchNearestParameter};
-use solvecraft_geom::{Plane, Region2, Vec3};
+use solidcraft_geom::{Plane, Region2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
@@ -612,7 +612,7 @@ pub fn extend(body: &Body, at: &[Vec3], distance: f64) -> Result<Body> {
 mod tests {
     use super::*;
     use crate::{box_solid, cylinder, measure};
-    use solvecraft_geom::{Loop2, Vec2};
+    use solidcraft_geom::{Loop2, Vec2};
 
     fn rel(a: f64, b: f64) -> f64 {
         (a - b).abs() / b.abs().max(1e-9)

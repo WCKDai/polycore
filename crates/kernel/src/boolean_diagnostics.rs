@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn exact_operations_and_failed_calls_have_no_retry_report() {
-        use solvecraft_geom::Vec3;
+        use solidcraft_geom::Vec3;
         let body = crate::box_solid(Vec3::ZERO, Vec3::new(10., 10., 10.)).unwrap();
         let other = crate::box_solid(Vec3::new(5., 0., 0.), Vec3::new(15., 10., 10.)).unwrap();
         let (result, diagnostics) = capture_boolean_diagnostics(|| crate::boolean(&body, &other, crate::BoolOp::Union));

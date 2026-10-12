@@ -1,4 +1,4 @@
-use solvecraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 
 use super::*;
 use crate::{BoolOp, boolean, box_solid, cylinder, extrude, fillet, measure, revolve, sphere, step_export, torus};
@@ -10,8 +10,8 @@ fn rel(a: f64, b: f64) -> f64 {
 #[test]
 #[ignore = "manual STEP import timing; run without concurrent builds"]
 fn benchmark_independent_step_solids() {
-    let count = std::env::var("SOLVECRAFT_STEP_BENCH_COUNT").ok().map(|s| s.parse::<usize>().unwrap().clamp(1, 512)).unwrap_or(48);
-    let kind = std::env::var("SOLVECRAFT_STEP_BENCH_KIND").unwrap_or_else(|_| "cylinder".into());
+    let count = solidcraft_geom::env::var("STEP_BENCH_COUNT").map(|s| s.parse::<usize>().unwrap().clamp(1, 512)).unwrap_or(48);
+    let kind = solidcraft_geom::env::var("STEP_BENCH_KIND").unwrap_or_else(|| "cylinder".into());
     let bodies: Vec<_> = (0..count)
         .map(|i| {
             let at = Vec3::new((i % 8) as f64 * 60.0, (i / 8) as f64 * 60.0, 0.0);
@@ -23,7 +23,7 @@ fn benchmark_independent_step_solids() {
         })
         .collect();
     let text = step_export(&bodies.iter().collect::<Vec<_>>(), "independent bodies").unwrap();
-    if let Ok(path) = std::env::var("SOLVECRAFT_STEP_BENCH_FIXTURE") {
+    if let Ok(path) = solidcraft_geom::env::var("STEP_BENCH_FIXTURE").ok_or(()) {
         std::fs::write(path, &text).unwrap();
     }
     let start = std::time::Instant::now();

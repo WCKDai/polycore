@@ -1,6 +1,6 @@
 use std::f64::consts::PI;
 
-use solvecraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 
 use crate::*;
 
@@ -130,7 +130,7 @@ fn chamfer_and_step() {
     let b = box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
     let c = chamfer(&b, &[Vec3::new(20.0, 10.0, 20.0)], 2.0).unwrap();
     assert!(rel(measure(&c).unwrap().volume, 8000.0 - 2.0 * 20.0) < 1e-4);
-    let s = step_export(&[&c], "SolveCraft").unwrap();
+    let s = step_export(&[&c], "SolidCraft").unwrap();
     assert!(s.starts_with("ISO-10303-21;"));
     assert!(s.contains("MANIFOLD_SOLID_BREP") || s.contains("CLOSED_SHELL"));
 }
@@ -668,7 +668,7 @@ fn connected_logo_join_preserves_exact_faces_at_edge_contact() {
     let tops =
         logo.faces(0.01).unwrap().iter().filter(|f| f.plane_normal.is_some_and(|n| n.z > 0.999999) && (f.centroid.z - 20.0).abs() < 1e-9).count();
     assert_eq!(tops, 1);
-    let text = step_export(&[&logo], "SolveCraft").unwrap();
+    let text = step_export(&[&logo], "SolidCraft").unwrap();
     let imported = step_import(&text).unwrap();
     assert_eq!(imported.bodies.len(), 1);
     let roundtrip = &imported.bodies.first().unwrap().body;
@@ -1407,7 +1407,7 @@ fn circle_loop_fillets_and_chamfers() {
 
 #[test]
 fn trimmed_revolved_faces_measure_exactly() {
-    use solvecraft_geom::Seg2;
+    use solidcraft_geom::Seg2;
     use std::f64::consts::FRAC_PI_2;
     // A slot with concave ends sketched on the plane x = 12.5, cut 4 deep into a revolved shaft
     // of radius 12.5 (the cut faces' triangulation spans wide angles unless refined).
@@ -1463,7 +1463,7 @@ fn shell_with_cylindrical_faces() {
 
 #[test]
 fn draft_of_a_round_ended_pocket() {
-    use solvecraft_geom::Seg2;
+    use solidcraft_geom::Seg2;
     use std::f64::consts::FRAC_PI_2;
     let block = box_solid(Vec3::ZERO, Vec3::new(80.0, 60.0, 25.0)).unwrap();
     let segs = vec![
@@ -1610,7 +1610,7 @@ fn fillet_where_a_branch_pipe_meets_a_main_pipe() {
 
 #[test]
 fn fillet_an_open_curved_edge() {
-    use solvecraft_geom::Seg2;
+    use solidcraft_geom::Seg2;
     // A D-shaped block: the round top edge only, ending at the flat wall's sharp corners.
     let d = Loop2 {
         segs: vec![
@@ -1740,7 +1740,7 @@ fn fillet_three_edges_at_a_corner() {
 #[test]
 fn shell_with_spherical_and_conical_faces() {
     // A cylinder capped by a hemisphere (a dome), revolved, opened at the bottom.
-    use solvecraft_geom::Seg2;
+    use solidcraft_geom::Seg2;
     let xz = Plane::new(Vec3::ZERO, Vec3::X, Vec3::new(0.0, 0.0, -1.0)).unwrap();
     let segs = vec![
         Seg2::Line { a: Vec2::new(0.0, 0.0), b: Vec2::new(10.0, 0.0) },
@@ -1952,7 +1952,7 @@ fn measure_of_a_body_with_many_faces() {
 }
 
 /// The time it takes (run alone, the suite's other tests share the machine):
-/// `cargo test --release -p solvecraft-kernel perf_measure_5000_faces -- --ignored`.
+/// `cargo test --release -p solidcraft-kernel perf_measure_5000_faces -- --ignored`.
 #[test]
 #[ignore]
 fn perf_measure_5000_faces() {

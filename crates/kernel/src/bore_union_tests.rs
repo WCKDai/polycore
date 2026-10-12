@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 use crate::*;
-use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 
 fn fixture() -> (Body, Body, Vec3, f64) {
     let slope = 1f64.to_radians().tan();
@@ -62,7 +62,7 @@ fn thin_connected_web_between_bore_stations_survives_union() {
     let direct = crate::coplanar::bore_union(&target, &ring, &accept);
     eprintln!("direct fallback result={}", direct.is_some());
     let public = boolean(&target, &ring, BoolOp::Union);
-    if let Ok(dir) = std::env::var("SOLVECRAFT_BORE_AUDIT_DIR") {
+    if let Ok(dir) = solidcraft_geom::env::var("BORE_AUDIT_DIR").ok_or(()) {
         let dir = std::path::Path::new(&dir);
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("target-with-web.step"), step_export(&[&target], "target with web").unwrap()).unwrap();

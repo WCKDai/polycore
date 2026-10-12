@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use solvecraft_geom::{Mesh, Vec3};
+use solidcraft_geom::{Mesh, Vec3};
 
 use crate::body::Body;
 use crate::history::{Change, EdgeOrigin, FaceOrigin, History, Side};
@@ -427,7 +427,7 @@ fn faceted_tool() {
 /// sewn as one face (coalesced), which comes from the operand walls under it in every slab.
 #[test]
 fn coalesced_stepped_walls() {
-    use solvecraft_geom::{Loop2, Plane, Region2, Vec2};
+    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
     for curved in [true, false] {
         let (outer, inner) = if curved {
             (Loop2::circle(Vec2::ZERO, 10.0), Loop2::circle(Vec2::ZERO, 5.0))
@@ -475,12 +475,12 @@ fn regularized_step_cut() {
 fn bore_union_of_a_bore_in_two_arcs_has_no_history() {
     let hole = crate::cylinder(Vec3::new(50.0, 40.0, -5.0), Vec3::Z, 10.0, 30.0).unwrap();
     let floor = boolean(&boxed(0.0, 0.0, 0.0, 100.0, 80.0, 10.0), &hole, BoolOp::Cut).unwrap().unwrap();
-    let centre = solvecraft_geom::Vec2::new(50.0, 40.0);
-    let annulus = solvecraft_geom::Region2 {
-        outer: solvecraft_geom::Loop2::circle(centre, 20.0),
-        holes: vec![solvecraft_geom::Loop2::circle(centre, 10.0).reversed()],
+    let centre = solidcraft_geom::Vec2::new(50.0, 40.0);
+    let annulus = solidcraft_geom::Region2 {
+        outer: solidcraft_geom::Loop2::circle(centre, 20.0),
+        holes: vec![solidcraft_geom::Loop2::circle(centre, 10.0).reversed()],
     };
-    let ring = crate::extrude(&solvecraft_geom::Plane::XY, &[annulus], -5.0, 2.0).unwrap().remove(0);
+    let ring = crate::extrude(&solidcraft_geom::Plane::XY, &[annulus], -5.0, 2.0).unwrap().remove(0);
     let r = crate::coplanar::bore_union(&floor, &ring, &|_| true).expect("the bores are recut");
     assert!(r.history().is_none());
 }

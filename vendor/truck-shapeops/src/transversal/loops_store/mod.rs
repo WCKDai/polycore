@@ -173,7 +173,7 @@ impl<P: Copy, C: Clone> Loops<P, C> {
             })
     }
 
-    // SolveCraft: `replaced(old, new)` is told of every edge rebuilt on the new vertex.
+    // SolidCraft: `replaced(old, new)` is told of every edge rebuilt on the new vertex.
     fn change_vertex(
         &mut self,
         old_vertex: &Vertex<P>,

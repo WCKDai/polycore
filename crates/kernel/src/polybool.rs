@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use solvecraft_geom::{Mesh, Vec3};
+use solidcraft_geom::{Mesh, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, edge_order, from_p3, p3};
@@ -415,17 +415,17 @@ fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option
     let tol = (a.size() * 1e-3).max(1e-3);
     let infos = a.faces(tol).ok()?;
     let mesh = a.tessellate(tol).ok()?;
-    let mut curved: HashMap<u32, solvecraft_geom::Aabb3> = HashMap::new();
+    let mut curved: HashMap<u32, solidcraft_geom::Aabb3> = HashMap::new();
     for (t, fi) in mesh.triangles.iter().zip(&mesh.tri_face) {
         if infos.get(*fi as usize)?.plane_normal.is_some() {
             continue;
         }
-        let bx = curved.entry(*fi).or_insert(solvecraft_geom::Aabb3::EMPTY);
+        let bx = curved.entry(*fi).or_insert(solidcraft_geom::Aabb3::EMPTY);
         for p in mesh.tri(t)? {
             bx.add(p);
         }
     }
-    let mut tool = solvecraft_geom::Aabb3::EMPTY;
+    let mut tool = solidcraft_geom::Aabb3::EMPTY;
     for p in pb.iter().flat_map(|p| &p.v) {
         tool.add(*p);
     }
@@ -481,7 +481,7 @@ fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option
         let mut outside: Vec<Traced> = Vec::new();
         for (slot, (cut, keep_positive)) in [(2, (lo, true)), (4, (hi, false))] {
             let Some(x) = cut else { continue };
-            let plane = solvecraft_geom::Plane::new(axis * x, u, w).ok_or_else(|| fail("plane"))?;
+            let plane = solidcraft_geom::Plane::new(axis * x, u, w).ok_or_else(|| fail("plane"))?;
             let (away, kept) = (crate::ops::half_box(&middle.0, &plane, !keep_positive)?, crate::ops::half_box(&middle.0, &plane, keep_positive)?);
             let (h_away, h_kept) = (recorded::kept(&away, slot, n), recorded::kept(&kept, slot + 1, n));
             if let Some(o) = crate::ops::boolean(&middle.0, &away, BoolOp::Intersect)? {

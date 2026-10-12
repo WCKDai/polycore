@@ -3,7 +3,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 
 use crate::body::Body;
 use crate::build::PathSeg;

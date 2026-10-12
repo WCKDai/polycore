@@ -3,7 +3,7 @@
 use super::{Body, from_p3};
 use crate::history::FaceOrigin;
 use crate::{Result, guard};
-use solvecraft_geom::Plane;
+use solidcraft_geom::Plane;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use truck_modeling as mt;
@@ -83,8 +83,8 @@ fn merged_face(faces: &[&mt::Face], members: &[usize], plane: Plane, eligible: &
             let edge = boundary.get(index)?.clone();
             let da = from_p3(edge.front().point()) - origin;
             let db = from_p3(edge.back().point()) - origin;
-            let a = solvecraft_geom::Vec2::new(da.dot(plane.x), da.dot(plane.y));
-            let b = solvecraft_geom::Vec2::new(db.dot(plane.x), db.dot(plane.y));
+            let a = solidcraft_geom::Vec2::new(da.dot(plane.x), da.dot(plane.y));
+            let b = solidcraft_geom::Vec2::new(db.dot(plane.x), db.dot(plane.y));
             let term = a.cross(b);
             area += term;
             magnitude += term.abs();
@@ -200,7 +200,7 @@ impl Body {
                         .and_then(|source| {
                             if generated {
                                 match source {
-                                    super::FaceSource::ExtrudeSide { segment: solvecraft_geom::Seg2::Line { .. }, plane: Some(p), .. } => Some(*p),
+                                    super::FaceSource::ExtrudeSide { segment: solidcraft_geom::Seg2::Line { .. }, plane: Some(p), .. } => Some(*p),
                                     _ => None,
                                 }
                             } else {
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn alternate_adjacency_path_cannot_remove_protected_internal_edge() {
         let vertices: Vec<_> =
-            (0..9).map(|i| mt::builder::vertex(super::super::p3(solvecraft_geom::Vec3::new((i % 3) as f64, (i / 3) as f64, 0.)))).collect();
+            (0..9).map(|i| mt::builder::vertex(super::super::p3(solidcraft_geom::Vec3::new((i % 3) as f64, (i / 3) as f64, 0.)))).collect();
         let mut edges = HashMap::<(usize, usize), mt::Edge>::new();
         let mut faces = Vec::new();
         for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {

@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::blend::{plane_normal, rebuild_face, unsupported, vtx};

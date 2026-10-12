@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 
 use crate::body::Body;
 use crate::step_in::p21::{self, Param};
@@ -1501,8 +1501,8 @@ mod tests {
     #[test]
     fn assembly_names_colours_round_trip() {
         use crate::{box_solid, cylinder, measure, step_import, step_validate};
-        let bx = box_solid(solvecraft_geom::Vec3::ZERO, solvecraft_geom::Vec3::new(10.0, 20.0, 5.0)).unwrap();
-        let pin = cylinder(solvecraft_geom::Vec3::ZERO, solvecraft_geom::Vec3::Z, 2.0, 8.0).unwrap();
+        let bx = box_solid(solidcraft_geom::Vec3::ZERO, solidcraft_geom::Vec3::new(10.0, 20.0, 5.0)).unwrap();
+        let pin = cylinder(solidcraft_geom::Vec3::ZERO, solidcraft_geom::Vec3::Z, 2.0, 8.0).unwrap();
         let rot90 = [[0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [50.0, 0.0, 0.0, 1.0]];
         let shift = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 5.0, 1.0]];
         let products = vec![
@@ -1530,7 +1530,7 @@ mod tests {
         let m: Vec<_> = imp.bodies.iter().map(|b| measure(&b.body).unwrap()).collect();
         assert!((m[1].bbox.min.z - 5.0).abs() < 1e-6 && (m[1].bbox.max.z - 13.0).abs() < 1e-6);
         // Rotated 90° about Z and moved 50 along X: centre at (50, 0).
-        assert!(m[2].centroid.dist(solvecraft_geom::Vec3::new(50.0, 0.0, 4.0)) < 1e-3, "{:?}", m[2].centroid);
+        assert!(m[2].centroid.dist(solidcraft_geom::Vec3::new(50.0, 0.0, 4.0)) < 1e-3, "{:?}", m[2].centroid);
         // Recursion and bad placements are errors.
         let cyc = vec![ExportProduct {
             name: "A".into(),

@@ -1,7 +1,7 @@
 //! Group disconnected material regions without moving a cavity to another enclosing shell.
 //! A valid shell hierarchy alternates material and void at every nesting level.
 
-use solvecraft_geom::{Aabb3, Mesh, Vec3};
+use solidcraft_geom::{Aabb3, Mesh, Vec3};
 
 use crate::{KernelError, Result};
 

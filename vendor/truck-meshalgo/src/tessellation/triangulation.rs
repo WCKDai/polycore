@@ -20,7 +20,7 @@ pub(super) trait SP<S>:
 }
 impl<S, F> SP<S> for F where F: Fn(&S, Point3, Option<(f64, f64)>) -> Option<(f64, f64)> + Parallelizable {}
 
-/// SolveCraft: a parameter inside the surface's bounded, non-periodic ranges.
+/// SolidCraft: a parameter inside the surface's bounded, non-periodic ranges.
 fn in_domain<S: ParametricSurface>(surface: &S, (u, v): (f64, f64)) -> bool {
     let ok = |x: f64, range: Option<(f64, f64)>, period: Option<f64>| {
         x.is_finite()
@@ -36,7 +36,7 @@ fn in_domain<S: ParametricSurface>(surface: &S, (u, v): (f64, f64)) -> bool {
     ok(u, ur, surface.u_period()) && ok(v, vr, surface.v_period())
 }
 
-/// SolveCraft: the parameter clamped into the surface's bounded, non-periodic ranges.
+/// SolidCraft: the parameter clamped into the surface's bounded, non-periodic ranges.
 fn clamped<S: ParametricSurface>(surface: &S, (u, v): (f64, f64)) -> (f64, f64) {
     let c = |x: f64, range: Option<(f64, f64)>, period: Option<f64>| match (range, period) {
         (Some((a, b)), None) => x.clamp(a.min(b), a.max(b)),
@@ -46,7 +46,7 @@ fn clamped<S: ParametricSurface>(surface: &S, (u, v): (f64, f64)) -> (f64, f64) 
     (c(u, ur, surface.u_period()), c(v, vr, surface.v_period()))
 }
 
-/// SolveCraft: a nearest-parameter search can run off a B-spline's domain and extrapolate to
+/// SolidCraft: a nearest-parameter search can run off a B-spline's domain and extrapolate to
 /// thousands of parameter units (meshing that grid never finishes). Outside the nominal domain
 /// keep the result only if it is really closer to the point than the clamped one (planes report
 /// a nominal unit range but extend for ever).
@@ -260,7 +260,7 @@ fn shell_create_polygon<S: PreMeshableSurface>(
         let boundary = PolyBoundary::new(preboundary?, &surface, tol);
         Some(trimming_tessellation(surface, &boundary, tol, cap))
     })();
-    // SolveCraft: faces with seam edges (a loop running along an edge both ways, as STEP
+    // SolidCraft: faces with seam edges (a loop running along an edge both ways, as STEP
     // writes cylinders) are valid here; `debug_new` asserts simple loops in debug builds.
     let mut new_face = Face::new_unchecked(wires, polygon);
     if !orientation {
@@ -344,7 +344,7 @@ fn get_mindiff(u: f64, u0: f64, up: f64) -> f64 {
     (-2..=2).map(closure).min_by(abs_diff(u0)).unwrap()
 }
 
-/// SolveCraft: the second field holds each loop's parameter box, so `include` skips loops that
+/// SolidCraft: the second field holds each loop's parameter box, so `include` skips loops that
 /// cannot hold the point (a face with hundreds of holes meshed in quadratic time).
 #[derive(Debug, Default, Clone)]
 struct PolyBoundary(Vec<Vec<Point2>>, Vec<BoundingBox<Point2>>);
@@ -495,7 +495,7 @@ impl PolyBoundary {
     fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
         let r = Vector2::new(f64::cos(t), f64::sin(t));
-        // SolveCraft: a closed loop whose box is clear of `c` winds zero times around it, and
+        // SolidCraft: a closed loop whose box is clear of `c` winds zero times around it, and
         // no crossing with it lies within the tolerance of `c`: it changes nothing here.
         let margin = 2.0 * TOLERANCE;
         let near = |bdb: &BoundingBox<Point2>| {
@@ -642,19 +642,19 @@ fn insert_surface(
     });
 }
 
-/// SolveCraft: most grid points a face gets (keeps hostile or huge faces bounded).
+/// SolidCraft: most grid points a face gets (keeps hostile or huge faces bounded).
 pub(super) const MAX_GRID: usize = 150_000;
-/// SolveCraft: grid points shared by all faces of one shell; many faces get fewer each.
+/// SolidCraft: grid points shared by all faces of one shell; many faces get fewer each.
 pub(super) const SHELL_GRID_BUDGET: usize = 10_000_000;
-/// SolveCraft: most points on one edge's polyline.
+/// SolidCraft: most points on one edge's polyline.
 const MAX_EDGE_POINTS: usize = 20_000;
 
-/// SolveCraft: the grid budget of each face of a shell with `faces` faces.
+/// SolidCraft: the grid budget of each face of a shell with `faces` faces.
 pub(super) fn face_cap(faces: usize) -> usize {
     (SHELL_GRID_BUDGET / faces.max(1)).clamp(2_000, MAX_GRID)
 }
 
-/// SolveCraft: truck's curve division, bounded: at most `MAX_EDGE_POINTS` points and a
+/// SolidCraft: truck's curve division, bounded: at most `MAX_EDGE_POINTS` points and a
 /// bisection depth of 24; a midpoint that does not evaluate (NaN) counts as flat (truck's
 /// version recursed on it 100 levels deep, which never finishes).
 fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64) -> PolylineCurve {
@@ -679,7 +679,7 @@ fn bounded_polyline<C: PolylineableCurve>(curve: &C, range: (f64, f64), tol: f64
     PolylineCurve(out)
 }
 
-/// SolveCraft: truck's surface division, bounded: stops refining when the grid would exceed
+/// SolidCraft: truck's surface division, bounded: stops refining when the grid would exceed
 /// `cap` points or after 24 rounds; cells that do not evaluate (NaN) are not refined.
 fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64, f64), (f64, f64)), tol: f64, cap: usize) -> (Vec<f64>, Vec<f64>) {
     let (mut udiv, mut vdiv) = (vec![ur.0, ur.1], vec![vr.0, vr.1]);
@@ -739,7 +739,7 @@ fn bounded_surface_division<S: PreMeshableSurface>(surface: &S, (ur, vr): ((f64,
     (udiv, vdiv)
 }
 
-/// SolveCraft: refine the parameter grid so its cells are not much longer in one direction than
+/// SolidCraft: refine the parameter grid so its cells are not much longer in one direction than
 /// the other. A ruled surface (cylinder, cone) needs no division along its rulings, and the
 /// triangles that then join a trimming loop to the far ends of the grid cut through the
 /// surface (a cylinder with a hole lost volume this way).

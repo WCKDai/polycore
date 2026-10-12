@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use solvecraft_geom::Vec3;
+use solidcraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
@@ -1177,7 +1177,7 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
     let ext = (s * 2.0).max(size * 0.01) * (1.0 + 0.093 * (k % 5) as f64);
     // Cross-section at p0 - d*ext, in a plane with normal d.
     let base = f.p0 - f.d * ext;
-    let plane = solvecraft_geom::Plane::from_normal(base, f.d).ok_or_else(|| KernelError::Failed("chamfer plane".into()))?;
+    let plane = solidcraft_geom::Plane::from_normal(base, f.d).ok_or_else(|| KernelError::Failed("chamfer plane".into()))?;
     let a = base + f.t1 * s1;
     let b = base + f.t2 * s2;
     let ab = (a - b).normalized().ok_or_else(|| KernelError::Failed("chamfer".into()))?;
@@ -1194,15 +1194,15 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
             return Err(unsupported("chamfers ending at a concave corner"));
         }
     }
-    let loc: Vec<solvecraft_geom::Vec2> = [a_ext, b_ext, e_far].iter().map(|q| plane.to_local(*q)).collect();
-    let mut lp = solvecraft_geom::Loop2::polygon(&loc);
+    let loc: Vec<solidcraft_geom::Vec2> = [a_ext, b_ext, e_far].iter().map(|q| plane.to_local(*q)).collect();
+    let mut lp = solidcraft_geom::Loop2::polygon(&loc);
     // The chamfer plane is swept from the segment a → b: first, or last once turned round.
     let mut chamfer_segment = 0;
     if lp.signed_area() < 0.0 {
         lp = lp.reversed();
         chamfer_segment = lp.segs.len().saturating_sub(1);
     }
-    let region = solvecraft_geom::Region2 { outer: lp, holes: vec![] };
+    let region = solidcraft_geom::Region2 { outer: lp, holes: vec![] };
     let body = crate::build::extrude(&plane, &[region], 0.0, len + 2.0 * ext)?.pop().ok_or_else(|| KernelError::Failed("chamfer tool".into()))?;
     let face = body.history().and_then(|h| h.faces.iter().position(|f| f.origins == [FaceOrigin::Profile { segment: chamfer_segment }]));
     Ok(Cutter { body, face, edge })
@@ -1211,7 +1211,7 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solvecraft_geom::{Loop2, Plane, Region2, Vec2};
+    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
 
     #[test]
     fn chamfer_extension_cannot_cross_a_hole_and_reenter_the_face() {

@@ -6,7 +6,7 @@
 //! Stepped extrusions (case floors and walls) use sections between every cap level, so a
 //! circular boss can meet the rim without shifting either operand off its exact plane.
 
-use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3};

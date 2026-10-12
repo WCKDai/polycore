@@ -1,4 +1,4 @@
-//! T-spline sheets: a T-spline surface (`solvecraft_geom::tspline`) as a surface body of NURBS
+//! T-spline sheets: a T-spline surface (`solidcraft_geom::tspline`) as a surface body of NURBS
 //! faces. A T-mesh without T-junctions becomes one clamped tensor face; otherwise each Bézier
 //! element is a face, and the faces share their edges and vertices — a side that meets two
 //! neighbours is split at the T-point between them — so the sheet is one sewn open shell.
@@ -6,8 +6,8 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use solvecraft_geom::bspline::{BezierPatch, HPoint, NurbsSurface, SplineError, bezier_segment};
-use solvecraft_geom::tspline::TSpline;
+use solidcraft_geom::bspline::{BezierPatch, HPoint, NurbsSurface, SplineError, bezier_segment};
+use solidcraft_geom::tspline::TSpline;
 use truck_modeling as mt;
 
 use crate::body::Body;
@@ -156,9 +156,9 @@ fn patch_faces(patches: &[BezierPatch]) -> Result<Vec<mt::Face>> {
 
 #[cfg(test)]
 mod tests {
-    use solvecraft_geom::Vec3;
-    use solvecraft_geom::bspline::NurbsSurface;
-    use solvecraft_geom::tspline::{Cut, TSpline};
+    use solidcraft_geom::Vec3;
+    use solidcraft_geom::bspline::NurbsSurface;
+    use solidcraft_geom::tspline::{Cut, TSpline};
     use truck_modeling as mt;
 
     use super::tspline_sheet;
