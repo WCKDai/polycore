@@ -689,6 +689,13 @@ fn runs_along(s: &Seg2, t: &Seg2, tol: f64) -> bool {
 }
 
 /// Points where two segments cross (parameters on each), lines and arcs only.
+///
+/// Curves that touch within the tolerance (a line tangent to an arc, two circles tangent inside
+/// or outside) meet at one point, taken from the centres: the foot of the centre on the line,
+/// or the point on the line of centres. The intersection formulas' two roots there are rounding
+/// noise spread along the curves by its square root (a 1e-12 mm error in a distance puts them
+/// ±2e-6 mm from a 2 mm arc's tangent point), close enough to both curves to pass for two
+/// crossings; when the noise falls the other way there is no root and the contact is missed.
 fn crossings(s: &Seg2, t: &Seg2, tol: f64) -> Vec<(f64, f64)> {
     let mut pts: Vec<Vec2> = Vec::new();
     match (*s, *t) {
@@ -705,22 +712,35 @@ fn crossings(s: &Seg2, t: &Seg2, tol: f64) -> Vec<(f64, f64)> {
             let f = a - center;
             let (qa, qb, qc) = (dir.dot(dir), 2.0 * f.dot(dir), f.dot(f) - radius * radius);
             let disc = qb * qb - 4.0 * qa * qc;
-            if qa > 1e-300 && disc >= -tol * tol * qa {
-                let sd = disc.max(0.0).sqrt();
-                for u in [(-qb - sd) / (2.0 * qa), (-qb + sd) / (2.0 * qa)] {
-                    pts.push(a + dir * u);
+            if qa > 1e-300 {
+                let foot = a + dir * (-qb / (2.0 * qa));
+                if (foot.dist(center) - radius).abs() < tol {
+                    pts.push(foot);
+                } else if disc >= -tol * tol * qa {
+                    let sd = disc.max(0.0).sqrt();
+                    for u in [(-qb - sd) / (2.0 * qa), (-qb + sd) / (2.0 * qa)] {
+                        pts.push(a + dir * u);
+                    }
                 }
             }
         }
         (Seg2::Arc { center: c0, radius: r0, .. }, Seg2::Arc { center: c1, radius: r1, .. }) => {
             let dd = c0.dist(c1);
             if dd > 1e-12 && dd <= r0 + r1 + tol && dd >= (r0 - r1).abs() - tol {
-                let a = (r0 * r0 - r1 * r1 + dd * dd) / (2.0 * dd);
-                let h = (r0 * r0 - a * a).max(0.0).sqrt();
-                let m = c0 + (c1 - c0) * (a / dd);
-                let perp = (c1 - c0).perp() * (1.0 / dd);
-                pts.push(m + perp * h);
-                pts.push(m - perp * h);
+                // Circles of nearly one radius about nearly one centre lie on each other for a
+                // long way rather than touch at a point (centres 1000 tolerances apart: within
+                // the tolerance of each other over 5° of arc): those keep the general formula.
+                let inside = (dd - (r0 - r1).abs()).abs() < tol && dd > 1e3 * tol;
+                if (dd - (r0 + r1)).abs() < tol || inside {
+                    pts.push(c0 + (c1 - c0) * (if inside && r1 > r0 { -r0 } else { r0 } / dd));
+                } else {
+                    let a = (r0 * r0 - r1 * r1 + dd * dd) / (2.0 * dd);
+                    let h = (r0 * r0 - a * a).max(0.0).sqrt();
+                    let m = c0 + (c1 - c0) * (a / dd);
+                    let perp = (c1 - c0).perp() * (1.0 / dd);
+                    pts.push(m + perp * h);
+                    pts.push(m - perp * h);
+                }
             }
         }
         _ => {}
@@ -2254,6 +2274,84 @@ mod planar_tests {
         assert_eq!(intersect.len(), 1);
         assert!((intersect[0].area() - 2.5e-9).abs() < 1e-13);
     }
+    /// A 200 x 37 plate turned by `theta` about the origin, and the fillet region of one of its
+    /// corners: an arc of radius `r` tangent to both edges there, closed by two lines that meet
+    /// `reach` out past the corner.
+    fn plate_and_corner_fillet(theta: f64, r: f64, reach: f64) -> (Region2, Region2) {
+        let (sn, cs) = theta.sin_cos();
+        let rot = |x: f64, y: f64| Vec2::new(x * cs - y * sn, x * sn + y * cs);
+        let (w, lo, hi) = (200.0, -40.25, -3.25);
+        let plate = Region2 { outer: Loop2::polygon(&[rot(0.0, hi), rot(0.0, lo), rot(w, lo), rot(w, hi)]), holes: vec![] };
+        let arc = Seg2::Arc { center: rot(w - r, lo + r), radius: r, start: theta, sweep: -std::f64::consts::FRAC_PI_2 };
+        let out = rot(w + reach, lo - reach);
+        let cut =
+            Region2 { outer: Loop2 { segs: vec![arc, Seg2::Line { a: arc.end(), b: out }, Seg2::Line { a: out, b: arc.start() }] }, holes: vec![] };
+        (plate, cut)
+    }
+
+    /// A contact between a line and an arc that touch is one point. The quadratic's two roots
+    /// there are rounding noise: a 1e-12 mm error in the centre's distance from the line moves
+    /// them 2e-6 mm either way along it, and the cut then ran that far along the plate's edge
+    /// past the arc's end before turning onto the arc: an edge a few millionths of a millimetre
+    /// long in the result. Which turns of the plate do that is a matter of rounding, so every
+    /// one is tried.
+    #[test]
+    fn an_arc_tangent_to_the_edges_it_ends_on_leaves_no_hairline_edges() {
+        for k in 0..=360 {
+            let theta = (k as f64 * 0.25).to_radians();
+            for r in [2.0, 0.5, 25.0] {
+                let (plate, cut) = plate_and_corner_fillet(theta, r, 0.4);
+                let out = planar_regions_boolean(std::slice::from_ref(&plate), std::slice::from_ref(&cut), BoolOp::Cut, 1e-7)
+                    .unwrap_or_else(|e| panic!("{k} r {r}: {e}"));
+                assert_eq!(out.len(), 1, "{k} r {r}");
+                let lp = &out[0].outer;
+                let shortest = lp.segs.iter().map(Seg2::length).fold(f64::MAX, f64::min);
+                let arcs = lp.segs.iter().filter(|s| matches!(s, Seg2::Arc { .. })).count();
+                assert!(
+                    out[0].holes.is_empty() && lp.segs.len() == 5 && arcs == 1 && shortest > 0.5,
+                    "{k} r {r}: {} edges, shortest {shortest:e}",
+                    lp.segs.len()
+                );
+                let want = 200.0 * 37.0 - r * r * (1.0 - std::f64::consts::FRAC_PI_4);
+                assert!((out[0].area() - want).abs() < 1e-9, "{k} r {r}: {} vs {want}", out[0].area());
+                // What the cut takes is the corner's fillet region, whole.
+                let taken = planar_regions_boolean(std::slice::from_ref(&plate), std::slice::from_ref(&cut), BoolOp::Intersect, 1e-7).unwrap();
+                assert!(taken.len() == 1 && taken[0].outer.segs.len() == 3, "{k} r {r}: {taken:?}");
+                assert!((taken[0].area() - r * r * (1.0 - std::f64::consts::FRAC_PI_4)).abs() < 1e-9, "{k} r {r}");
+            }
+        }
+    }
+
+    /// Touching circles meet at one point on the line of their centres, inside and outside.
+    #[test]
+    fn touching_lines_and_arcs_meet_at_one_point() {
+        let full = |c: Vec2, r: f64| Seg2::Arc { center: c, radius: r, start: 0.3, sweep: std::f64::consts::TAU - 1e-3 };
+        for k in 0..=360 {
+            let dir = Vec2::from_angle((k as f64 * 0.25).to_radians());
+            let c = Vec2::new(151.3, -37.7);
+            for (r0, r1, d) in [(2.0, 3.0, 5.0), (7.0, 3.0, 4.0), (3.0, 7.0, 4.0), (250.0, 2.0, 248.0)] {
+                let hits = crossings(&full(c, r0), &full(c + dir * d, r1), 1e-7);
+                let touch = c + dir * if r1 > r0 && d < r1 { -r0 } else { r0 };
+                let pts: Vec<Vec2> = hits.iter().map(|(u, _)| full(c, r0).point_at(*u)).collect();
+                assert!(!pts.is_empty() && pts.iter().all(|p| p.dist(touch) < 1e-9), "{k} {r0} {r1}: {pts:?} vs {touch:?}");
+            }
+            // A line touching a circle, the circle's side of it and the far side by rounding.
+            for r in [2.0, 250.0] {
+                let foot = c + dir * r;
+                let line = Seg2::Line { a: foot - dir.perp() * 120.0, b: foot + dir.perp() * 78.0 };
+                let hits = crossings(&line, &full(c, r), 1e-7);
+                let pts: Vec<Vec2> = hits.iter().map(|(u, _)| line.point_at(*u)).collect();
+                assert!(!pts.is_empty() && pts.iter().all(|p| p.dist(foot) < 1e-9), "{k} {r}: {pts:?} vs {foot:?}");
+            }
+        }
+        // Real crossings stay two points: a chord 0.01 mm deep in a 2 mm circle.
+        let line = Seg2::Line { a: Vec2::new(-5.0, 1.99), b: Vec2::new(5.0, 1.99) };
+        let hits = crossings(&line, &full(Vec2::ZERO, 2.0), 1e-7);
+        let half = (4.0f64 - 1.99 * 1.99).sqrt();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|(u, _)| (line.point_at(*u).x.abs() - half).abs() < 1e-12), "{hits:?}");
+    }
+
     #[test]
     fn planar_region_api_rejects_hostile_values_and_budgets() {
         let plate = rectangle(Vec2::ZERO, Vec2::new(10.0, 10.0));
