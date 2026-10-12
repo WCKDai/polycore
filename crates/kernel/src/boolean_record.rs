@@ -112,7 +112,7 @@ pub(crate) fn shapeops(h: &truck_shapeops::History, tool: &Solid, tool_edges: Op
                 tool_edges.and_then(|t| t.get(passed.get(edge)?)).cloned()
             }
             truck_shapeops::EdgeOrigin::Edge { operand, edge } => Some(vec![EdgeOrigin::Edge { operand, edge }]),
-            truck_shapeops::EdgeOrigin::Meet { a, b } => Some(vec![EdgeOrigin::Meet { a: face(a), b: face(b) }]),
+            truck_shapeops::EdgeOrigin::Meet { a, b } => Some(vec![EdgeOrigin::meet(face(a), face(b))]),
         })
         .collect::<Option<Vec<_>>>()?;
     Some((faces, edges))

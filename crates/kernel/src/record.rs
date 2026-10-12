@@ -166,7 +166,7 @@ pub(crate) fn attach(body: Body, operands: &[Operand], faces: Option<Vec<FacePro
         }
     }
     let (edges, bounds) = edge_order(body.solid.face_iter());
-    let edges = edges.iter().zip(bounds).map(|(e, faces)| EdgeProv { faces, origins: owned.get(&e.id()).copied().into_iter().collect() }).collect();
+    let edges = edges.iter().zip(bounds).map(|(e, faces)| EdgeProv { faces, origins: owned.get(&e.id()).cloned().into_iter().collect() }).collect();
     let history = History { operands: operands.len(), faces, edges };
     let counts: Vec<(usize, usize)> = operands.iter().map(|o| (o.body.face_count(), o.edges.len())).collect();
     body.with_history_counts(history, &counts)
@@ -323,15 +323,16 @@ impl Rebuild {
 }
 
 /// The origins of a new edge between the result faces `between` (whose provenance is in
-/// `faces`): the meeting of the two faces, when each comes from one origin and they differ;
-/// else none (a seam, an edge between pieces of one face).
+/// `faces`): the meeting of the two faces (each side all of its face's origins, one or
+/// several), when each comes from something and no origin is under both; else none (a seam,
+/// an edge between pieces of one face, a face new to the operation).
 pub(crate) fn meeting(between: &[usize], faces: &[FaceProv]) -> Vec<EdgeOrigin> {
-    let side = |k: usize| match between.get(k).and_then(|f| faces.get(*f)).map(|p| p.origins.as_slice()) {
-        Some([o]) => Some(*o),
-        _ => None,
-    };
-    match (between.len(), side(0), side(1)) {
-        (2, Some(a), Some(b)) if a != b => vec![EdgeOrigin::Meet { a: a.min(b), b: a.max(b) }],
+    let side = |f: &usize| faces.get(*f).and_then(|p| crate::history::Side::new(p.origins.iter().copied()));
+    match between {
+        [f, g] => match (side(f), side(g)) {
+            (Some(a), Some(b)) if a.origins().iter().all(|o| !b.origins().contains(o)) => vec![EdgeOrigin::meet(a, b)],
+            _ => Vec::new(),
+        },
         _ => Vec::new(),
     }
 }

@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use solvecraft_geom::{Mesh, Vec3};
 
 use crate::body::Body;
-use crate::history::{Change, EdgeOrigin, FaceOrigin, History};
+use crate::history::{Change, EdgeOrigin, FaceOrigin, History, Side};
 use crate::{BoolOp, boolean, box_solid};
 
 const fn face(operand: usize, face: usize) -> FaceOrigin {
@@ -98,9 +98,9 @@ pub(crate) fn checked<'a>(r: &'a Body, operands: &[&Body], tol: f64, at: Reach, 
         FaceOrigin::Offset { operand, face } => to_face(&ms[operand], face, p) < at.made + near,
         _ => false,
     };
-    let along = |o: &EdgeOrigin, p: &Vec3| match *o {
-        EdgeOrigin::Edge { operand, edge } => to_edge(&ms[operand], edge, *p) < near.max(at.moved),
-        EdgeOrigin::Meet { a, b } => on(&a, *p) && on(&b, *p),
+    let along = |o: &EdgeOrigin, p: &Vec3| match o {
+        EdgeOrigin::Edge { operand, edge } => to_edge(&ms[*operand], *edge, *p) < near.max(at.moved),
+        EdgeOrigin::Meet { a, b } => a.origins().iter().any(|o| on(o, *p)) && b.origins().iter().any(|o| on(o, *p)),
     };
     for (i, f) in h.faces.iter().enumerate() {
         assert!(!f.origins.is_empty() || generated(i), "face {i} has no origin");
@@ -116,8 +116,12 @@ pub(crate) fn checked<'a>(r: &'a Body, operands: &[&Body], tol: f64, at: Reach, 
         let pts = &rm.edges[j];
         for o in &e.origins {
             match o {
-                // A joined edge runs along all of its origins, each along part of it.
-                EdgeOrigin::Edge { .. } if e.origins.len() > 1 => assert!(pts.iter().any(|p| along(o, p)), "edge {j}: {o:?} is not along it"),
+                // A joined edge runs along all of its origins, each along part of it (one in the
+                // middle of a straight edge holds none of its points, but its own lie on it).
+                EdgeOrigin::Edge { operand, edge } if e.origins.len() > 1 => assert!(
+                    pts.iter().any(|p| along(o, p)) || ms[*operand].edges[*edge].iter().any(|q| to_edge(&rm, j, *q) < near.max(at.moved)),
+                    "edge {j}: {o:?} is not along it"
+                ),
                 _ => assert!(pts.iter().all(|p| along(o, p)), "edge {j} ({e:?}) does not lie along {o:?}"),
             }
         }
@@ -160,9 +164,10 @@ fn from(h: &History, o: FaceOrigin) -> Vec<usize> {
     (0..h.faces.len()).filter(|i| h.faces[*i].origins.contains(&o)).collect()
 }
 
-/// The meetings among the edges' origins, as face pairs.
+/// The meetings among the edges' origins, as face pairs (each side one face here).
 fn meets(h: &History) -> BTreeSet<(FaceOrigin, FaceOrigin)> {
-    h.edges.iter().flat_map(|e| &e.origins).filter_map(|o| if let EdgeOrigin::Meet { a, b } = o { Some((*a, *b)) } else { None }).collect()
+    let one = |s: &Side| s.single().expect("a side of one face");
+    h.edges.iter().flat_map(|e| &e.origins).filter_map(|o| if let EdgeOrigin::Meet { a, b } = o { Some((one(a), one(b))) } else { None }).collect()
 }
 
 fn boxed(x0: f64, y0: f64, z0: f64, x1: f64, y1: f64, z1: f64) -> Body {
@@ -418,4 +423,45 @@ fn faceted_tool() {
     let from_a: BTreeSet<_> = h.faces.iter().flat_map(|f| &f.origins).filter(|o| matches!(o, FaceOrigin::Face { operand: 0, .. })).collect();
     assert_eq!(from_a.len(), 6);
     assert_eq!(h.faces.iter().filter(|f| matches!(f.origins.first(), Some(FaceOrigin::Face { operand: 1, .. }))).count(), 3);
+}
+
+/// A step cut into a certified box: the boolean leaves the faces it split on the box's planes
+/// in pieces, which the planar regularization joins back; the joined body keeps the boolean's
+/// history composed through the join.
+#[test]
+fn regularized_step_cut() {
+    let (pa, pb) = (boxed(0.0, 0.0, 0.0, 30.0, 35.0, 7.5), boxed(0.0, 30.0, 2.5, 22.5, 50.0, 25.0));
+    let (a, b) = (pa.clone().with_box_certificate(1).unwrap(), pb.clone().with_box_certificate(2).unwrap());
+    let r = boolean(&a, &b, BoolOp::Cut).unwrap().unwrap();
+    let h = verified(&r, &[&a, &b], 0.01);
+    let plain = boolean(&pa, &pb, BoolOp::Cut).unwrap().unwrap();
+    let ph = verified(&plain, &[&pa, &pb], 0.01);
+    // Uncertified, the box's face 3 stays in two pieces; certified, they are joined into one
+    // face, the only one from it.
+    assert_eq!(from(ph, face(0, 3)).len(), 2, "{}", show(ph));
+    assert_eq!(r.face_count() + 1, plain.face_count());
+    let joined = from(h, face(0, 3));
+    assert_eq!(joined.len(), 1, "{}", show(h));
+    assert_eq!(faces_of(h)[joined[0]], (Change::Modified, vec![face(0, 3)]));
+    // Every other face is as the boolean made it, in its order.
+    let rest = |h: &History| -> Vec<(Change, Vec<FaceOrigin>)> { faces_of(h).into_iter().filter(|(_, o)| *o != [face(0, 3)]).collect() };
+    assert_eq!(rest(h), rest(ph));
+}
+
+/// A ring joined under a floor, its bore on the floor's hole (coincident cylinders): the ring's
+/// bore is narrowed, the bodies joined, and the bore cut out again. The ring's bore is a circle
+/// built in two arcs, and the recut wall is split where the cutting cylinder's own construction
+/// splits it, so which arc each piece of it restores is not known: no history.
+#[test]
+fn bore_union_of_a_bore_in_two_arcs_has_no_history() {
+    let hole = crate::cylinder(Vec3::new(50.0, 40.0, -5.0), Vec3::Z, 10.0, 30.0).unwrap();
+    let floor = boolean(&boxed(0.0, 0.0, 0.0, 100.0, 80.0, 10.0), &hole, BoolOp::Cut).unwrap().unwrap();
+    let centre = solvecraft_geom::Vec2::new(50.0, 40.0);
+    let annulus = solvecraft_geom::Region2 {
+        outer: solvecraft_geom::Loop2::circle(centre, 20.0),
+        holes: vec![solvecraft_geom::Loop2::circle(centre, 10.0).reversed()],
+    };
+    let ring = crate::extrude(&solvecraft_geom::Plane::XY, &[annulus], -5.0, 2.0).unwrap().remove(0);
+    let r = crate::coplanar::bore_union(&floor, &ring, &|_| true).expect("the bores are recut");
+    assert!(r.history().is_none());
 }

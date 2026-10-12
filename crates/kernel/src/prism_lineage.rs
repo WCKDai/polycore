@@ -13,7 +13,7 @@ use truck_modeling as mt;
 use super::{Index, Section, Tag, dist_to, inside};
 use crate::BoolOp;
 use crate::body::{Body, edge_order, from_p3};
-use crate::history::{EdgeOrigin, FaceOrigin, FaceOrigin::Face, FaceProv};
+use crate::history::{EdgeOrigin, FaceOrigin, FaceOrigin::Face, FaceProv, Side};
 
 /// A cap of an operand: a planar face square to the prism direction.
 struct Cap {
@@ -188,7 +188,8 @@ impl Context<'_> {
 
     /// The origins of the edge between the wall over a segment tagged `t` and a cap lying on the
     /// operand faces `cap`: the operand's edge between the wall and its own cap there (the very
-    /// edge the segment was read off, when that is one), else where the wall meets the cap.
+    /// edge the segment was read off, when that is one), else where the wall meets the cap (all of
+    /// the faces it lies on).
     fn cap_edge(&self, t: Tag, cap: &BTreeSet<FaceOrigin>) -> Option<Vec<EdgeOrigin>> {
         let (x, w) = (t.operand, t.wall?);
         let own: Vec<usize> =
@@ -199,33 +200,32 @@ impl Context<'_> {
             return Some(vec![EdgeOrigin::Edge { operand: x, edge: e }]);
         }
         let along: Vec<usize> = own.iter().flat_map(|c| self.edges_between(x, [w, *c], None)).collect();
-        match (along.as_slice(), cap.first()) {
-            ([e], _) => Some(vec![EdgeOrigin::Edge { operand: x, edge: *e }]),
-            ([], Some(o)) if cap.len() == 1 => {
-                let wall = Self::wall(t)?;
-                Some(vec![EdgeOrigin::Meet { a: wall.min(*o), b: wall.max(*o) }])
-            }
+        match along.as_slice() {
+            [e] => Some(vec![EdgeOrigin::Edge { operand: x, edge: *e }]),
+            [] => Some(vec![EdgeOrigin::meet(Self::wall(t)?, Side::new(cap.iter().copied())?)]),
             _ => None,
         }
     }
 
     /// The origins of the edge between the walls over two segments where the first (tagged
     /// `t1`) runs into the second (`t2`): the operand's edge there between its walls (at the
-    /// operand vertex the segments meet at), where two operands' walls meet, or none within one
-    /// wall (a segment split there).
+    /// operand vertex the segments meet at, else the one edge between them), where two
+    /// operands' walls meet, or none within one wall (a segment split there).
     fn junction(&self, t1: Tag, t2: Tag) -> Option<Vec<EdgeOrigin>> {
         let (p, q) = (Self::wall(t1)?, Self::wall(t2)?);
         if t1.operand != t2.operand {
-            return Some(vec![EdgeOrigin::Meet { a: p.min(q), b: p.max(q) }]);
+            return Some(vec![EdgeOrigin::meet(p, q)]);
         }
         let (x, w1, w2) = (t1.operand, t1.wall?, t2.wall?);
         match (t1.end, t2.start) {
-            (Some(v), Some(u)) if v == u => match self.edges_between(x, [w1, w2], Some(v)).as_slice() {
-                [e] => Some(vec![EdgeOrigin::Edge { operand: x, edge: *e }]),
-                _ => None,
-            },
+            // At that vertex: the operand's edge there (a seam, within one wall), else two edges
+            // of one wall's cap outline running on through it.
+            (Some(v), Some(u)) if v == u => self.one_edge(x, [w1, w2], Some(v)).or_else(|| (w1 == w2).then(Vec::new)),
             _ if w1 == w2 => Some(Vec::new()),
-            _ => None,
+            // Elsewhere (a segment split off there, or read off another cap): only the operand's
+            // walls are around the edge, so the operand has its edge between them there, and
+            // that is the one edge between them where there is one.
+            _ => self.one_edge(x, [w1, w2], None),
         }
     }
 
@@ -238,10 +238,16 @@ impl Context<'_> {
             return Some(Vec::new());
         }
         if t1.operand != t2.operand {
-            return Some(vec![EdgeOrigin::Meet { a: p.min(q), b: p.max(q) }]);
+            return Some(vec![EdgeOrigin::meet(p, q)]);
         }
-        match self.edges_between(t1.operand, [t1.wall?, t2.wall?], None).as_slice() {
-            [e] => Some(vec![EdgeOrigin::Edge { operand: t1.operand, edge: *e }]),
+        self.one_edge(t1.operand, [t1.wall?, t2.wall?], None)
+    }
+
+    /// The operand's edge between the faces `faces` (touching vertex `at` when given), when it
+    /// has exactly one.
+    fn one_edge(&self, operand: usize, faces: [usize; 2], at: Option<usize>) -> Option<Vec<EdgeOrigin>> {
+        match self.edges_between(operand, faces, at).as_slice() {
+            [edge] => Some(vec![EdgeOrigin::Edge { operand, edge: *edge }]),
             _ => None,
         }
     }

@@ -357,14 +357,15 @@ fn trimmed(x: &Body, h: History, slab: &Body, operands: [&Body; 2], n: Vec3, d: 
             f.origins = origins.into_iter().collect();
         }
     }
+    let cap = crate::history::Side::from(cap);
     for e in &mut cut.edges {
         for o in &mut e.origins {
-            let side = match *o {
-                EdgeOrigin::Meet { a, b } if a == cap => b,
-                EdgeOrigin::Meet { a, b } if b == cap => a,
+            let side = match o {
+                EdgeOrigin::Meet { a, b } if *a == cap => b,
+                EdgeOrigin::Meet { a, b } if *b == cap => a,
                 _ => continue,
             };
-            let FaceOrigin::Face { operand, face } = side else { return None };
+            let Some(FaceOrigin::Face { operand, face }) = side.single() else { return None };
             let (plane_faces, bounds) = (in_plane.get(operand)?, bounds.get(operand)?);
             let mut along = (0..bounds.len())
                 .filter(|k| bounds.get(*k).is_some_and(|fs| fs.len() == 2 && fs.contains(&face) && fs.iter().any(|f| plane_faces.contains(f))));
@@ -541,8 +542,12 @@ fn same_cylinder(x: &CylFace, y: &CylFace, tol: f64) -> bool {
 /// The history over `[a, b]` of `r`, made in [`bore_union`]: `joined` (the target joined with
 /// `narrowed`, the tool with its bore narrowed) less `cut`, the cylinder whose wall restores the
 /// tool's bore faces `bore` (the tool is operand `tool_operand`). Nothing of the cylinder but its
-/// wall may be left.
+/// wall may be left. Only a bore of one face: the cylinder's wall faces are split where its own
+/// construction splits them, so which of several bore faces a piece of it lies over is not known.
 fn recut(r: &Body, joined: &Body, narrowed: &Body, cut: &Body, bore: &[usize], tool_operand: usize) -> Option<History> {
+    if bore.len() != 1 {
+        return None;
+    }
     // Over [target, tool].
     let joined = crate::boolean_record::through(joined, 1, narrowed.history())?;
     let wall = || record::region(bore.iter().map(|&face| FaceOrigin::Face { operand: 1, face }).collect(), false);

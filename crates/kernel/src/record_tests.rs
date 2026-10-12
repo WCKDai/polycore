@@ -7,7 +7,7 @@ use solvecraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 
 use crate::body::Body;
 use crate::build::PathSeg;
-use crate::history::{Change, FaceOrigin, History};
+use crate::history::{Change, EdgeOrigin, FaceOrigin, FaceProv, History, Side};
 
 const P: fn(usize) -> FaceOrigin = |segment| FaceOrigin::Profile { segment };
 const START: FaceOrigin = FaceOrigin::Cap { end: false };
@@ -549,4 +549,24 @@ fn emboss_reports_kept_trimmed_and_profile_faces() {
             assert_eq!(under(&[&profile.outer], &back, 1e-6), [*segment]);
         }
     }
+}
+
+/// A new edge's meeting: each side all of its face's origins (a merged face's several); none
+/// where an origin lies on both sides (pieces of one face) or a face comes from nothing.
+#[test]
+fn a_new_edge_meets_whole_faces() {
+    let f = |face: usize| FaceOrigin::Face { operand: 0, face };
+    let blend = FaceOrigin::Edge { operand: 0, edge: 3 };
+    let faces = vec![
+        FaceProv { origins: vec![f(0), f(1)], change: Change::Merged },
+        FaceProv { origins: vec![blend], change: Change::Generated },
+        FaceProv { origins: vec![f(1)], change: Change::Split },
+        FaceProv { origins: vec![], change: Change::Generated },
+    ];
+    let merged = Side::new([f(0), f(1)]).unwrap();
+    assert_eq!(super::meeting(&[1, 0], &faces), [EdgeOrigin::meet(merged, blend)]);
+    assert_eq!(super::meeting(&[2, 1], &faces), [EdgeOrigin::meet(f(1), blend)]);
+    assert!(super::meeting(&[0, 2], &faces).is_empty());
+    assert!(super::meeting(&[1, 3], &faces).is_empty());
+    assert!(super::meeting(&[1], &faces).is_empty());
 }

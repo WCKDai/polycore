@@ -446,7 +446,7 @@ impl HealMap {
             .map(|(id, under)| {
                 let mut origins = BTreeSet::new();
                 for i in under {
-                    origins.extend(edges.get(*i)?.iter().copied());
+                    origins.extend(edges.get(*i)?.iter().cloned());
                 }
                 Some((*id, origins.into_iter().collect()))
             })

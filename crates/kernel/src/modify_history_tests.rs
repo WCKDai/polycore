@@ -193,7 +193,7 @@ fn chamfer_cutters_mitre_at_a_corner() {
     }
     // The two chamfers meet along the mitre.
     let (a, c) = (edge(edge_at(&b, pts[0])), edge(edge_at(&b, pts[1])));
-    assert!(h.edges.iter().any(|e| e.origins == [EdgeOrigin::Meet { a, b: c }] || e.origins == [EdgeOrigin::Meet { a: c, b: a }]));
+    assert!(h.edges.iter().any(|e| e.origins == [EdgeOrigin::meet(a, c)]));
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn delete_a_fillet() {
     // The faces either side of the round meet again where they met nowhere in its input.
     let (top, back_face) = (face_at(&r, Vec3::new(20.0, 10.0, 20.0)), face_at(&r, Vec3::new(20.0, 30.0, 5.0)));
     let (x, y) = (face(top), face(back_face));
-    assert!(h.edges.iter().any(|e| e.origins == [EdgeOrigin::Meet { a: x.min(y), b: x.max(y) }]));
+    assert!(h.edges.iter().any(|e| e.origins == [EdgeOrigin::meet(x, y)]));
 }
 
 #[test]
@@ -374,5 +374,62 @@ fn mirrored_copy_keeps_every_face_and_edge() {
         for p in &rm.edges[j] {
             assert!(to_edge(&bm, edge, Vec3::new(100.0 - p.x, p.y, p.z)) < 1e-6, "edge {j} is not the mirror of edge {edge}");
         }
+    }
+}
+
+/// The block with box cuts of each common shape: a notch through the back, a pocket, a step
+/// along one end, a slot across the top, a hole through, a corner bitten out.
+fn box_cuts() -> Vec<(&'static str, Body, Body)> {
+    let b = cube();
+    [
+        ("notch", Vec3::new(15.0, 25.0, -5.0), Vec3::new(25.0, 35.0, 25.0)),
+        ("pocket", Vec3::new(10.0, 10.0, 10.0), Vec3::new(30.0, 20.0, 25.0)),
+        ("step", Vec3::new(30.0, -5.0, 10.0), Vec3::new(45.0, 35.0, 25.0)),
+        ("slot", Vec3::new(15.0, -5.0, 10.0), Vec3::new(25.0, 35.0, 25.0)),
+        ("hole", Vec3::new(15.0, 10.0, -5.0), Vec3::new(25.0, 20.0, 25.0)),
+        ("bite", Vec3::new(30.0, 20.0, 10.0), Vec3::new(45.0, 35.0, 25.0)),
+    ]
+    .into_iter()
+    .map(|(name, lo, hi)| {
+        let tool = box_solid(lo, hi).unwrap();
+        let cut = boolean(&b, &tool, BoolOp::Cut).unwrap().unwrap();
+        (name, cut, tool)
+    })
+    .collect()
+}
+
+/// Meetings with a side of several origins (a face the modifier's heal merged).
+fn merged_meetings(h: &History) -> usize {
+    h.edges.iter().flat_map(|e| &e.origins).filter(|o| matches!(o, EdgeOrigin::Meet { a, b } if a.single().is_none() || b.single().is_none())).count()
+}
+
+/// A fillet right after a box cut. Where the cut leaves coplanar pieces (the step, slot and
+/// bite leave the front face in pieces), the fillet's heal merges them, and the edge where the
+/// round runs into that face meets all of it. Composed with the cut, over the block and the tool.
+#[test]
+fn fillet_after_box_cuts() {
+    let b = cube();
+    let at = Vec3::new(5.0, 0.0, 20.0);
+    for (name, cut, tool) in box_cuts() {
+        let r = crate::fillet(&cut, &[at], 2.0).unwrap();
+        let h = verified(&r, &cut, reach(2.0 * 1.5));
+        assert_eq!(blends(h), [vec![edge(edge_at(&cut, at))]], "{name}");
+        let merged = matches!(name, "step" | "slot" | "bite");
+        assert_eq!(merged_meetings(h) > 0, merged, "{name}: {h:?}");
+        let mut through = h.clone();
+        through.substitute(0, cut.history().unwrap()).unwrap();
+        through.check(&r, &[&b, &tool]).unwrap();
+    }
+}
+
+/// A chamfer right after a box cut whose cutter's cut goes the prism way: the cutter's walls meet
+/// the cut body's walls where a segment was split off.
+#[test]
+fn chamfer_after_box_cuts() {
+    let at = Vec3::new(5.0, 0.0, 20.0);
+    for (name, cut, _) in box_cuts().into_iter().filter(|(name, ..)| matches!(*name, "notch" | "hole")) {
+        let r = crate::chamfer(&cut, &[at], 2.0).unwrap();
+        let h = verified(&r, &cut, reach(2.0 * 1.5));
+        assert_eq!(with(h, &[edge(edge_at(&cut, at))]).len(), 1, "{name}: {h:?}");
     }
 }

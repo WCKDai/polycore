@@ -587,7 +587,7 @@ impl Sources {
     fn edge(&self, p: FaceOrigin, q: FaceOrigin, ends: (Vec3, Vec3), tol: f64) -> Option<Vec<EdgeOrigin>> {
         let (FaceOrigin::Face { operand: x, face: f }, FaceOrigin::Face { operand: y, face: g }) = (p, q) else { return None };
         if x != y {
-            return Some(vec![EdgeOrigin::Meet { a: p.min(q), b: p.max(q) }]);
+            return Some(vec![EdgeOrigin::meet(p, q)]);
         }
         let Some(edges) = self.edges.get(x)?.as_ref() else { return Some(Vec::new()) };
         if f == g {
