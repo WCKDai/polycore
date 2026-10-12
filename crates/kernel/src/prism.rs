@@ -246,24 +246,44 @@ impl Section {
         }
     }
 
-    /// Mark each segment that runs end to end along a segment of the outline of one of `caps`
-    /// (the operand's caps ending its slab) read beside the same wall with that segment's edge
-    /// as its `far` edge: there the wall meets that cap. A segment along none, or along segments
-    /// of different edges, stays unmarked; so do those past `budget` (segment pairs compared).
-    fn mark_far(&mut self, caps: &[&Section], tol: f64, budget: &mut usize) {
-        let mut by_wall: std::collections::HashMap<usize, Vec<(Seg2, Option<usize>)>> = std::collections::HashMap::new();
-        for (segs, tags) in caps.iter().map(|c| c.segments()) {
-            for (seg, tag) in segs.into_iter().zip(tags) {
-                if let Some(w) = tag.wall {
-                    by_wall.entry(w).or_default().push((seg, tag.edge));
-                }
-            }
-        }
+    /// Mark each segment of a slab with its `far` edge: the operand's edge where its wall meets
+    /// one of `caps` (the outlines of the operand's caps ending the slab).
+    ///
+    /// The operand's topology settles it where `top` gives the wall's edge (the wall ends at the
+    /// caps in that one edge, [`Stations::top_edge`]): that edge is over every segment beside it.
+    ///
+    /// Otherwise, for a wall meeting the caps in several edges (its top split at vertices an
+    /// earlier operation left, or beside a wall across it there) or carrying on past the caps
+    /// elsewhere, which edge is over a segment depends on where the segment lies along the wall,
+    /// and nothing in the topology says that. Only there is position compared: the segment takes
+    /// the edge of the cap segment beside the same wall it runs along end to end. A segment
+    /// along none, or along segments of different edges, stays unmarked; so do those past
+    /// `budget` (segment pairs compared).
+    fn mark_far(&mut self, caps: &[&Section], top: impl Fn(usize) -> Option<usize>, tol: f64, budget: &mut usize) {
+        let mut tops: std::collections::HashMap<usize, Option<usize>> = std::collections::HashMap::new();
+        // The caps' segments by wall, gathered only once a wall needs position.
+        let mut by_wall: Option<std::collections::HashMap<usize, Vec<(Seg2, Option<usize>)>>> = None;
         for (reg, tags) in self.regions.iter().zip(&mut self.tags) {
             for (lp, tags) in std::iter::once(&reg.outer).chain(&reg.holes).zip(tags) {
                 for (seg, tag) in lp.segs.iter().zip(tags) {
-                    let Some(beside) = tag.wall.and_then(|w| by_wall.get(&w)) else { continue };
-                    let Some(left) = budget.checked_sub(beside.len()) else { return };
+                    let Some(w) = tag.wall else { continue };
+                    if let Some(e) = *tops.entry(w).or_insert_with(|| top(w)) {
+                        tag.far = Some(e);
+                        continue;
+                    }
+                    let by_wall = by_wall.get_or_insert_with(|| {
+                        let mut by_wall: std::collections::HashMap<usize, Vec<(Seg2, Option<usize>)>> = std::collections::HashMap::new();
+                        for (segs, tags) in caps.iter().map(|c| c.segments()) {
+                            for (seg, tag) in segs.into_iter().zip(tags) {
+                                if let Some(w) = tag.wall {
+                                    by_wall.entry(w).or_default().push((seg, tag.edge));
+                                }
+                            }
+                        }
+                        by_wall
+                    });
+                    let Some(beside) = by_wall.get(&w) else { continue };
+                    let Some(left) = budget.checked_sub(beside.len()) else { continue };
                     *budget = left;
                     // The one edge it runs along (`Some(None)`: along none, or not one edge).
                     let mut along: Option<Option<usize>> = None;
@@ -442,6 +462,22 @@ impl Stations {
     /// The edges across wall `w`.
     fn of(&self, w: usize) -> &[(usize, f64, f64)] {
         self.cross.get(&w).map_or(&[], Vec::as_slice)
+    }
+
+    /// The operand's edge (in `index`) where wall `w` ends at level `z`, when it ends there in
+    /// one edge: `z` is its top, no other wall crosses it there, and it meets the faces `caps`
+    /// (the caps at `z`) in exactly one edge. Found by topology alone, no position compared. The wall reaching no higher, every segment beside
+    /// it in a slab up to `z` ends on its edges at `z`, which are that one edge alone.
+    fn top_edge(&self, index: &Index, w: usize, caps: &[usize], z: f64, tol: f64) -> Option<usize> {
+        let ends = self.tops.get(&w).is_some_and(|t| (*t - z).abs() < tol);
+        if !ends || self.of(w).iter().any(|(_, l, h)| *l < z + tol && *h > z - tol) {
+            return None;
+        }
+        let mut edges = caps.iter().filter_map(|c| index.between.get(&(w.min(*c), w.max(*c)))).flatten();
+        match (edges.next(), edges.next()) {
+            (Some(e), None) => Some(*e),
+            _ => None,
+        }
     }
 
     /// Does wall `w` meet another wall across it between levels `lo` and `hi` (not at them)?
@@ -1444,7 +1480,7 @@ fn stack_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
             let n = Vec3::new(n.x, n.y, n.z).normalized()?;
             if n.dot(d).abs() > 1.0 - 1e-9 {
                 let section = Section::from_loops(index.get().loops(f, fi, plane, tol, &mut curve_work, &mut segments)?)?;
-                events.push((plane.height(from_p3(p.origin())), n.dot(d) > 0.0, section.oriented()));
+                events.push((plane.height(from_p3(p.origin())), n.dot(d) > 0.0, section.oriented(), fi));
                 continue;
             }
             if n.dot(d).abs() > 1e-9 {
@@ -1455,7 +1491,7 @@ fn stack_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
         }
         walls.insert(fi, top_of(f, plane));
     }
-    let mut levels: Vec<f64> = events.iter().map(|(z, _, _)| *z).collect();
+    let mut levels: Vec<f64> = events.iter().map(|(z, _, _, _)| *z).collect();
     levels.sort_by(f64::total_cmp);
     levels.dedup_by(|x, y| (*x - *y).abs() < tol);
     if levels.len() < 2 || levels.len() > 64 || levels.iter().any(|z| !z.is_finite()) {
@@ -1467,9 +1503,10 @@ fn stack_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
     let mut budget = MAX_PLANAR_PAIRS;
     for (i, z) in levels.iter().enumerate() {
         // The caps here end the slab below: its walls meet them.
-        if let Some(below) = stack.last_mut() {
-            let caps: Vec<&Section> = events.iter().filter(|(h, _, _)| (*h - *z).abs() < tol).map(|(_, _, s)| s).collect();
-            below.section.mark_far(&caps, tol, &mut budget);
+        if let Some(below) = stack.last_mut().filter(|p| (p.hi - *z).abs() < tol) {
+            let (faces, caps): (Vec<usize>, Vec<&Section>) =
+                events.iter().filter(|(h, _, _, _)| (*h - *z).abs() < tol).map(|(_, _, s, f)| (*f, s)).unzip();
+            below.section.mark_far(&caps, |w| stations.top_edge(index.get(), w, &faces, *z, tol), tol, &mut budget);
         }
         // The segments carried here run on past it, beside the walls there.
         current.retag(|t| match t.wall {
@@ -1478,7 +1515,7 @@ fn stack_tagged(b: &Body, d: Vec3, plane: &Plane, tol: f64, index: &LazyIndex) -
         });
         // Remove terminating material before adding any material starting here.
         for up in [true, false] {
-            for (_, _, section) in events.iter().filter(|(h, u, _)| (*h - *z).abs() < tol && *u == up) {
+            for (_, _, section, _) in events.iter().filter(|(h, u, _, _)| (*h - *z).abs() < tol && *u == up) {
                 current = match (current.regions.is_empty(), up) {
                     (true, false) => section.clone(),
                     (true, true) => return None,
@@ -2019,6 +2056,45 @@ mod planar_tests {
             assert!((crate::measure(&opened).unwrap().volume - 14_675.).abs() < 1e-6);
             assert!(opened.validity().is_empty());
         }
+    }
+    #[test]
+    fn far_edges_of_a_stepped_slab_come_from_the_operand_topology() {
+        // A block with a notch in its back, read along -y: the slab from the notch floor to the
+        // front has three segments beside the top face, read off the back and the notch floor.
+        // The top face ends at the front in one edge: the far edge of all three, found with no
+        // position compared (no pair budget).
+        let notched = Loop2::polygon(&[
+            Vec2::new(0., 0.),
+            Vec2::new(40., 0.),
+            Vec2::new(40., 30.),
+            Vec2::new(25., 30.),
+            Vec2::new(25., 25.),
+            Vec2::new(15., 25.),
+            Vec2::new(15., 30.),
+            Vec2::new(0., 30.),
+        ]);
+        let block = crate::extrude(&Plane::named("XY").unwrap(), &[Region2 { outer: notched, holes: vec![] }], 0., 20.).unwrap().pop().unwrap();
+        let (d, tol) = (-Vec3::Y, 1e-6);
+        let plane = Plane::from_normal(Vec3::ZERO, d).unwrap();
+        let normal = |f: &mt::Face| crate::blend::plane_normal(f).unwrap_or(Vec3::ZERO);
+        let faces: Vec<(usize, &mt::Face)> = block.solid.face_iter().enumerate().collect();
+        let find = |n: Vec3| faces.iter().find(|(_, f)| normal(f).dot(n) > 1. - 1e-9).map(|(i, _)| *i).unwrap();
+        let (top, front) = (find(Vec3::Z), find(-Vec3::Y));
+        let walls = faces.iter().filter(|(_, f)| normal(f).dot(d).abs() < 1e-9).map(|(i, f)| (*i, top_of(f, &plane))).collect();
+        let index = Index::new(&block, 0);
+        let stations = Stations::new(&index, walls, d, &plane, tol);
+        let cap = Section::from_loops(index.loops(faces[front].1, front, &plane, tol, &mut 1000, &mut 1000).unwrap()).unwrap().oriented();
+        let edge = match index.between.get(&(top.min(front), top.max(front))).map(Vec::as_slice) {
+            Some([e]) => *e,
+            other => panic!("one edge between the top and the front: {other:?}"),
+        };
+        let mut slab = stack_of(&block, d, &plane, tol).unwrap().pop().unwrap();
+        assert!((slab.lo + 25.).abs() < tol && slab.hi.abs() < tol);
+        let beside_top = |s: &Section| s.segments().1.into_iter().filter(|t| t.wall == Some(top)).map(|t| t.far).collect::<Vec<_>>();
+        assert_eq!(beside_top(&slab.section), vec![Some(edge); 3], "read as a stack");
+        slab.section.retag(|t| Tag { far: None, ..t });
+        slab.section.mark_far(&[&cap], |w| stations.top_edge(&index, w, &[front], 0., tol), tol, &mut 0);
+        assert_eq!(beside_top(&slab.section), vec![Some(edge); 3], "by topology alone");
     }
     #[test]
     fn compound_planar_extrusion_normalizes_overlap_and_retains_islands() {
