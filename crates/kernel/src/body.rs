@@ -467,6 +467,15 @@ fn span_of(solid: &Solid) -> f64 {
     if lo.x.is_finite() { (hi - lo).len() } else { 1.0 }
 }
 
+/// Equal shared values: the same allocation (a clone of the body), else equal contents.
+fn same_shared<T: PartialEq>(a: &Option<std::sync::Arc<T>>, b: &Option<std::sync::Arc<T>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b) || a == b,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 impl Body {
     /// The very same body (shared data), not just an equal-looking one. Its history (how an
     /// operation made it) is not part of it: an operation that leaves a body as it is (a cut by
@@ -479,9 +488,9 @@ impl Body {
                 _ => false,
             }
             && self.color == other.color
-            && self.paint == other.paint
-            && self.splits == other.splits
-            && self.face_sources == other.face_sources
+            && same_shared(&self.paint, &other.paint)
+            && same_shared(&self.splits, &other.splits)
+            && same_shared(&self.face_sources, &other.face_sources)
             && self.regularization_protected == other.regularization_protected
     }
 
