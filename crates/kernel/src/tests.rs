@@ -2312,3 +2312,17 @@ fn shell_of_a_disc_rounded_smaller_than_the_wall() {
         }
     }
 }
+
+/// The cache-budget estimate counts edge and vertex uses on the borrowed boundaries; it must
+/// equal what walking the cloned wires (`Solid::edge_iter`, `vertex_iter`) counts.
+#[test]
+fn retained_bytes_matches_the_iterator_counts() {
+    let block = box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 10.0)).unwrap();
+    let hole = cylinder(Vec3::new(20.0, 15.0, -5.0), Vec3::Z, 5.0, 30.0).unwrap();
+    let drilled = boolean(&block, &hole, BoolOp::Cut).unwrap().unwrap();
+    for body in [&block, &hole, &drilled] {
+        let s = &body.solid;
+        let walked = s.face_iter().count() * 2048 + s.edge_iter().count() * 512 + s.vertex_iter().count() * 96;
+        assert_eq!(body.retained_bytes(), walked);
+    }
+}

@@ -939,7 +939,16 @@ impl Body {
         if let Some(m) = &self.mesh {
             return m.positions.len() * 24 + m.triangles.len() * 12;
         }
-        self.solid.face_iter().count() * 2048 + self.solid.edge_iter().count() * 512 + self.solid.vertex_iter().count() * 96
+        // Counted on the borrowed boundaries: `Solid::edge_iter` and `vertex_iter` clone every
+        // face's wires to walk them, which made this estimate (taken after every feature, over
+        // every body) cost more than evaluating most features. Each edge use is one edge and
+        // one vertex in those iterators, so the counts are the same.
+        let (mut faces, mut uses) = (0usize, 0usize);
+        for face in self.solid.face_iter() {
+            faces += 1;
+            uses += face.absolute_boundaries().iter().map(|w| w.len()).sum::<usize>();
+        }
+        faces * 2048 + uses * (512 + 96)
     }
 
     /// Distinct edges in a stable order (the order of `edges()` and `tessellate().edges`).
