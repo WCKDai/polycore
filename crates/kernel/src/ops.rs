@@ -883,6 +883,17 @@ pub fn union_apart(bodies: &[Body]) -> Result<Option<Body>> {
             }
         }
     }
+    join_apart(bodies)
+}
+
+/// Bodies the caller knows are apart (no two meet or touch), as one body of several pieces,
+/// without any intersection work: [`union_apart`] without its check, for tools whose making
+/// shows they are apart (profiles apart in their sketch, extruded alike). `None` for fewer than
+/// two bodies or a mesh.
+pub fn join_apart(bodies: &[Body]) -> Result<Option<Body>> {
+    if bodies.len() < 2 || bodies.len() > 10_000 || bodies.iter().any(Body::is_mesh) {
+        return Ok(None);
+    }
     // The pieces stay as they are, side by side: each face and edge of the result is its piece's
     // own (the history over `bodies`).
     let Some(joined) = join_pieces(bodies.to_vec())? else { return Ok(None) };
