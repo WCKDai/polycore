@@ -382,6 +382,36 @@ fn fillet_max_finds_the_largest_radius_that_works() {
     assert!(fillet_max(&b, &[Vec3::new(500.0, 0.0, 5.0)], 1.0).is_none());
 }
 
+/// Edges that share no face get their own largest radius: a 2 mm fin's top edge takes at most
+/// its thickness, while a corner of the block it stands on, far from it, keeps the 4 asked for.
+/// Edges that limit each other (the post's four, sharing faces) still share one.
+#[test]
+fn fillet_max_each_reduces_only_where_the_radius_does_not_fit() {
+    let (block, fin) = (40.0 * 30.0 * 20.0, 2.0 * 30.0 * 10.0);
+    let body = boolean(
+        &box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)).unwrap(),
+        &box_solid(Vec3::new(19.0, 0.0, 20.0), Vec3::new(21.0, 30.0, 30.0)).unwrap(),
+        BoolOp::Union,
+    )
+    .unwrap()
+    .unwrap();
+    let edges = [Vec3::new(21.0, 15.0, 30.0), Vec3::new(40.0, 0.0, 10.0)];
+    assert!(matches!(fillet(&body, &edges, 4.0), Err(KernelError::TooLarge(_))));
+    let (one, _) = fillet_max(&body, &edges, 4.0).unwrap();
+    let (radii, b) = fillet_max_each(&body, &edges, 4.0).unwrap();
+    assert_eq!(radii.get(1), Some(&4.0), "{radii:?}");
+    let fin_r = radii.first().copied().unwrap();
+    assert!(fin_r < 4.0 && (fin_r - one).abs() < 1e-9, "{radii:?}, one radius {one}");
+    assert!(b.validity().is_empty(), "{:?}", b.validity());
+    // Each round takes (1 − π/4)·r² along its edge: the fin's 30 long, the corner's 20.
+    let removed = (1.0 - PI / 4.0) * (fin_r * fin_r * 30.0 + 16.0 * 20.0);
+    assert!(rel(measure(&b).unwrap().volume, block + fin - removed) < 2e-4);
+    // The post's four edges limit each other: one radius, as `fillet_max`.
+    let post = box_solid(Vec3::new(14.0, 0.0, 0.0), Vec3::new(28.0, 6.0, 10.0)).unwrap();
+    let mids = [Vec3::new(14.0, 0.0, 5.0), Vec3::new(28.0, 0.0, 5.0), Vec3::new(14.0, 6.0, 5.0), Vec3::new(28.0, 6.0, 5.0)];
+    assert_eq!(fillet_max_each(&post, &mids, 3.5).map(|x| x.0), Some(vec![3.0; 4]));
+}
+
 /// A corner's rounds too large for its faces are refused as too large, so a fit can reduce
 /// them, also where only the corner build finds it (the edge-by-edge blend failing otherwise).
 #[test]

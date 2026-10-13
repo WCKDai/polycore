@@ -828,20 +828,26 @@ fn smooth_loop(w: &mt::Wire) -> bool {
 
 /// The B-rep edges nearest the points (each once).
 fn edge_ids(cur: &Body, solid: &Solid, pts: &[Vec3]) -> Result<Vec<mt::EdgeID>> {
-    let size = cur.size();
-    let tol = (size * 2e-3).max(1e-3);
     let all = Body::unique_edges(solid);
     let mut ids = Vec::new();
     for p in pts {
-        if let Some((idx, dist)) = cur.nearest_edge(*p, tol)?
-            && dist <= size * 0.05 + 1e-3
-            && let Some(e) = all.get(idx)
-            && !ids.contains(&e.id())
+        if let Some(id) = nearest_edge_id(cur, &all, *p)?
+            && !ids.contains(&id)
         {
-            ids.push(e.id());
+            ids.push(id);
         }
     }
     Ok(ids)
+}
+
+/// The edge of `all` (`cur`'s edges, in their order) a point picks: the nearest, if near enough.
+fn nearest_edge_id(cur: &Body, all: &[mt::Edge], p: Vec3) -> Result<Option<mt::EdgeID>> {
+    let size = cur.size();
+    let tol = (size * 2e-3).max(1e-3);
+    Ok(match cur.nearest_edge(p, tol)? {
+        Some((idx, dist)) if dist <= size * 0.05 + 1e-3 => all.get(idx).map(|e| e.id()),
+        _ => None,
+    })
 }
 
 /// When the edges make up whole boundary loops of planar faces: the edge points per loop.
@@ -953,6 +959,116 @@ pub fn fillet_max(body: &Body, edges: &[Vec3], radius: f64) -> Option<(f64, Body
         }
     }
     best.map(|b| (lo as f64 * q, b))
+}
+
+/// [`fillet_max`] for each group of the edges that may limit each other's radius (sharing a
+/// face or a vertex, directly or through other edges in the group), so a round that fits isn't
+/// reduced for a tight edge elsewhere. The radius per edge (in `edges`' order) and the result;
+/// one radius for all (as [`fillet_max`]) when a group is refused for another reason than its
+/// size, the groups don't build together, or there are too many to search (each search is up
+/// to 16 fillets, and this runs in the live preview).
+pub fn fillet_max_each(body: &Body, edges: &[Vec3], radius: f64) -> Option<(Vec<f64>, Body)> {
+    const MAX_GROUPS: usize = 8;
+    const MAX_SEARCHES: usize = 2;
+    let one = || fillet_max(body, edges, radius).map(|(r, b)| (vec![r; edges.len()], b));
+    let Some(groups) = interacting_groups(body, edges).filter(|g| g.len() > 1 && g.len() <= MAX_GROUPS) else { return one() };
+    let mut radii = vec![radius; edges.len()];
+    let mut searches = 0;
+    for g in &groups {
+        let pts: Vec<Vec3> = g.iter().filter_map(|i| edges.get(*i).copied()).collect();
+        let r = match fillet(body, &pts, radius) {
+            Ok(_) => continue,
+            Err(KernelError::TooLarge(_)) if searches < MAX_SEARCHES => {
+                searches += 1;
+                match fillet_max(body, &pts, radius) {
+                    Some((r, _)) => r,
+                    None => return one(),
+                }
+            }
+            Err(_) => return one(),
+        };
+        for i in g {
+            if let Some(x) = radii.get_mut(*i) {
+                *x = r;
+            }
+        }
+    }
+    match fillet_each(body, edges, &radii) {
+        Ok(b) => Some((radii, b)),
+        Err(_) => one(),
+    }
+}
+
+/// The fillet of each edge at its own radius (`radii` in `edges`' order): built together where
+/// the corner build takes it, else the edges of each radius together, the largest first.
+pub fn fillet_each(body: &Body, edges: &[Vec3], radii: &[f64]) -> Result<Body> {
+    if radii.len() != edges.len() {
+        return Err(KernelError::Invalid("one radius per edge".into()));
+    }
+    if let Some(r) = radii.first().filter(|r| radii.iter().all(|x| x.to_bits() == r.to_bits())) {
+        return fillet(body, edges, *r);
+    }
+    let sel: Vec<(Vec3, f64)> = edges.iter().copied().zip(radii.iter().copied()).collect();
+    if let Ok(b) = crate::blend_corner::fillet_radii(body, &sel) {
+        return Ok(b);
+    }
+    let mut by_radius: Vec<(f64, Vec<Vec3>)> = Vec::new();
+    for (p, r) in sel {
+        match by_radius.iter_mut().find(|(x, _)| x.to_bits() == r.to_bits()) {
+            Some((_, pts)) => pts.push(p),
+            None => by_radius.push((r, vec![p])),
+        }
+    }
+    by_radius.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut cur = body.clone();
+    for (r, pts) in &by_radius {
+        cur = fillet(&cur, pts, *r)?;
+    }
+    Ok(cur)
+}
+
+/// The points' edges (found as [`edge_ids`] finds them, on the body as the blends see it) grouped
+/// where they share a face or a vertex, directly or through other points' edges: indices into
+/// `pts`. `None` when a point has no edge near it.
+fn interacting_groups(body: &Body, pts: &[Vec3]) -> Option<Vec<Vec<usize>>> {
+    let cur = crate::boolean_record::healed(body).ok()?;
+    let all = Body::unique_edges(&cur.solid);
+    // What each point's edge touches: its faces and its ends.
+    let mut groups: Vec<(Vec<mt::FaceID>, Vec<mt::VertexID>, Vec<usize>)> = Vec::new();
+    for (i, p) in pts.iter().enumerate() {
+        let id = nearest_edge_id(&cur, &all, *p).ok()??;
+        let edge = all.iter().find(|e| e.id() == id)?;
+        let mut faces: Vec<mt::FaceID> = cur.solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == id)).map(|f| f.id()).collect();
+        let mut ends = vec![edge.front().id(), edge.back().id()];
+        let mut members = vec![i];
+        // Join every group touching one of these faces or ends.
+        let (meet, rest): (Vec<_>, Vec<_>) =
+            groups.into_iter().partition(|(fs, vs, _)| fs.iter().any(|f| faces.contains(f)) || vs.iter().any(|v| ends.contains(v)));
+        for (fs, vs, ms) in meet {
+            for f in fs {
+                if !faces.contains(&f) {
+                    faces.push(f);
+                }
+            }
+            for v in vs {
+                if !ends.contains(&v) {
+                    ends.push(v);
+                }
+            }
+            members.extend(ms);
+        }
+        groups = rest;
+        groups.push((faces, ends, members));
+    }
+    Some(
+        groups
+            .into_iter()
+            .map(|(_, _, mut ms)| {
+                ms.sort_unstable();
+                ms
+            })
+            .collect(),
+    )
 }
 
 /// Equal-distance chamfer of the edges nearest to the given points. Each edge is cut with a
