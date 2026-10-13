@@ -468,6 +468,94 @@ fn backed(a: &Body, b: &Body, m: Vec3, d: f64, depth: f64) -> bool {
     !points.is_empty() && points.iter().all(|p| [0.05, 0.5, 1.0].iter().all(|k| inside.contains(*p + m * (depth * k))))
 }
 
+/// The faces of `body` lying in the plane (n, d), facing along n.
+fn faces_in(body: &Body, n: Vec3, d: f64, tol: f64) -> Vec<usize> {
+    planes(body).into_iter().filter(|(_, p)| p.n.dot(n) > 1.0 - 1e-9 && (p.d - d).abs() < tol).map(|(i, _)| i).collect()
+}
+
+/// `body` (with its history `h` over its operand) with its faces in the plane (n, d) split
+/// where the faces of `tool` next to the tool's faces in the opposite plane cross them: the
+/// outline of the tool's contact imprinted on the body's.
+fn imprinted(body: Body, mut h: Option<History>, n: Vec3, d: f64, tool: &Body, tol: f64) -> Result<(Body, Option<History>)> {
+    let contact = faces_in(tool, -n, -d, tol);
+    let bounds = crate::history::edge_faces(&tool.solid);
+    let mut beside: Vec<usize> = bounds
+        .iter()
+        .filter(|fs| fs.len() == 2 && fs.iter().any(|f| contact.contains(f)))
+        .flat_map(|fs| fs.iter().copied())
+        .filter(|f| !contact.contains(f))
+        .collect();
+    beside.sort_unstable();
+    beside.dedup();
+    let mut body = body;
+    for t in beside {
+        let faces = faces_in(&body, n, d, tol);
+        if faces.is_empty() {
+            break;
+        }
+        // Faces the tool's face does not cross stay as they are.
+        let crossed: Vec<usize> = faces
+            .into_iter()
+            .filter(|f| crate::splitface::split_any(&body, &[*f], &crate::SplitTool::Face { body: tool, face: t }).is_ok())
+            .collect();
+        if crossed.is_empty() {
+            continue;
+        }
+        let (split, _) = crate::splitface::split_any(&body, &crossed, &crate::SplitTool::Face { body: tool, face: t })?;
+        h = crate::boolean_record::through(&split, 0, h.as_ref());
+        body = split;
+    }
+    Ok((body, h))
+}
+
+/// Union of bodies touching back to back over part of a planar face (a pad half past the edge
+/// of the face it stands on, two blocks meeting over some of their faces, #674, #679): each
+/// body's contact faces are split along the outline of the other's, so the common area is the
+/// same face in both, and those faces are glued away. `None` when that does not give a result
+/// `accept`ed.
+pub(crate) fn imprint_union(a: &Body, b: &Body, accept: &dyn Fn(&Body) -> bool) -> Option<Body> {
+    let size = a.size().max(b.size());
+    let tol = (size * 1e-7).max(1e-9) * 10.0;
+    let back: Vec<(Vec3, f64)> = coincident_planes(a, b).into_iter().filter(|(_, _, same)| !*same).map(|(n, d, _)| (n, d)).collect();
+    if back.is_empty() {
+        return None;
+    }
+    let run = || -> Result<Option<Body>> {
+        let (mut a2, mut ha) = (a.clone(), crate::boolean_record::kept(a, 0, 1));
+        let (mut b2, mut hb) = (b.clone(), crate::boolean_record::kept(b, 0, 1));
+        for (n, d) in &back {
+            // a's faces face along n in the plane; b's face the other way.
+            (a2, ha) = imprinted(a2, ha, *n, *d, b, tol)?;
+            (b2, hb) = imprinted(b2, hb, -*n, -*d, a, tol)?;
+        }
+        // The common faces' boundaries with the same vertices on both sides.
+        for (n, d) in &back {
+            let corners = |body: &Body, n: Vec3, d: f64| -> Vec<Vec3> {
+                let fs: Vec<&mt::Face> = body.solid.face_iter().collect();
+                let mut out: Vec<Vec3> =
+                    faces_in(body, n, d, tol).iter().filter_map(|i| fs.get(*i)).flat_map(|f| f.vertex_iter().map(|v| from_p3(v.point()))).collect();
+                out.dedup_by(|x, y| x.dist(*y) <= tol);
+                out
+            };
+            let (pa, pb) = (corners(&a2, *n, *d), corners(&b2, -*n, -*d));
+            let a3 = crate::splitface::split_edges_at(&a2, &pb)?;
+            ha = crate::boolean_record::through(&a3, 0, ha.as_ref());
+            let b3 = crate::splitface::split_edges_at(&b2, &pa)?;
+            hb = crate::boolean_record::through(&b3, 0, hb.as_ref());
+            (a2, b2) = (a3, b3);
+        }
+        let Some(r) = glue(&a2, &b2) else { return Ok(None) };
+        let r = r?;
+        let (ha, hb) = (crate::boolean_record::placed(ha, 0, 2), crate::boolean_record::placed(hb, 1, 2));
+        let h = crate::boolean_record::of_pair(&r, &ha, &hb);
+        Ok(Some(r.with_checked_history(h, &record::counts(&[a, b]))))
+    };
+    match guard("imprint union", run) {
+        Ok(Some(r)) if accept(&r) => Some(r),
+        _ => None,
+    }
+}
+
 /// Union of bodies that touch along identical planar faces, back to back (a body joined with
 /// its mirror image, or the pieces of a body cut apart by a plane, which may meet in several
 /// faces): every such pair of faces goes and the shells are stitched along their edges. `None`
@@ -506,10 +594,20 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
             let mut ok = true;
             for e in &eb {
                 let ends = (key(from_p3(e.absolute_front().point())), key(from_p3(e.absolute_back().point())));
-                let m = key(mid(e));
+                let m = mid(e);
+                // The same curve: the same ends and e's middle on f (curves of one shape may be
+                // parametrised differently, so their parameter middles needn't coincide).
+                let on = |f: &mt::Edge| {
+                    use mt::SearchNearestParameter;
+                    let c = f.curve();
+                    let (t0, t1) = c.range_tuple();
+                    key(mid(f)) == key(m)
+                        || c.search_nearest_parameter(p3(m), None, 100)
+                            .is_some_and(|t| (t0.min(t1) - 1e-9..=t0.max(t1) + 1e-9).contains(&t) && from_p3(c.subs(t)).dist(m) <= tol)
+                };
                 let hit = ea.iter().find(|f| {
                     let fe = (key(from_p3(f.absolute_front().point())), key(from_p3(f.absolute_back().point())));
-                    (fe == ends || fe == (ends.1, ends.0)) && key(mid(f)) == m
+                    (fe == ends || fe == (ends.1, ends.0)) && on(f)
                 });
                 let Some(f) = hit else {
                     ok = false;
@@ -586,7 +684,11 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
             }
             faces.push(nf);
         }
-        let solid = Solid::try_new(vec![faces.into()]).map_err(|e| fail(&e.to_string()))?;
+        // Bodies of several pieces stay in several pieces (each face's provenance follows it).
+        let prov: HashMap<mt::FaceID, FaceProv> = faces.iter().map(|f| f.id()).zip(from).collect();
+        let shell: mt::Shell = faces.into();
+        let solid = Solid::try_new(shell.connected_components()).map_err(|e| fail(&e.to_string()))?;
+        let from: Vec<FaceProv> = solid.face_iter().filter_map(|f| prov.get(&f.id()).cloned()).collect();
         // Each edge's origins in the solid's edge order.
         let origins = crate::body::edge_order(solid.face_iter()).0.iter().map(|e| origins.get(&e.id()).cloned()).collect();
         crate::boolean_record::heal_build(solid, size, &[], Some(from), origins, &record::counts(&[a, b]))

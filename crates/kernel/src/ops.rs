@@ -549,6 +549,14 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             return Ok(Some(body));
         }
     }
+    // Faces back to back over part of their area: imprinted on each other and glued (exact; held
+    // to the retry guard's checks all the same).
+    if op == BoolOp::Union && crate::coplanar::faces_touch(a, b) {
+        let accept = |body: &Body| check(body).0 && !unfused(body) && crate::boolean_guard::check_retry(a, b, op, Some(body)).is_ok();
+        if let Some(body) = crate::coplanar::imprint_union(a, b, &accept) {
+            return Ok(Some(body));
+        }
+    }
     let mut empty_votes = 0;
     let mut empty_diagnostics = crate::BooleanDiagnostics::default();
     let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();

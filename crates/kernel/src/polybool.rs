@@ -857,13 +857,11 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
         joined.get(roots.get(li)?).cloned()
     };
     guard("planar boolean rebuild", || {
-        let tv: Vec<mt::Vertex> = verts.iter().map(|v| builder::vertex(p3(*v))).collect();
-        let mut edges: HashMap<(usize, usize), mt::Edge> = HashMap::new();
-        let mut faces: Vec<mt::Face> = Vec::new();
-        let mut face_from: HashMap<mt::FaceID, Option<BTreeSet<FaceOrigin>>> = HashMap::new();
-        for (g, plane) in groups.iter().enumerate() {
+        let mut verts = verts.clone();
+        // Every plane group's boundary loops (vertex indices).
+        let mut all_loops: Vec<Vec<Vec<usize>>> = Vec::new();
+        for (g, _) in groups.iter().enumerate() {
             let mut segs: Vec<(usize, usize)> = boundary.iter().filter(|e| e.0 == g).map(|e| (e.1, e.2)).collect();
-            let mut wires: Vec<mt::Wire> = Vec::new();
             let mut loops_g: Vec<Vec<usize>> = Vec::new();
             while let Some((s, t)) = segs.pop() {
                 let mut lp = vec![s, t];
@@ -895,7 +893,19 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
                     }
                 }
             }
-            for lp in &loops_g {
+            all_loops.push(loops_g);
+        }
+        // The original vertex of each vertex index (pinched vertices get copies, below).
+        let mut orig: Vec<usize> = (0..verts.len()).collect();
+        split_pinched_vertices(&mut all_loops, &mut verts, &mut orig);
+        let tv: Vec<mt::Vertex> = verts.iter().map(|v| builder::vertex(p3(*v))).collect();
+        let mut edges: HashMap<(usize, usize), mt::Edge> = HashMap::new();
+        let mut faces: Vec<mt::Face> = Vec::new();
+        let mut face_from: HashMap<mt::FaceID, Option<BTreeSet<FaceOrigin>>> = HashMap::new();
+        for (g, plane) in groups.iter().enumerate() {
+            let Some(loops_g) = all_loops.get(g) else { continue };
+            let mut wires: Vec<mt::Wire> = Vec::new();
+            for lp in loops_g {
                 let n = lp.len();
                 let mut es = Vec::with_capacity(n);
                 for i in 0..n {
@@ -964,7 +974,7 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
                         ws.push(wires.get(*h).cloned().ok_or_else(|| KernelError::Failed("wire".into()))?);
                     }
                 }
-                let from = loop_faces(g, ol);
+                let from = loop_faces(g, &ol.iter().map(|k| orig.get(*k).copied().unwrap_or(*k)).collect::<Vec<_>>());
                 // A loop a hair off flat (fine facets of a curved face) takes the group's plane.
                 let face = match builder::try_attach_plane(&ws) {
                     Ok(f) => f,
@@ -988,6 +998,7 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
             .iter()
             .map(|((a, b), e)| {
                 let ends = (*verts.get(*a)?, *verts.get(*b)?);
+                let (a, b) = (orig.get(*a)?, orig.get(*b)?);
                 let mut origins = BTreeSet::new();
                 for p in side.get(&(*a, *b))? {
                     for q in side.get(&(*b, *a))? {
@@ -999,6 +1010,73 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
             .collect::<Option<HashMap<mt::EdgeID, Vec<EdgeOrigin>>>>();
         record::build(solid, &sources.counts, regions.map(record::regions), edge_from.as_ref())
     })
+}
+
+/// A vertex where the solid's surface pinches, as where two blocks meet at one corner only
+/// (#679): the faces around it form several fans that share no edge there. Each fan past the
+/// first gets its own copy of the vertex (same point), so every vertex of the shell is a
+/// manifold one.
+fn split_pinched_vertices(loops: &mut [Vec<Vec<usize>>], verts: &mut Vec<Vec3>, orig: &mut Vec<usize>) {
+    // Every corner: (group, loop, position), by vertex.
+    let mut corners: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
+    for (g, ls) in loops.iter().enumerate() {
+        for (li, l) in ls.iter().enumerate() {
+            for (i, v) in l.iter().enumerate() {
+                corners.entry(*v).or_default().push((g, li, i));
+            }
+        }
+    }
+    let mut renames: Vec<((usize, usize, usize), usize)> = Vec::new();
+    let mut ids: Vec<usize> = corners.keys().copied().collect();
+    ids.sort_unstable();
+    for v in ids {
+        let Some(cs) = corners.get(&v) else { continue };
+        if cs.len() < 2 {
+            continue;
+        }
+        // The two neighbours of each corner; corners sharing an edge (v, x) are in one fan.
+        let nbrs: Vec<[usize; 2]> = cs
+            .iter()
+            .map(|(g, li, i)| {
+                let l = loops.get(*g).and_then(|ls| ls.get(*li)).map(Vec::as_slice).unwrap_or(&[]);
+                let n = l.len().max(1);
+                [l.get((i + n - 1) % n).copied().unwrap_or(v), l.get((i + 1) % n).copied().unwrap_or(v)]
+            })
+            .collect();
+        let mut parent: Vec<usize> = (0..cs.len()).collect();
+        for i in 0..cs.len() {
+            for j in i + 1..cs.len() {
+                let (Some(a), Some(b)) = (nbrs.get(i), nbrs.get(j)) else { continue };
+                if a.iter().any(|x| b.contains(x)) {
+                    let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                    if let Some(slot) = parent.get_mut(ri) {
+                        *slot = rj;
+                    }
+                }
+            }
+        }
+        let mut fan_id: HashMap<usize, usize> = HashMap::new();
+        for (k, c) in cs.iter().enumerate() {
+            let root = find(&mut parent, k);
+            let next = fan_id.len();
+            let fan = *fan_id.entry(root).or_insert(next);
+            if fan > 0 {
+                // A copy per extra fan.
+                let copy = verts.len() + fan - 1;
+                renames.push((*c, copy));
+            }
+        }
+        let p = verts.get(v).copied().unwrap_or_default();
+        for _ in 1..fan_id.len() {
+            verts.push(p);
+            orig.push(v);
+        }
+    }
+    for ((g, li, i), new) in renames {
+        if let Some(slot) = loops.get_mut(g).and_then(|ls| ls.get_mut(li)).and_then(|l| l.get_mut(i)) {
+            *slot = new;
+        }
+    }
 }
 
 #[cfg(test)]
