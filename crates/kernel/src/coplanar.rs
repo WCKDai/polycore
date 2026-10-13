@@ -712,7 +712,7 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
         // Bodies of several pieces stay in several pieces (each face's provenance follows it).
         let prov: HashMap<mt::FaceID, FaceProv> = faces.iter().map(|f| f.id()).zip(from).collect();
         let shell: mt::Shell = faces.into();
-        let solid = Solid::try_new(shell.connected_components()).map_err(|e| fail(&e.to_string()))?;
+        let solid = Solid::try_new(crate::polybool::components_in_order(&shell)).map_err(|e| fail(&e.to_string()))?;
         let from: Vec<FaceProv> = solid.face_iter().filter_map(|f| prov.get(&f.id()).cloned()).collect();
         // Each edge's origins in the solid's edge order.
         let origins = crate::body::edge_order(solid.face_iter()).0.iter().map(|e| origins.get(&e.id()).cloned()).collect();

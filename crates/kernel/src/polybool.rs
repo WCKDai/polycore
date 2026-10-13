@@ -3,7 +3,7 @@
 //! as a wall flush with the side of its base. The polygons are rebuilt into a B-rep: coplanar
 //! pieces are merged into faces, T-junctions are split so neighbouring faces share edges.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use solidcraft_geom::{Mesh, Vec3};
 use truck_modeling::{self as mt, builder};
@@ -415,7 +415,7 @@ fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option
     let tol = (a.size() * 1e-3).max(1e-3);
     let infos = a.faces(tol).ok()?;
     let mesh = a.tessellate(tol).ok()?;
-    let mut curved: HashMap<u32, solidcraft_geom::Aabb3> = HashMap::new();
+    let mut curved: BTreeMap<u32, solidcraft_geom::Aabb3> = BTreeMap::new();
     for (t, fi) in mesh.triangles.iter().zip(&mesh.tri_face) {
         if infos.get(*fi as usize)?.plane_normal.is_some() {
             continue;
@@ -589,13 +589,13 @@ struct Sources {
 /// faces (lesser face first).
 struct OperandEdges {
     ends: Vec<(Vec3, Vec3)>,
-    between: HashMap<(usize, usize), Vec<usize>>,
+    between: BTreeMap<(usize, usize), Vec<usize>>,
 }
 
 impl OperandEdges {
     fn of(b: &Body) -> OperandEdges {
         let (edges, bounds) = edge_order(b.solid.face_iter());
-        let mut between: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+        let mut between: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
         for (i, fs) in bounds.iter().enumerate() {
             if let [f, g] = fs.as_slice() {
                 between.entry((*f.min(g), *f.max(g))).or_default().push(i);
@@ -699,6 +699,25 @@ fn csg(pa: Vec<Poly>, pb: Vec<Poly>, op: BoolOp, eps: f64) -> Result<Vec<Poly>> 
     Ok(polys)
 }
 
+/// `shell`'s connected components, each face in the shell's order and the components by their
+/// first face. truck's own come out in the hash order of face addresses, so the same rebuild
+/// gave a body with its faces in a different order from run to run (#707).
+pub(crate) fn components_in_order(shell: &mt::Shell) -> Vec<mt::Shell> {
+    let pos: HashMap<mt::FaceID, usize> = shell.face_iter().enumerate().map(|(i, f)| (f.id(), i)).collect();
+    let key = |f: &mt::Face| pos.get(&f.id()).copied().unwrap_or(usize::MAX);
+    let mut comps: Vec<Vec<mt::Face>> = shell
+        .connected_components()
+        .into_iter()
+        .map(|c| {
+            let mut faces: Vec<mt::Face> = c.into_iter().collect();
+            faces.sort_by_key(|f| key(f));
+            faces
+        })
+        .collect();
+    comps.sort_by_key(|c| c.first().map(key).unwrap_or(usize::MAX));
+    comps.into_iter().map(mt::Shell::from).collect()
+}
+
 /// Position key for vertex merging.
 fn key(p: Vec3, q: f64) -> (i64, i64, i64) {
     ((p.x / q).round() as i64, (p.y / q).round() as i64, (p.z / q).round() as i64)
@@ -711,7 +730,7 @@ fn key(p: Vec3, q: f64) -> (i64, i64, i64) {
 fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
     let q = size * 1e-7;
     // Global vertex table.
-    let mut index: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    let mut index: BTreeMap<(i64, i64, i64), usize> = BTreeMap::new();
     let mut verts: Vec<Vec3> = Vec::new();
     // Points within `q` share a vertex, also across the rounding grid's cell boundaries.
     let mut id = |p: Vec3, verts: &mut Vec<Vec3>| -> usize {
@@ -755,15 +774,15 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
     let mean = edge_len.iter().sum::<f64>() / edge_len.len().max(1) as f64;
     let cell = mean.max(size * 1e-4).max(1e-9);
     let ckey = |p: Vec3| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64, (p.z / cell).floor() as i64);
-    let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    let mut grid: BTreeMap<(i64, i64, i64), Vec<usize>> = BTreeMap::new();
     for (k, v) in verts.iter().enumerate() {
         grid.entry(ckey(*v)).or_default().push(k);
     }
     let mut directed: Vec<(usize, usize, usize)> = Vec::new(); // (plane group, from, to)
     // The polygons (by loop) each directed edge comes from.
-    let mut owners: HashMap<(usize, usize, usize), Vec<usize>> = HashMap::new();
+    let mut owners: BTreeMap<(usize, usize, usize), Vec<usize>> = BTreeMap::new();
     let mut groups: Vec<PlaneEq> = Vec::new();
-    let mut group_of: HashMap<(i64, i64, i64, i64), usize> = HashMap::new();
+    let mut group_of: BTreeMap<(i64, i64, i64, i64), usize> = BTreeMap::new();
     for (li, (pl, l)) in loops.iter().enumerate() {
         let gk = ((pl.n.x * 1e8).round() as i64, (pl.n.y * 1e8).round() as i64, (pl.n.z * 1e8).round() as i64, (pl.w / (tol * 10.0)).round() as i64);
         let g = *group_of.entry(gk).or_insert_with(|| {
@@ -814,7 +833,7 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
         }
     }
     // Interior edges cancel against their reverse within the same plane group.
-    let mut count: HashMap<(usize, usize, usize), i64> = HashMap::new();
+    let mut count: BTreeMap<(usize, usize, usize), i64> = BTreeMap::new();
     for (g, a, b) in &directed {
         *count.entry((*g, *a, *b)).or_insert(0) += 1;
     }
@@ -838,12 +857,12 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
         }
     }
     let roots: Vec<usize> = (0..loops.len()).map(|li| find(&mut parent, li)).collect();
-    let mut joined: HashMap<usize, BTreeSet<FaceOrigin>> = HashMap::new();
+    let mut joined: BTreeMap<usize, BTreeSet<FaceOrigin>> = BTreeMap::new();
     for (root, src) in roots.iter().zip(&srcs) {
         joined.entry(*root).or_default().insert(*src);
     }
     // What lies on each side of each boundary edge (from, to): the faces of its polygons.
-    let mut side: HashMap<(usize, usize), BTreeSet<FaceOrigin>> = HashMap::new();
+    let mut side: BTreeMap<(usize, usize), BTreeSet<FaceOrigin>> = BTreeMap::new();
     for (g, a, b) in &boundary {
         let set = side.entry((*a, *b)).or_default();
         for li in owners.get(&(*g, *a, *b)).into_iter().flatten() {
@@ -899,7 +918,7 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
         let mut orig: Vec<usize> = (0..verts.len()).collect();
         split_pinched_vertices(&mut all_loops, &mut verts, &mut orig);
         let tv: Vec<mt::Vertex> = verts.iter().map(|v| builder::vertex(p3(*v))).collect();
-        let mut edges: HashMap<(usize, usize), mt::Edge> = HashMap::new();
+        let mut edges: BTreeMap<(usize, usize), mt::Edge> = BTreeMap::new();
         let mut faces: Vec<mt::Face> = Vec::new();
         let mut face_from: HashMap<mt::FaceID, Option<BTreeSet<FaceOrigin>>> = HashMap::new();
         for (g, plane) in groups.iter().enumerate() {
@@ -990,7 +1009,7 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
             }
         }
         let shell: mt::Shell = faces.into();
-        let parts = shell.connected_components();
+        let parts = components_in_order(&shell);
         let solid = Solid::try_new(parts).map_err(|e| KernelError::Failed(format!("planar boolean: {e}")))?;
         let regions = solid.face_iter().map(|f| face_from.get(&f.id()).cloned().flatten().map(|o| (o, false))).collect::<Option<Vec<_>>>();
         let tol = size * 1e-6;
@@ -1018,7 +1037,7 @@ fn rebuild(polys: Vec<Poly>, size: f64, sources: &Sources) -> Result<Body> {
 /// manifold one.
 fn split_pinched_vertices(loops: &mut [Vec<Vec<usize>>], verts: &mut Vec<Vec3>, orig: &mut Vec<usize>) {
     // Every corner: (group, loop, position), by vertex.
-    let mut corners: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
+    let mut corners: BTreeMap<usize, Vec<(usize, usize, usize)>> = BTreeMap::new();
     for (g, ls) in loops.iter().enumerate() {
         for (li, l) in ls.iter().enumerate() {
             for (i, v) in l.iter().enumerate() {
@@ -1055,7 +1074,7 @@ fn split_pinched_vertices(loops: &mut [Vec<Vec<usize>>], verts: &mut Vec<Vec3>, 
                 }
             }
         }
-        let mut fan_id: HashMap<usize, usize> = HashMap::new();
+        let mut fan_id: BTreeMap<usize, usize> = BTreeMap::new();
         for (k, c) in cs.iter().enumerate() {
             let root = find(&mut parent, k);
             let next = fan_id.len();

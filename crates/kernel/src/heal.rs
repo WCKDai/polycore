@@ -120,10 +120,12 @@ fn merge_coplanar(shell: &mt::Shell, tol: f64, keep: &[Vec<Vec3>]) -> Option<(mt
             && na.dot(*nb) > 1.0 - 1e-9
             && (da - db).abs() < tol
         {
+            // The lesser root wins, so each group's root is its first face whatever order the
+            // edges (in hash order of their addresses) are met in (#707).
             let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
             if ra != rb {
-                if let Some(x) = parent.get_mut(ra) {
-                    *x = rb;
+                if let Some(x) = parent.get_mut(ra.max(rb)) {
+                    *x = ra.min(rb);
                 }
                 merged_any = true;
             }
@@ -232,11 +234,13 @@ fn merge_collinear(shell: &mt::Shell, trace: &mut Trace) -> Option<mt::Shell> {
         let (pa, pm, pb) = (from_p3(other(a).point()), from_p3(mid.point()), from_p3(other(b).point()));
         let (Some(u), Some(w)) = ((pm - pa).normalized(), (pb - pm).normalized()) else { continue };
         if u.dot(w) > 1.0 - 1e-10 {
+            // The lesser root wins: each run's root is its first edge whatever order the
+            // vertices are met in (#707).
             let (ra, rb) = (find(&mut parent, ia), find(&mut parent, ib));
             if ra != rb
-                && let Some(x) = parent.get_mut(ra)
+                && let Some(x) = parent.get_mut(ra.max(rb))
             {
-                *x = rb;
+                *x = ra.min(rb);
                 any = true;
             }
         }
@@ -244,7 +248,9 @@ fn merge_collinear(shell: &mt::Shell, trace: &mut Trace) -> Option<mt::Shell> {
     if !any {
         return None;
     }
-    let mut runs: HashMap<usize, Vec<usize>> = HashMap::new();
+    // Ordered by run (and each run's ends by first use below): which end a joined edge starts
+    // from must not follow hash order, or the same heal gives a different body from run to run.
+    let mut runs: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
     for i in 0..edges.len() {
         let r = find(&mut parent, i);
         runs.entry(r).or_default().push(i);
@@ -253,14 +259,17 @@ fn merge_collinear(shell: &mt::Shell, trace: &mut Trace) -> Option<mt::Shell> {
     let mut joined: Vec<(mt::Edge, HashMap<mt::VertexID, usize>)> = Vec::new();
     let mut run_of: HashMap<mt::EdgeID, usize> = HashMap::new();
     for members in runs.values().filter(|m| m.len() > 1) {
-        let mut ends: HashMap<mt::VertexID, (usize, mt::Vertex)> = HashMap::new();
+        let mut ends: Vec<(mt::VertexID, usize, mt::Vertex)> = Vec::new();
         for i in members {
             let Some(e) = edges.get(*i) else { continue };
             for v in [e.front(), e.back()] {
-                ends.entry(v.id()).or_insert((0, v.clone())).0 += 1;
+                match ends.iter_mut().find(|(id, ..)| *id == v.id()) {
+                    Some(end) => end.1 += 1,
+                    None => ends.push((v.id(), 1, v.clone())),
+                }
             }
         }
-        let mut ends = ends.into_values().filter(|(n, _)| *n == 1).map(|(_, v)| v);
+        let mut ends = ends.into_iter().filter(|(_, n, _)| *n == 1).map(|(.., v)| v);
         let (Some(first), Some(last), None) = (ends.next(), ends.next(), ends.next()) else { continue };
         // Walk the run from one end, collecting its vertices in order.
         let mut order = vec![first.id()];
