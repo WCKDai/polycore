@@ -5,7 +5,8 @@
 //! touch one more planar face square to the edge (the configuration of `blend`). Every section
 //! square to the edge is a circular arc tangent to both faces, its radius running linearly from
 //! one end to the other; the arcs' control points move linearly, so the blend is exactly a
-//! rational B-spline of degree 2 across and 1 along.
+//! rational B-spline of degree 2 across and 1 along. The radius may run down to zero at one end:
+//! there the blend closes to the edge's end point, a three-sided face, and the end face is kept.
 
 use std::collections::HashMap;
 
@@ -109,15 +110,15 @@ impl RadiusLaw {
 
 /// Fillet one straight edge with a radius that varies along it: (position, radius) points with
 /// positions 0 (the end nearest `start`) to 1 (the other end) and any between, the radius
-/// straight between them or `smooth`.
+/// straight between them or `smooth`. One end's radius may be zero.
 pub fn fillet_variable_points(body: &Body, edge_at: Vec3, start: Vec3, points: &[(f64, f64)], smooth: bool) -> Result<Body> {
     body.require_brep("fillet")?;
     if points.len() < 2 || points.len() > 100 {
         return Err(KernelError::Invalid("a variable radius needs 2…100 points".into()));
     }
     for (t, r) in points {
-        if !(r.is_finite() && *r > 1e-6 && *r < 1e6) {
-            return Err(KernelError::Invalid("fillet radii must be positive".into()));
+        if !(r.is_finite() && (*r == 0.0 || *r > 1e-6) && *r < 1e6) {
+            return Err(KernelError::Invalid("fillet radii must be positive (zero only at an end)".into()));
         }
         if !(t.is_finite() && (0.0..=1.0).contains(t)) {
             return Err(KernelError::Invalid("radius positions run from 0 to 1 along the edge".into()));
@@ -128,6 +129,10 @@ pub fn fillet_variable_points(body: &Body, edge_at: Vec3, start: Vec3, points: &
     pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-9);
     if pts.first().map(|p| p.0) != Some(0.0) || pts.last().map(|p| p.0) != Some(1.0) || pts.len() < 2 {
         return Err(KernelError::Invalid("give the radius at both ends of the edge".into()));
+    }
+    let zeros: Vec<usize> = pts.iter().enumerate().filter(|(_, p)| p.1 == 0.0).map(|(i, _)| i).collect();
+    if !matches!(zeros[..], [] | [0]) && zeros[..] != [pts.len() - 1] {
+        return Err(KernelError::Invalid("the radius may be zero at one end of the edge only".into()));
     }
     let edge = crate::surfaces::edge_near(body, edge_at).ok_or_else(|| KernelError::Invalid(format!("no edge at {edge_at:?}")))?;
     let size = body.size();
@@ -150,22 +155,33 @@ pub fn fillet_variable_points(body: &Body, edge_at: Vec3, start: Vec3, points: &
             pts = pts.iter().rev().map(|(t, r)| (1.0 - t, *r)).collect();
         }
         let law = RadiusLaw::through(&pts, smooth);
-        let (ra, rb) = (law.eval(0.0), law.eval(1.0));
+        // The end radii are the first and last control radii (exact: a zero end closes the blend).
+        let (ra, rb) = (law.radii.first().copied().unwrap_or(0.0), law.radii.last().copied().unwrap_or(0.0));
         // The largest radius along the edge decides whether the blend fits.
         let rmax = (0..=200).map(|k| law.eval(k as f64 / 200.0)).fold(0.0, f64::max);
-        if (0..=200).any(|k| law.eval(k as f64 / 200.0) <= 1e-6) {
+        // Positive inside the edge (a zero end is given exactly, as a control radius).
+        if (1..200).any(|k| law.eval(k as f64 / 200.0) <= 1e-6) {
             return Err(KernelError::Invalid("the radius must stay positive along the edge".into()));
         }
         let (p0, p1) = (vtx(&v0), vtx(&v1));
         let d = (p1 - p0).normalized().ok_or_else(|| KernelError::Failed("zero-length edge".into()))?;
         let tol = (size * 1e-7).max(1e-9);
         let back = |r: f64| r / (fr.phi / 2.0).tan();
-        // Each end: the end face and its edges along the two faces.
+        let arc_mid = |p: Vec3, s: f64, r: f64| {
+            let c = p + fr.t1 * s + fr.n1 * (r * fr.side);
+            c + (p - c).normalized().unwrap_or(-fr.n1) * r
+        };
+        // Each end: the end face, its edges along the two faces, the blend's corners on them and
+        // the arc between. At a zero radius the blend closes to the end vertex (no arc), which
+        // stays with its edges.
         struct End {
             v: mt::Vertex,
             g: usize,
             e1: mt::Edge,
             e2: mt::Edge,
+            a: mt::Vertex,
+            b: mt::Vertex,
+            arc: Option<mt::Edge>,
         }
         let mut ends = Vec::new();
         for (v, p, r) in [(&v0, p0, ra), (&v1, p1, rb)] {
@@ -190,25 +206,24 @@ pub fn fillet_variable_points(body: &Body, edge_at: Vec3, start: Vec3, points: &
                 }
                 let other = if e.front() == v { vtx(e.back()) } else { vtx(e.front()) };
                 let along = (other - p).dot(t);
-                if (other - p - t * along).len() > tol * 100.0 + 1e-7 || along <= back(r.max(rmax)) + tol {
+                if (other - p - t * along).len() > tol * 100.0 + 1e-7 || along <= back(rmax) + tol {
                     return Err(unsupported("the blend is larger than the neighbouring faces"));
                 }
             }
-            ends.push(End { v: v.clone(), g, e1, e2 });
+            let end = if r == 0.0 {
+                End { v: v.clone(), g, e1, e2, a: v.clone(), b: v.clone(), arc: None }
+            } else {
+                let s = back(r);
+                let (a, b) = (builder::vertex(p3(p + fr.t1 * s)), builder::vertex(p3(p + fr.t2 * s)));
+                let arc = Some(builder::circle_arc(&a, &b, p3(arc_mid(p, s, r))));
+                End { v: v.clone(), g, e1, e2, a, b, arc }
+            };
+            ends.push(end);
         }
         let [end0, end1] = &ends[..] else { return Err(KernelError::Failed("ends".into())) };
         if end0.g == end1.g {
             return Err(unsupported("both ends touch the same face"));
         }
-        let (s0, s1) = (back(ra), back(rb));
-        let (pa0, pb0, pa1, pb1) = (p0 + fr.t1 * s0, p0 + fr.t2 * s0, p1 + fr.t1 * s1, p1 + fr.t2 * s1);
-        let (a0, b0, a1, b1) = (builder::vertex(p3(pa0)), builder::vertex(p3(pb0)), builder::vertex(p3(pa1)), builder::vertex(p3(pb1)));
-        let arc_mid = |p: Vec3, s: f64, r: f64| {
-            let c = p + fr.t1 * s + fr.n1 * (r * fr.side);
-            c + (p - c).normalized().unwrap_or(-fr.n1) * r
-        };
-        let c0 = builder::circle_arc(&a0, &b0, p3(arc_mid(p0, s0, ra)));
-        let c1 = builder::circle_arc(&a1, &b1, p3(arc_mid(p1, s1, rb)));
         // Contact curves: the edge moved along each face by the setback of the radius there.
         let g = law.greville();
         let contact = |t: Vec3, a: &mt::Vertex, b: &mt::Vertex| -> Result<mt::Edge> {
@@ -219,11 +234,11 @@ pub fn fillet_variable_points(body: &Body, edge_at: Vec3, start: Vec3, points: &
             let c = mt::BSplineCurve::try_new(mt::KnotVec::from(law.knots.clone()), ctrl).map_err(|e| KernelError::Failed(format!("fillet: {e}")))?;
             mt::Edge::try_new(a, b, mt::Curve::BSplineCurve(c)).map_err(|e| KernelError::Failed(format!("fillet: {e}")))
         };
-        let la = contact(fr.t1, &a0, &a1)?;
-        let lb = contact(fr.t2, &b0, &b1)?;
+        let la = contact(fr.t1, &end0.a, &end1.a)?;
+        let lb = contact(fr.t2, &end0.b, &end1.b)?;
         let mut subst: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
-        for (end, a, b) in [(end0, &a0, &b0), (end1, &a1, &b1)] {
-            for (e, nv) in [(&end.e1, a), (&end.e2, b)] {
+        for end in [end0, end1].into_iter().filter(|end| end.arc.is_some()) {
+            for (e, nv) in [(&end.e1, &end.a), (&end.e2, &end.b)] {
                 let (f, bk) = (e.absolute_front(), e.absolute_back());
                 let ne = if f == &end.v { builder::line(nv, bk) } else { builder::line(f, nv) };
                 subst.insert(e.id(), ne);
@@ -242,10 +257,10 @@ pub fn fillet_variable_points(body: &Body, edge_at: Vec3, start: Vec3, points: &
                 let mut m = subst.clone();
                 m.insert(edge.id(), lb.clone());
                 rebuild_face(f, &m, &[])?
-            } else if i == end0.g {
-                rebuild_face(f, &subst, std::slice::from_ref(&c0))?
-            } else if i == end1.g {
-                rebuild_face(f, &subst, std::slice::from_ref(&c1))?
+            } else if i == end0.g && end0.arc.is_some() {
+                rebuild_face(f, &subst, end0.arc.as_slice())?
+            } else if i == end1.g && end1.arc.is_some() {
+                rebuild_face(f, &subst, end1.arc.as_slice())?
             } else {
                 (*f).clone()
             };
@@ -262,8 +277,10 @@ pub fn fillet_variable_points(body: &Body, edge_at: Vec3, start: Vec3, points: &
         let ctrl = vec![row(fr.t1, 1.0, true), row(fr.t1, w, false), row(fr.t2, 1.0, true)];
         let bsp = mt::BSplineSurface::new((mt::KnotVec::bezier_knot(2), mt::KnotVec::from(law.knots.clone())), ctrl);
         let mut surf = mt::Surface::NurbsSurface(mt::NurbsSurface::new(bsp));
-        // Outward: away from the arc centre on a convex edge, toward it on a concave one.
-        let (c, mid) = (p0 + fr.t1 * s0 + fr.n1 * (ra * fr.side), arc_mid(p0, s0, ra));
+        // Outward: away from the arc centre on a convex edge, toward it on a concave one (at an
+        // end with a radius).
+        let (p, r) = if end0.arc.is_none() { (p1, rb) } else { (p0, ra) };
+        let (c, mid) = (p + fr.t1 * back(r) + fr.n1 * (r * fr.side), arc_mid(p, back(r), r));
         let outward = (mid - c) * (-fr.side);
         {
             use mt::{ParametricSurface3D, SearchParameter};
@@ -274,13 +291,13 @@ pub fn fillet_variable_points(body: &Body, edge_at: Vec3, start: Vec3, points: &
                 }
             }
         }
-        // The blend face uses each new edge opposite to its neighbour.
+        // The blend face uses each new edge opposite to its neighbour; a closed end has no arc.
         let f1_forward =
             faces.get(fr.i1).is_some_and(|f| f.boundaries().iter().any(|w| w.edge_iter().any(|e| e.id() == edge.id() && e.front() == &v0)));
         let wire: mt::Wire = if f1_forward {
-            vec![c0.clone(), lb.clone(), c1.inverse(), la.inverse()].into()
+            [end0.arc.clone(), Some(lb.clone()), end1.arc.as_ref().map(mt::Edge::inverse), Some(la.inverse())].into_iter().flatten().collect()
         } else {
-            vec![la.clone(), c1.clone(), lb.inverse(), c0.inverse()].into()
+            [Some(la.clone()), end1.arc.clone(), Some(lb.inverse()), end0.arc.as_ref().map(mt::Edge::inverse)].into_iter().flatten().collect()
         };
         let blend = mt::Face::try_new(vec![wire], surf).map_err(|e| KernelError::Failed(format!("fillet face: {e}")))?;
         rec.blend(&blend, [edge.id()]);
@@ -385,6 +402,43 @@ mod tests {
         assert!(fillet_variable_points(&b, at, start, &[(0.0, 2.0), (0.5, 4.0)], false).is_err());
         assert!(fillet_variable_points(&b, at, start, &[(0.0, 2.0), (f64::NAN, 4.0), (1.0, 2.0)], false).is_err());
         assert!(fillet_variable_points(&b, at, start, &[(0.0, 2.0), (1.0, -1.0)], false).is_err());
+    }
+
+    /// The radius running down to zero at one end: the blend closes to the corner, a three-sided
+    /// face, and the end face there is untouched. Removed (1 − π/4) L r0² / 3 when linear.
+    #[test]
+    fn variable_radius_down_to_zero_at_one_end() {
+        let b = box_solid(Vec3::ZERO, Vec3::new(10.0, 20.0, 30.0)).unwrap();
+        let (at, start, end) = (Vec3::new(10.0, 10.0, 30.0), Vec3::new(10.0, 0.0, 30.0), Vec3::new(10.0, 20.0, 30.0));
+        let k = 1.0 - std::f64::consts::FRAC_PI_4;
+        for (r0, r1) in [(4.0, 0.0), (0.0, 4.0)] {
+            let f = fillet_variable(&b, at, start, r0, r1).unwrap();
+            let v = measure(&f).unwrap().volume;
+            assert!(rel(v, 6000.0 - k * 20.0 * 16.0 / 3.0) < 1e-4, "{r0} → {r1}: {v}");
+            assert_eq!(f.unmeshed_faces(), 0);
+            let faces: Vec<&mt::Face> = f.solid.boundaries().iter().flat_map(|sh| sh.face_iter()).collect();
+            assert_eq!(faces.len(), 7);
+            // The blend is three-sided; the closed end's corner is still a box corner.
+            assert!(faces.iter().any(|fc| fc.edge_iter().count() == 3));
+            let corner = if r1 == 0.0 { end } else { start };
+            assert!(faces.iter().flat_map(|fc| fc.vertex_iter()).any(|x| vtx(&x).dist(corner) < 1e-9));
+        }
+        // Through a middle point, smooth, closing at the far end.
+        let pts = [(0.0, 3.0), (0.5, 4.0), (1.0, 0.0)];
+        let s = fillet_variable_points(&b, at, start, &pts, true).unwrap();
+        let law = RadiusLaw::through(&pts, true);
+        let n = 20000;
+        let integral: f64 = (0..n).map(|i| law.eval((i as f64 + 0.5) / n as f64).powi(2)).sum::<f64>() / n as f64 * 20.0;
+        let v = measure(&s).unwrap().volume;
+        assert!(rel(v, 6000.0 - k * integral) < 1e-4, "{v} vs {}", 6000.0 - k * integral);
+        // Zero at both ends, zero in the middle, a smooth radius dipping below zero, or a radius
+        // too small to build: refused.
+        assert!(fillet_variable(&b, at, start, 0.0, 0.0).is_err());
+        assert!(fillet_variable_points(&b, at, start, &[(0.0, 2.0), (0.5, 0.0), (1.0, 2.0)], false).is_err());
+        let dip = [(0.0, 0.0), (0.2, 0.1), (0.4, 6.0), (1.0, 6.0)];
+        assert!((1..200).any(|i| RadiusLaw::through(&dip, true).eval(i as f64 / 200.0) <= 1e-6));
+        assert!(fillet_variable_points(&b, at, start, &dip, true).is_err());
+        assert!(fillet_variable(&b, at, start, 4.0, 1e-9).is_err());
     }
 
     #[test]
