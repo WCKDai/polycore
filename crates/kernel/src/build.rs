@@ -31,11 +31,41 @@ fn wire_sources(plane: &Plane, lp: &Loop2) -> Result<(mt::Wire, Vec<(mt::Edge, S
     if !lp.is_closed(1e-6) {
         return Err(KernelError::Invalid("profile loop is not closed".into()));
     }
-    let verts: Vec<mt::Vertex> = lp.segs.iter().map(|s| builder::vertex(p3(plane.to_world(s.start())))).collect();
+    chain_sources(plane, &lp.segs, true)
+}
+
+/// An open wire in 3D through a chain of sketch segments, each starting where the one before
+/// ends (a closed chain makes a closed wire).
+pub(crate) fn chain_wire(plane: &Plane, segs: &[Seg2]) -> Result<mt::Wire> {
+    let n = segs.len();
+    if n == 0 || n > MAX_SEGS {
+        return Err(KernelError::Invalid(format!("curve chain with {n} segments")));
+    }
+    if !segs.iter().all(seg_ok) {
+        return Err(KernelError::Invalid("non-finite curve".into()));
+    }
+    for (s, t) in segs.iter().zip(segs.iter().skip(1)) {
+        if s.end().dist(t.start()) > 1e-6 {
+            return Err(KernelError::Invalid("the curves are not connected end to end".into()));
+        }
+    }
+    let closed = segs.first().zip(segs.last()).is_some_and(|(f, l)| l.end().dist(f.start()) <= 1e-6);
+    chain_sources(plane, segs, closed).map(|(wire, _)| wire)
+}
+
+/// The edges of a chain of segments (closed: the last one ends on the first's start vertex),
+/// with each edge's segment and that segment's position in the chain (a big arc makes two
+/// edges).
+fn chain_sources(plane: &Plane, segs: &[Seg2], closed: bool) -> Result<(mt::Wire, Vec<(mt::Edge, Seg2, usize)>)> {
+    let n = segs.len();
+    let mut verts: Vec<mt::Vertex> = segs.iter().map(|s| builder::vertex(p3(plane.to_world(s.start())))).collect();
+    if !closed && let Some(last) = segs.last() {
+        verts.push(builder::vertex(p3(plane.to_world(last.end()))));
+    }
     let mut edges = Vec::with_capacity(n);
     let mut sources = Vec::with_capacity(n);
-    for (i, s) in lp.segs.iter().enumerate() {
-        let (Some(a), Some(b)) = (verts.get(i), verts.get((i + 1) % n)) else { continue };
+    for (i, s) in segs.iter().enumerate() {
+        let (Some(a), Some(b)) = (verts.get(i), verts.get(if closed { (i + 1) % n } else { i + 1 })) else { continue };
         let e: mt::Edge = match *s {
             Seg2::Line { .. } => builder::line(a, b),
             Seg2::Arc { sweep, .. } => {
@@ -128,32 +158,38 @@ fn region_ok(r: &Region2) -> Result<()> {
     if r.area().abs() < 1e-9 {
         return Err(KernelError::Invalid("profile has no area".into()));
     }
-    for s in std::iter::once(&r.outer).chain(&r.holes).flat_map(|l| &l.segs) {
-        let ok = match *s {
-            Seg2::Line { a, b } => a.is_finite() && b.is_finite(),
-            Seg2::Arc { center, radius, start, sweep } => {
-                center.is_finite() && radius.is_finite() && radius > 1e-9 && start.is_finite() && sweep.is_finite()
-            }
-            Seg2::Cubic { p0, p1, p2, p3 } => p0.is_finite() && p1.is_finite() && p2.is_finite() && p3.is_finite(),
-            Seg2::Conic { a, apex, b, w } => a.is_finite() && apex.is_finite() && b.is_finite() && w.is_finite() && w > 1e-9,
-            Seg2::Bezier { n, p } => (4..=solidcraft_geom::MAX_BEZIER_DEGREE as u8).contains(&n) && p.iter().all(|q| q.is_finite()),
-        };
-        if !ok {
-            return Err(KernelError::Invalid("non-finite profile".into()));
-        }
+    if !std::iter::once(&r.outer).chain(&r.holes).flat_map(|l| &l.segs).all(seg_ok) {
+        return Err(KernelError::Invalid("non-finite profile".into()));
     }
     Ok(())
 }
 
+/// A segment with finite, well-formed numbers.
+fn seg_ok(s: &Seg2) -> bool {
+    match *s {
+        Seg2::Line { a, b } => a.is_finite() && b.is_finite(),
+        Seg2::Arc { center, radius, start, sweep } => {
+            center.is_finite() && radius.is_finite() && radius > 1e-9 && start.is_finite() && sweep.is_finite()
+        }
+        Seg2::Cubic { p0, p1, p2, p3 } => p0.is_finite() && p1.is_finite() && p2.is_finite() && p3.is_finite(),
+        Seg2::Conic { a, apex, b, w } => a.is_finite() && apex.is_finite() && b.is_finite() && w.is_finite() && w > 1e-9,
+        Seg2::Bezier { n, p } => (4..=solidcraft_geom::MAX_BEZIER_DEGREE as u8).contains(&n) && p.iter().all(|q| q.is_finite()),
+    }
+}
+
+/// A finite, orthonormal sketch frame.
+pub(crate) fn frame_ok(plane: &Plane) -> bool {
+    plane.origin.is_finite()
+        && plane.x.is_finite()
+        && plane.y.is_finite()
+        && (plane.x.len2() - 1.).abs() <= 1e-8
+        && (plane.y.len2() - 1.).abs() <= 1e-8
+        && plane.x.dot(plane.y).abs() <= 1e-8
+}
+
 /// Extrude each region from `start` to `end` along the plane normal (offsets in mm, `end > start`).
 pub fn extrude(plane: &Plane, regions: &[Region2], start: f64, end: f64) -> Result<Vec<Body>> {
-    if !plane.origin.is_finite()
-        || !plane.x.is_finite()
-        || !plane.y.is_finite()
-        || (plane.x.len2() - 1.).abs() > 1e-8
-        || (plane.y.len2() - 1.).abs() > 1e-8
-        || plane.x.dot(plane.y).abs() > 1e-8
-    {
+    if !frame_ok(plane) {
         return Err(KernelError::Invalid("extrude frame is not finite and orthonormal".into()));
     }
     let (start, end) = (finite(start, "start")?, finite(end, "end")?);

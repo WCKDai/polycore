@@ -2,12 +2,13 @@
 //! filling a closed loop of edges — planar, or B-spline patches for a loop that is not — or a
 //! planar sketch region), Stitch (surfaces sharing edges sewn
 //! into one body, a solid when they close), Trim (a surface cut by a tool, one side kept),
-//! Thicken (a surface offset along its normals into a solid) and copying faces out of a body.
+//! Thicken (a surface offset along its normals into a solid), copying faces out of a body, and
+//! sheets swept from sketch curves (surface extrude).
 
 use std::collections::HashMap;
 
 use mt::{BoundedCurve, InnerSpace, MetricSpace, ParametricCurve, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::{Plane, Region2, Vec3};
+use solidcraft_geom::{Plane, Region2, Seg2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
@@ -61,6 +62,42 @@ pub fn patch_region(plane: &Plane, region: &Region2) -> Result<Body> {
     let mut rec = Rebuild::default();
     rec.made(&f, Vec::new());
     Ok(rebuilt_body(surface_body(vec![f]), &[], &rec))
+}
+
+/// Most curve chains one surface extrude takes.
+const MAX_CHAINS: usize = 10_000;
+
+/// A surface extruded from chains of sketch segments on `plane`: each chain (open, or closed
+/// such as a profile's boundary) moved straight from `start` to `end` along the plane normal
+/// (offsets in mm). The walls it sweeps form one surface body with no caps. Its history has no
+/// operands: every face is new.
+pub fn extrude_sheet(plane: &Plane, chains: &[Vec<Seg2>], start: f64, end: f64) -> Result<Body> {
+    if !crate::build::frame_ok(plane) {
+        return Err(KernelError::Invalid("extrude frame is not finite and orthonormal".into()));
+    }
+    if !(start.is_finite() && end.is_finite() && start.abs() < 1e7 && end.abs() < 1e7) {
+        return Err(KernelError::Invalid("extrude distance is not finite".into()));
+    }
+    let (lo, hi) = if end >= start { (start, end) } else { (end, start) };
+    if hi - lo < 1e-6 {
+        return Err(KernelError::Invalid("extrude distance is zero".into()));
+    }
+    if chains.is_empty() || chains.len() > MAX_CHAINS {
+        return Err(KernelError::Invalid("pick the curves or profiles to extrude".into()));
+    }
+    let base = plane.offset(lo);
+    let along = crate::body::v3(plane.normal() * (hi - lo));
+    let mut rec = Rebuild::default();
+    let mut faces = Vec::new();
+    for chain in chains {
+        let wire = crate::build::chain_wire(&base, chain)?;
+        let walls: mt::Shell = guard("surface extrude", || Ok(mt::builder::tsweep(&wire, along)))?;
+        for f in walls.face_iter() {
+            rec.made(f, Vec::new());
+            faces.push(f.clone());
+        }
+    }
+    Ok(rebuilt_body(surface_body(faces), &[], &rec))
 }
 
 /// The edge of a body nearest a point (by samples along each edge).
@@ -628,6 +665,49 @@ mod tests {
 
     fn rel(a: f64, b: f64) -> f64 {
         (a - b).abs() / b.abs().max(1e-9)
+    }
+
+    /// Walls swept from an open line, an open arc and a closed square: areas are length × height,
+    /// no caps, and stitching two patches onto the square's walls closes the box.
+    #[test]
+    fn extrude_sheet_of_open_and_closed_chains() {
+        let line = vec![Seg2::Line { a: Vec2::new(0.0, 0.0), b: Vec2::new(10.0, 0.0) }];
+        let s = extrude_sheet(&Plane::XY, std::slice::from_ref(&line), 0.0, 5.0).unwrap();
+        assert!(s.is_surface() && s.face_count() == 1);
+        assert!(rel(measure(&s).unwrap().area, 50.0) < 1e-9);
+        // A quarter arc of radius 4, swept from -1 to 2: area r θ h.
+        let arc = vec![Seg2::Arc { center: Vec2::new(0.0, 0.0), radius: 4.0, start: 0.0, sweep: std::f64::consts::FRAC_PI_2 }];
+        let a = measure(&extrude_sheet(&Plane::XY, &[arc], 2.0, -1.0).unwrap()).unwrap().area;
+        let want = 4.0 * std::f64::consts::FRAC_PI_2 * 3.0;
+        assert!(rel(a, want) < 1e-3, "{a} vs {want}"); // (measured on meshes)
+        // A line then a line back up: one chain, two faces.
+        let bent = vec![line[0], Seg2::Line { a: Vec2::new(10.0, 0.0), b: Vec2::new(10.0, 6.0) }];
+        assert_eq!(extrude_sheet(&Plane::XY, &[bent], 0.0, 1.0).unwrap().face_count(), 2);
+        // A closed square: four walls, open at both ends; with a patch on each end, a solid box.
+        let sq = Region2 {
+            outer: Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)]),
+            holes: vec![],
+        };
+        let walls = extrude_sheet(&Plane::XY, std::slice::from_ref(&sq.outer.segs), 0.0, 4.0).unwrap();
+        assert!(walls.is_surface() && walls.face_count() == 4);
+        assert!(rel(measure(&walls).unwrap().area, 160.0) < 1e-9);
+        let (bottom, top) = (patch_region(&Plane::XY, &sq).unwrap(), patch_region(&Plane::XY.offset(4.0), &sq).unwrap());
+        let closed = stitch(&[&walls, &bottom, &top], 1e-6).unwrap();
+        assert!(!closed.is_surface());
+        assert!(rel(measure(&closed).unwrap().volume, 400.0) < 1e-9);
+    }
+
+    #[test]
+    fn extrude_sheet_refuses_bad_input() {
+        let line = vec![Seg2::Line { a: Vec2::new(0.0, 0.0), b: Vec2::new(10.0, 0.0) }];
+        assert!(extrude_sheet(&Plane::XY, std::slice::from_ref(&line), 0.0, 0.0).is_err());
+        assert!(extrude_sheet(&Plane::XY, std::slice::from_ref(&line), 0.0, f64::NAN).is_err());
+        assert!(extrude_sheet(&Plane::XY, &[], 0.0, 1.0).is_err());
+        assert!(extrude_sheet(&Plane::XY, &[vec![]], 0.0, 1.0).is_err());
+        let gap = vec![line[0], Seg2::Line { a: Vec2::new(11.0, 0.0), b: Vec2::new(12.0, 0.0) }];
+        assert!(extrude_sheet(&Plane::XY, &[gap], 0.0, 1.0).is_err());
+        let nan = vec![Seg2::Line { a: Vec2::new(0.0, f64::NAN), b: Vec2::new(1.0, 0.0) }];
+        assert!(extrude_sheet(&Plane::XY, &[nan], 0.0, 1.0).is_err());
     }
 
     #[test]
