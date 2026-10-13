@@ -110,25 +110,27 @@ fn key(p: Vec3) -> Key {
 
 #[derive(Default)]
 struct Cache {
-    verts: HashMap<Key, mt::Vertex>,
-    edges: HashMap<(Key, Key, Option<Key>, usize), mt::Edge>,
+    /// Vertices by point and fan (see [`corner_fans`]).
+    verts: HashMap<(Key, usize), mt::Vertex>,
+    edges: HashMap<(Key, usize, Key, usize, Option<Key>, usize), mt::Edge>,
 }
 
 impl Cache {
-    fn vertex(&mut self, p: Vec3) -> mt::Vertex {
-        self.verts.entry(key(p)).or_insert_with(|| builder::vertex(p3(p))).clone()
+    fn vertex(&mut self, p: Vec3, fan: usize) -> mt::Vertex {
+        self.verts.entry((key(p), fan)).or_insert_with(|| builder::vertex(p3(p))).clone()
     }
-    fn edge(&mut self, e: &EdgeSpec, sheet: usize) -> Result<mt::Edge> {
+    /// The edge `e` on boundary sheet `sheet`, between the vertices of fans `fans` at its ends.
+    fn edge(&mut self, e: &EdgeSpec, sheet: usize, (fa, fb): (usize, usize)) -> Result<mt::Edge> {
         let (a, b) = e.ends();
         let mid = e.mid_key();
         let (ka, kb) = (key(a), key(b));
-        if let Some(found) = self.edges.get(&(ka, kb, mid, sheet)) {
+        if let Some(found) = self.edges.get(&(ka, fa, kb, fb, mid, sheet)) {
             return Ok(found.clone());
         }
-        if let Some(found) = self.edges.get(&(kb, ka, mid, sheet)) {
+        if let Some(found) = self.edges.get(&(kb, fb, ka, fa, mid, sheet)) {
             return Ok(found.inverse());
         }
-        let (va, vb) = (self.vertex(a), self.vertex(b));
+        let (va, vb) = (self.vertex(a, fa), self.vertex(b, fb));
         let made = match e {
             EdgeSpec::Line { .. } => builder::line(&va, &vb),
             EdgeSpec::Arc { mid, .. } => arc_edge(&va, &vb, *mid),
@@ -137,7 +139,7 @@ impl Cache {
                 mt::Edge::try_new(&va, &vb, mt::Curve::BSplineCurve(curve)).map_err(|e| KernelError::Failed(format!("sew: chain edge: {e}")))?
             }
         };
-        self.edges.insert((ka, kb, mid, sheet), made.clone());
+        self.edges.insert((ka, fa, kb, fb, mid, sheet), made.clone());
         Ok(made)
     }
 
@@ -156,10 +158,10 @@ impl Cache {
         let mut pts: Vec<mt::Point3> = ctrl.iter().map(|p| p3(*p)).collect();
         let (a, b) = e.ends();
         if let Some(first) = pts.first_mut() {
-            *first = self.vertex(a).point();
+            *first = self.vertex(a, 0).point();
         }
         if let Some(last) = pts.last_mut() {
-            *last = self.vertex(b).point();
+            *last = self.vertex(b, 0).point();
         }
         mt::BSplineCurve::try_new(mt::KnotVec::from(knots), pts).map_err(|e| KernelError::Failed(format!("sew: chain curve: {e}")))
     }
@@ -243,6 +245,79 @@ fn touching_sheets(faces: &[FaceSpec]) -> Result<HashMap<EdgeUse, usize>> {
         }
     }
     Ok(sheets)
+}
+
+/// A loop corner: face, loop, and the edge of the loop that starts there.
+type Corner = (usize, usize, usize);
+
+/// Where the faces meeting at a point form several fans, joined to each other by no edge (a hole
+/// touching its face's outline at one point; two caps touching at a corner), the fan each corner
+/// there is in, from 1 for every fan past the first (corners not listed are in fan 0). Each fan
+/// gets its own vertex, so that a face's loops share no vertex (truck's faces need that) and
+/// every vertex of the solid is a manifold one.
+fn corner_fans(faces: &[FaceSpec], sheets: &HashMap<EdgeUse, usize>) -> HashMap<Corner, usize> {
+    type EdgeId = (Key, Key, Option<Key>, usize);
+    let id = |fi: usize, li: usize, ei: usize, e: &EdgeSpec| -> EdgeId {
+        let (a, b) = e.ends();
+        let (ka, kb) = (key(a), key(b));
+        let sheet = sheets.get(&(fi, li, ei)).copied().unwrap_or(0);
+        if ka <= kb { (ka, kb, e.mid_key(), sheet) } else { (kb, ka, e.mid_key(), sheet) }
+    };
+    // Every corner at each point, with the two edges it lies between.
+    let mut at: HashMap<Key, Vec<(Corner, [EdgeId; 2])>> = HashMap::new();
+    for (fi, f) in faces.iter().enumerate() {
+        for (li, l) in f.loops.iter().enumerate() {
+            let n = l.len();
+            for (ei, e) in l.iter().enumerate() {
+                let Some(prev) = l.get((ei + n - 1) % n.max(1)) else { continue };
+                let p = id(fi, li, (ei + n - 1) % n.max(1), prev);
+                at.entry(key(e.ends().0)).or_default().push(((fi, li, ei), [p, id(fi, li, ei, e)]));
+            }
+        }
+    }
+    let mut out = HashMap::new();
+    for corners in at.values().filter(|c| c.len() > 2) {
+        let mut parent: Vec<usize> = (0..corners.len()).collect();
+        fn root(parent: &mut [usize], mut i: usize) -> usize {
+            while let Some(&p) = parent.get(i) {
+                if p == i {
+                    break;
+                }
+                let up = parent.get(p).copied().unwrap_or(p);
+                if let Some(slot) = parent.get_mut(i) {
+                    *slot = up;
+                }
+                i = p;
+            }
+            i
+        }
+        let mut by_edge: HashMap<&EdgeId, usize> = HashMap::new();
+        for (k, (_, edges)) in corners.iter().enumerate() {
+            for e in edges {
+                match by_edge.get(e) {
+                    Some(&other) => {
+                        let (a, b) = (root(&mut parent, k), root(&mut parent, other));
+                        if let Some(slot) = parent.get_mut(a) {
+                            *slot = b;
+                        }
+                    }
+                    None => {
+                        by_edge.insert(e, k);
+                    }
+                }
+            }
+        }
+        let mut fan_of_root: HashMap<usize, usize> = HashMap::new();
+        for (k, (corner, _)) in corners.iter().enumerate() {
+            let r = root(&mut parent, k);
+            let next = fan_of_root.len();
+            let fan = *fan_of_root.entry(r).or_insert(next);
+            if fan > 0 {
+                out.insert(*corner, fan);
+            }
+        }
+    }
+    out
 }
 
 fn faces_connected(faces: &[mt::Face]) -> bool {
@@ -444,6 +519,10 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
     }
     guard("sew", || {
         let sheets = if touching { touching_sheets(faces)? } else { HashMap::new() };
+        // Separate fans at a point only where contact is expected (as for edge sheets); a plain
+        // sew refuses bodies touching at a vertex.
+        let fans = if touching { corner_fans(faces, &sheets) } else { HashMap::new() };
+        let fan = |c: Corner| fans.get(&c).copied().unwrap_or(0);
         let mut cache = Cache::default();
         let mut out: Vec<mt::Face> = Vec::with_capacity(faces.len());
         for (fi, f) in faces.iter().enumerate() {
@@ -452,9 +531,12 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
                 .iter()
                 .enumerate()
                 .map(|(li, l)| {
+                    let n = l.len().max(1);
                     l.iter()
                         .enumerate()
-                        .map(|(ei, e)| cache.edge(e, sheets.get(&(fi, li, ei)).copied().unwrap_or(0)))
+                        .map(|(ei, e)| {
+                            cache.edge(e, sheets.get(&(fi, li, ei)).copied().unwrap_or(0), (fan((fi, li, ei)), fan((fi, li, (ei + 1) % n))))
+                        })
                         .collect::<Result<Vec<_>>>()
                         .map(Into::into)
                 })

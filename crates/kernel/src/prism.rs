@@ -1174,7 +1174,13 @@ fn boolean2d_tagged(a: &Section, b: &Section, op: BoolOp, tol: f64) -> Option<Se
             }
         }
     }
-    // Chain into loops.
+    // Chain into loops. Where several kept pieces leave the point a loop has reached (outlines
+    // pinching at a vertex on an edge, a circle tangent to a side, two corners touching), the
+    // loop takes the one keeping the material on its left most tightly, so that pieces of
+    // material meeting only at that point close as loops of their own; returning to its start,
+    // a loop closes only when that is the tightest turn too. A loop that still passes a point
+    // twice (a hole touching the outline) is split there into simple loops.
+    let near = tol * 10.0;
     let mut loops: Vec<(Loop2, Vec<Tag>)> = Vec::new();
     let mut used = vec![false; kept.len()];
     for start in 0..kept.len() {
@@ -1193,31 +1199,41 @@ fn boolean2d_tagged(a: &Section, b: &Section, op: BoolOp, tol: f64) -> Option<Se
             if guard > kept.len() + 2 {
                 return None;
             }
-            let end = segs.last()?.end();
+            let last = *segs.last()?;
+            let end = last.end();
             let full_circle =
                 segs.first().is_some_and(|s| matches!(s, Seg2::Arc { sweep, .. } if (sweep.abs() - std::f64::consts::TAU).abs() < 1e-9));
-            if end.dist(first) < tol * 10.0 && (segs.len() > 1 || full_circle) {
-                break;
-            }
-            let next = (0..kept.len())
-                .filter(|k| !used.get(*k).copied().unwrap_or(true))
-                .min_by(|x, y| kept[*x].0.start().dist(end).total_cmp(&kept[*y].0.start().dist(end)))?;
-            let (seg, tag) = *kept.get(next)?;
-            if seg.start().dist(end) > tol * 10.0 {
-                if end.dist(first) < tol * 10.0 {
-                    break;
+            let closes = end.dist(first) < near && (segs.len() > 1 || full_circle);
+            let leaving: Vec<usize> =
+                (0..kept.len()).filter(|k| !used.get(*k).copied().unwrap_or(true) && kept[*k].0.start().dist(end) < near).collect();
+            let next = match leaving.as_slice() {
+                [] if end.dist(first) < near => break,
+                [] => return None,
+                [only] if !closes => *only,
+                _ => {
+                    // The loop's own first piece stands for closing it.
+                    let mut out: Vec<Seg2> = leaving.iter().map(|k| kept[*k].0).collect();
+                    if closes {
+                        out.push(*segs.first()?);
+                    }
+                    let pick = tightest_left(&last, &out)?;
+                    match leaving.get(pick) {
+                        Some(k) => *k,
+                        None => break,
+                    }
                 }
-                return None;
-            }
+            };
+            let (seg, tag) = *kept.get(next)?;
             if let Some(u) = used.get_mut(next) {
                 *u = true;
             }
             segs.push(seg);
             tags.push(tag);
         }
-        let l = Loop2 { segs };
-        if l.signed_area().abs() > tol * tol {
-            loops.push((l, tags));
+        for (l, t) in simple_loops(Loop2 { segs }, tags, near) {
+            if l.signed_area().abs() > tol * tol {
+                loops.push((l, t));
+            }
         }
     }
     // Outers (counter-clockwise) take the holes they contain, the smallest first.
@@ -1239,6 +1255,61 @@ fn boolean2d_tagged(a: &Section, b: &Section, op: BoolOp, tol: f64) -> Option<Se
 
 /// The boolean done on prism sections, or `None` when it doesn't apply.
 /// The pieces of a segment between the given points (those lying on it, inside it).
+/// Of the pieces in `out` leaving the point where `incoming` ends, the one turning most to the
+/// left: the largest counter-clockwise angle from the way back along `incoming`. A loop with
+/// its material on its left that always takes it encloses the least, so material meeting
+/// another piece only at a point closes there as a loop of its own.
+///
+/// Directions are read a short way along each piece (the same distance on all, a twentieth of
+/// the shortest), not from tangents: a circle tangent to a line leaves the point along the
+/// line, and only its curvature says which side it turns to. The pieces of an arrangement
+/// don't cross, and none turns more than a twentieth of its sweep within that distance, so the
+/// order the points lie in is the order the pieces leave in.
+fn tightest_left(incoming: &Seg2, out: &[Seg2]) -> Option<usize> {
+    let shortest = out.iter().map(Seg2::length).fold(incoming.length(), f64::min);
+    let h = shortest * 0.05;
+    if !(h > 0.0) || !h.is_finite() {
+        return None;
+    }
+    let at = incoming.end();
+    let back = incoming.point_at(1.0 - h / incoming.length()) - at;
+    let turn = |s: &Seg2| {
+        let d = s.point_at(h / s.length()) - at;
+        let a = back.cross(d).atan2(back.dot(d));
+        if a < 0.0 { a + std::f64::consts::TAU } else { a }
+    };
+    (0..out.len()).max_by(|x, y| turn(&out[*x]).total_cmp(&turn(&out[*y])))
+}
+
+/// A closed loop split where it passes a point twice (within `near`) into loops that pass
+/// every point once, with their segments' tags. Counter-clockwise pieces are material, the
+/// others holes in it: a hole touching the outline at one point, or two pieces of material
+/// meeting at a corner, come out as two loops sharing that point.
+fn simple_loops(lp: Loop2, tags: Vec<Tag>, near: f64) -> Vec<(Loop2, Vec<Tag>)> {
+    let mut todo = vec![(lp.segs, tags)];
+    let mut out = Vec::new();
+    // Each split leaves two shorter loops, so the work is bounded by the segment count.
+    while let Some((segs, tags)) = todo.pop() {
+        let n = segs.len();
+        let repeat = (0..n).find_map(|i| {
+            let p = segs.get(i)?.start();
+            (i + 1..n).find(|j| segs.get(*j).is_some_and(|s| s.start().dist(p) < near)).map(|j| (i, j))
+        });
+        match repeat {
+            Some((i, j)) if j > i => {
+                let part = |v: &[Seg2], r: std::ops::Range<usize>| v.get(r).unwrap_or(&[]).to_vec();
+                let part_t = |v: &[Tag], r: std::ops::Range<usize>| v.get(r).unwrap_or(&[]).to_vec();
+                let inner = (part(&segs, i..j), part_t(&tags, i..j));
+                let outer = ([part(&segs, j..n), part(&segs, 0..i)].concat(), [part_t(&tags, j..n), part_t(&tags, 0..i)].concat());
+                todo.push(inner);
+                todo.push(outer);
+            }
+            _ => out.push((Loop2 { segs }, tags)),
+        }
+    }
+    out
+}
+
 fn split_seg(seg: &Seg2, pts: &[Vec2], tol: f64) -> Option<Vec<Seg2>> {
     if !matches!(seg, Seg2::Line { .. } | Seg2::Arc { .. }) {
         return None;
