@@ -716,7 +716,9 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
         let from: Vec<FaceProv> = solid.face_iter().filter_map(|f| prov.get(&f.id()).cloned()).collect();
         // Each edge's origins in the solid's edge order.
         let origins = crate::body::edge_order(solid.face_iter()).0.iter().map(|e| origins.get(&e.id()).cloned()).collect();
-        crate::boolean_record::heal_build(solid, size, &[], Some(from), origins, &record::counts(&[a, b]))
+        let keep: Vec<_> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
+        crate::boolean_record::heal_build(solid, size, &keep, Some(from), origins, &record::counts(&[a, b]))
+            .map(|body| body.with_split_lines(Some(std::sync::Arc::new(keep))))
     }))
 }
 

@@ -40,6 +40,8 @@ mod intersection_curve_tests;
 #[cfg(test)]
 mod issue_616_tests;
 #[cfg(test)]
+mod issue_674_tests;
+#[cfg(test)]
 mod issue_679_tests;
 mod lip;
 mod loopblend;
