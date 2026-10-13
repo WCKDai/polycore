@@ -500,6 +500,8 @@ pub(crate) fn split_edges_at(body: &Body, points: &[Vec3]) -> Result<Body> {
         let solid = mt::Solid::new_unchecked(shells);
         let split = Body {
             solid: std::sync::Arc::new(solid),
+            size: 0.0,
+            volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
             coarse_missing: None,
             mesh: None,
             color: body.color,
@@ -996,6 +998,8 @@ pub(crate) fn split_any(body: &Body, faces: &[usize], tool: &SplitTool) -> Resul
         let solid = mt::Solid::new_unchecked(shells.into_iter().map(mt::Shell::from).collect());
         let split = Body {
             solid: std::sync::Arc::new(solid),
+            size: 0.0,
+            volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
             coarse_missing: None,
             mesh: None,
             color: body.color,
