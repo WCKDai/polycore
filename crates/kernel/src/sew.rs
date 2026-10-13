@@ -460,7 +460,14 @@ fn sew_impl(faces: &[FaceSpec], touching: bool, sources: Option<&[Option<crate::
                 })
                 .collect::<Result<_>>()?;
             let face = match &f.surface {
-                SurfSpec::Plane => builder::try_attach_plane(&wires).map_err(|e| KernelError::Failed(format!("sew: face {fi}: {e}")))?,
+                SurfSpec::Plane => match builder::try_attach_plane(&wires) {
+                    Ok(face) => face,
+                    // truck's fit loses thin faces away from the origin: see `plane_about_the_mean`.
+                    Err(e) => {
+                        let plane = plane_about_the_mean(&wires).ok_or_else(|| KernelError::Failed(format!("sew: face {fi}: {e}")))?;
+                        mt::Face::try_new(wires, mt::Surface::Plane(plane)).map_err(|e| KernelError::Failed(format!("sew: face {fi}: {e}")))?
+                    }
+                },
                 SurfSpec::Revolved { a, b, axis_origin, axis, angle } => {
                     let k = axis.normalized().ok_or_else(|| KernelError::Invalid("sew: axis".into()))?;
                     let (va, vb) = (builder::vertex(p3(*a)), builder::vertex(p3(*b)));
@@ -556,6 +563,35 @@ fn curved(mut surf: mt::Surface, wires: Vec<mt::Wire>, probe: Option<(Vec3, Vec3
         }
     }
     mt::Face::try_new(wires, surf).map_err(|e| KernelError::Failed(format!("sew: face {fi}: {e}")))
+}
+
+/// The plane of a boundary that truck's fit (`builder::try_attach_plane`) refused: truck's fit
+/// again, on the boundary moved so that the mean of its control points is the origin, and the
+/// plane moved back. None when truck refuses that one too (the boundary is not flat within
+/// truck's 1e-6, or has no area).
+///
+/// truck sums the cross products of consecutive control points about a centre, and takes the
+/// points' sum for that centre (it divides by the number of wires, not of points): eight times as
+/// far from the origin as a rectangle of four lines. The sum is the same about any centre; its
+/// rounding is not. It grows with the square of the centre's distance, and on a thin face, whose
+/// normal is short, turns the normal far enough for truck's own flatness test to fail: truck
+/// finds a 0.00013 x 30 mm face 360 mm from the origin 2e-6 mm out of the plane it fitted. With
+/// the centre at the origin the same face is 1e-14 mm out at most.
+fn plane_about_the_mean(wires: &[mt::Wire]) -> Option<mt::Plane> {
+    let (mut sum, mut count) = (Vec3::ZERO, 0usize);
+    for p in wires.iter().flat_map(|w| w.edge_iter()).flat_map(|e| e.oriented_curve().lift_up().control_points().clone()) {
+        sum += Vec3::new(p.x / p.w, p.y / p.w, p.z / p.w);
+        count += 1;
+    }
+    let mean = sum * (1.0 / count.max(1) as f64);
+    if !mean.is_finite() {
+        return None;
+    }
+    let moved: Vec<mt::Wire> = wires.iter().map(|w| builder::transformed(w, mt::Matrix4::from_translation(v3(-mean)))).collect();
+    match builder::try_attach_plane(&moved).ok()?.surface() {
+        mt::Surface::Plane(plane) => Some(mt::Transformed::transformed(&plane, mt::Matrix4::from_translation(v3(mean)))),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -733,5 +769,62 @@ mod tests {
         let whole = chain(vec![Vec3::new(4.0, 0.0, 2.0), Vec3::new(5.0, 0.0, 2.0), Vec3::new(5.0, 3.0, 2.0), Vec3::new(4.0, 3.0, 2.0)]);
         let e = sew(&bulged_box(bulge(0.0), whole)).unwrap_err().to_string();
         assert!(e.contains("ruled chains differ"), "{e}");
+    }
+
+    #[test]
+    fn thin_faces_away_from_the_origin_get_their_planes() {
+        // Slabs 30 x 2 mm and 0.00013 to 0.1 mm thick, away from the origin and turned off the
+        // axes. truck's plane fit sums the cross products of a boundary's points about a centre
+        // and takes the points' sum for it, eight times as far from the origin as a rectangle;
+        // on the thin faces its normal then comes out so far off that truck finds a
+        // 0.00013 x 30 mm face at (-300, -200, 5) 2e-6 mm out of its own plane and refuses it:
+        // `cannot attach a plane to a wire that is not on one plane`. Nine of these 45 slabs
+        // have such a face. (Thinner slabs meet another limit, at the origin too: a face
+        // 0.00003 mm wide and askew to the axes is sewn but gets no triangles.)
+        let turned = |about_z: f64, about_x: f64| {
+            let (sz, cz) = about_z.sin_cos();
+            let (sx, cx) = about_x.sin_cos();
+            // The x, y and z axes turned about x, then about z.
+            (Vec3::new(cz, sz, 0.0), Vec3::new(-sz * cx, cz * cx, sx), Vec3::new(sz * sx, -cz * sx, cx))
+        };
+        // A box on the corner `o` with the edges `u`, `v` and `w` (right-handed).
+        let skew_box = |o: Vec3, u: Vec3, v: Vec3, w: Vec3| {
+            let p = |x: f64, y: f64, z: f64| o + u * x + v * y + w * z;
+            let (a, b, c, d) = (p(0., 0., 0.), p(1., 0., 0.), p(1., 1., 0.), p(0., 1., 0.));
+            let (e, f, g, h) = (p(0., 0., 1.), p(1., 0., 1.), p(1., 1., 1.), p(0., 1., 1.));
+            vec![quad(a, d, c, b), quad(e, f, g, h), quad(a, b, f, e), quad(b, c, g, f), quad(c, d, h, g), quad(d, a, e, h)]
+        };
+        for o in [Vec3::new(-300.0, -200.0, 5.0), Vec3::new(2500.0, -1800.0, 40.0), Vec3::ZERO] {
+            for width in [1.3e-4, 1e-3, 0.1] {
+                for (about_z, about_x) in [(0.0, 0.0), (0.0, 0.45), (0.9, 0.0), (-0.65, 0.45), (2.2, 1.1)] {
+                    let tag = format!("{o:?}, {width} wide, turned {about_z} and {about_x}");
+                    let (u, v, w) = turned(about_z, about_x);
+                    let body = sew(&skew_box(o, u * width, v * 2.0, w * 30.0)).unwrap_or_else(|e| panic!("{tag}: {e}"));
+                    assert!(body.validity().is_empty() && body.shell_count() == 1 && body.face_count() == 6, "{tag}: {:?}", body.validity());
+                    // (The measure sums about the origin: it is good to about 1e-14 of the
+                    // distance cubed, which three metres out is more than the thinnest slabs hold.)
+                    let (got, want) = (crate::measure(&body).unwrap().volume, width * 60.0);
+                    assert!((got - want).abs() < 1e-5 * want + 1e-14 * o.len().powi(3) + 1e-9, "{tag}: {got} vs {want}");
+                }
+            }
+        }
+        // A boundary that leaves its plane is refused as before: one corner of a face lifted by
+        // a thousandth of a millimetre, on a cube and on a sliver.
+        for size in [Vec3::new(10.0, 10.0, 10.0), Vec3::new(10.0, 2e-4, 10.0)] {
+            let mut warped = box_faces(Vec3::new(500.0, 300.0, 0.0), size);
+            if let EdgeSpec::Line { b, .. } = &mut warped[1].loops[0][1] {
+                b.z += 1e-3;
+            }
+            if let EdgeSpec::Line { a, .. } = &mut warped[1].loops[0][2] {
+                a.z += 1e-3;
+            }
+            let e = sew(&warped).unwrap_err().to_string();
+            assert!(e.contains("face 1") && e.contains("not on one plane"), "{e}");
+        }
+        // So is one with no area.
+        let mut flat = box_faces(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0));
+        let p = Vec3::new(0.0, 0.0, 10.0);
+        flat[1] = quad(p, p + Vec3::X * 3.0, p + Vec3::X * 7.0, p + Vec3::X * 10.0);
+        assert!(sew(&flat).unwrap_err().to_string().contains("not on one plane"));
     }
 }
