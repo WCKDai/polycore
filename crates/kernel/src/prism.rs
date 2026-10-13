@@ -1225,7 +1225,12 @@ fn sew_sections(
                 for (r, piece) in crate::extrude(plane, section, levels[first], levels[end])?.into_iter().enumerate() {
                     remaining_faces =
                         remaining_faces.checked_sub(piece.face_count()).ok_or_else(|| KernelError::Failed("prism output face budget".into()))?;
-                    pieces.push((piece, lineage::Built::Extruded { section: tagged.region(r), lo: levels[first], hi: levels[end] }));
+                    // Each slab's section, as read there: the same outline, but its walls
+                    // read beside whichever operand is there.
+                    let layers =
+                        (first..end).map(|k| Some((slabs.get(k)?.region(r), *levels.get(k)?, *levels.get(k + 1)?))).collect::<Option<Vec<_>>>();
+                    let layers = layers.ok_or_else(|| KernelError::Failed("missing prism section".into()))?;
+                    pieces.push((piece, lineage::Built::Extruded { layers }));
                 }
             } else {
                 let (piece, built) = sew_connected_sections(plane, d, &levels[first..=end], &slabs[first..end], tol, coalesce, history)
@@ -1507,6 +1512,13 @@ fn simple_prism_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2
         if (u - x).abs() > tol * (1.0 + u) || (u - y).abs() > tol * (1.0 + u) {
             return sew_stack(&plane, d, &pa, &pb, tol, &history).map(|r| r.map(Some));
         }
+        // One outline end to end: also slab by slab, so the history follows each operand's
+        // walls (one longer prism, whose walls are made from both).
+        if let Some(Ok(body)) = sew_stack(&plane, d, &pa, &pb, tol, &history)
+            && body.history().is_some()
+        {
+            return Some(Ok(Some(body)));
+        }
         (pa.lo.min(pb.lo), pa.hi.max(pb.hi))
     } else {
         (pa.lo, pa.hi)
@@ -1518,7 +1530,7 @@ fn simple_prism_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2
     };
     // Each body over its region.
     let mut pieces: Vec<(Body, lineage::Built)> =
-        bodies.into_iter().enumerate().map(|(r, b)| (b, lineage::Built::Extruded { section: section.region(r), lo, hi })).collect();
+        bodies.into_iter().enumerate().map(|(r, b)| (b, lineage::Built::Extruded { layers: vec![(section.region(r), lo, hi)] })).collect();
     let last = pieces.pop()?;
     if !pieces.is_empty() {
         // Several pieces: one body of several lumps (the last first).
