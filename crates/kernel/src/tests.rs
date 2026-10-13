@@ -2123,3 +2123,29 @@ fn shell_open_beside_a_round_as_large_as_the_wall_is_refused() {
     let f = fillet(&b, &loop_, 1.5).unwrap();
     assert!(shell(&f, &bottom, 2.0).unwrap().validity().is_empty());
 }
+
+/// A disc whose circular edge is rounded smaller than the wall (#319): moved in by the
+/// thickness the round collapses to a sharp edge, where the floor meets the side along a
+/// circle (two arcs with the same ends), not a straight line.
+#[test]
+fn shell_of_a_disc_rounded_smaller_than_the_wall() {
+    use std::f64::consts::PI;
+    let (rd, h, r) = (15.0, 5.0, 1.5);
+    let disc = cylinder(Vec3::new(0.0, 0.0, -h), Vec3::Z, rd, h).unwrap();
+    // The round takes a corner of area r²(1 − π/4) whose centroid is r(10 − 3π)/(3(4 − π))
+    // in from the rim, swept round the axis (Pappus).
+    let corner = r * r * (1.0 - PI / 4.0) * 2.0 * PI * (rd - r * (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI)));
+    let (top, bottom) = ([Vec3::ZERO], [Vec3::new(0.0, 0.0, -h)]);
+    for (edge_z, open) in [(-h, &top), (-h, &bottom), (0.0, &bottom)] {
+        let rounded = fillet(&disc, &[Vec3::new(0.0, rd, edge_z), Vec3::new(0.0, -rd, edge_z)], r).unwrap();
+        let v0 = PI * rd * rd * h - corner;
+        for t in [1.6, 2.0] {
+            let s = shell(&rounded, open, t).unwrap_or_else(|e| panic!("round at z {edge_z}, t {t}: {e}"));
+            assert!(s.validity().is_empty(), "round at z {edge_z}, t {t}: {:?}", s.validity());
+            // The cavity: a plain cylinder the thickness in from the side and the closed end.
+            let want = v0 - PI * (rd - t).powi(2) * (h - t);
+            let v = measure(&s).unwrap().volume;
+            assert!(rel(v, want) < 1e-3, "round at z {edge_z}, t {t}: {v} vs {want}");
+        }
+    }
+}
