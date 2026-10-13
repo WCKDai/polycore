@@ -835,6 +835,17 @@ fn sphere_booleans() {
 }
 
 #[test]
+fn similar_spheres_meet() {
+    // bherbruck/solidcraft#232: the contact test compared every pair of nearby triangles of the
+    // two fine sphere meshes and gave up past its work limit, so their join was refused.
+    let a = sphere(Vec3::ZERO, 10.0).unwrap();
+    for (x, meet) in [(12.0, true), (4.0, true), (20.0, true), (20.5, false)] {
+        let b = sphere(Vec3::new(x, 0.0, 0.0), 10.0).unwrap();
+        assert_eq!(a.meets(&b).unwrap(), meet, "centres {x} mm apart");
+    }
+}
+
+#[test]
 #[ignore]
 fn debug_convergence() {
     let b = extrude(&Plane::XY, &[Region2 { outer: Loop2::circle(Vec2::ZERO, 15.0), holes: vec![] }], 0.0, 50.0).unwrap().pop().unwrap();

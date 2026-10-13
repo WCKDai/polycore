@@ -80,6 +80,120 @@ fn boxes_meet(a: &Aabb3, b: &Aabb3) -> bool {
     a.min.x <= b.max.x && b.min.x <= a.max.x && a.min.y <= b.max.y && b.min.y <= a.max.y && a.min.z <= b.max.z && b.min.z <= a.max.z
 }
 
+/// A triangle with its bounding box, as [`find_close_pair`] takes them.
+pub type BoxedTriangle = ([Vec3; 3], Aabb3);
+
+/// Most grid cells one triangle is filed under; a larger one is tested against every triangle.
+const MAX_CELLS_PER_TRIANGLE: usize = 64;
+
+/// Calls `test` on pairs of triangles, one from `a` and one from `b`, whose boxes come within
+/// `gap` of each other (each such pair once), until it returns true, and says whether it did.
+/// The cost follows the number of close pairs, not `a.len() * b.len()`: `b` is filed in a sparse
+/// grid of cells about its typical triangle's size, and each triangle of `a` meets only those in
+/// its cells. Every call of `test` takes one from `budget`; `None` when the budget runs out.
+pub fn find_close_pair(
+    a: &[BoxedTriangle],
+    b: &[BoxedTriangle],
+    gap: f64,
+    budget: &mut usize,
+    mut test: impl FnMut(&BoxedTriangle, &BoxedTriangle) -> bool,
+) -> Option<bool> {
+    let gap = if gap.is_finite() { gap.max(0.0) } else { 0.0 };
+    let close = |x: &Aabb3, y: &Aabb3| {
+        x.min.x <= y.max.x + gap
+            && y.min.x <= x.max.x + gap
+            && x.min.y <= y.max.y + gap
+            && y.min.y <= x.max.y + gap
+            && x.min.z <= y.max.z + gap
+            && y.min.z <= x.max.z + gap
+    };
+    let mut call = |t: &BoxedTriangle, u: &BoxedTriangle| -> Option<bool> {
+        *budget = budget.checked_sub(1)?;
+        Some(test(t, u))
+    };
+    let (Some(first), true) = (b.first(), !a.is_empty()) else { return Some(false) };
+    // Cell size: the median extent of `b`'s boxes (so most of them span a few cells), at least `gap`.
+    let mut extents: Vec<f64> = b
+        .iter()
+        .map(|(_, bx)| {
+            let d = bx.size();
+            d.x.max(d.y).max(d.z)
+        })
+        .filter(|e| e.is_finite())
+        .collect();
+    let mid = extents.len() / 2;
+    let median = if extents.is_empty() { 0.0 } else { *extents.select_nth_unstable_by(mid, f64::total_cmp).1 };
+    let origin = first.1.min;
+    let cell = median.max(gap).max(1e-9);
+    if !(origin.is_finite() && cell.is_finite()) {
+        return Some(false);
+    }
+    let index = |v: f64, o: f64| ((v - o) / cell).floor() as i64;
+    let span = |bx: &Aabb3, pad: f64| -> Option<[(i64, i64); 3]> {
+        let r = [
+            (index(bx.min.x - pad, origin.x), index(bx.max.x + pad, origin.x)),
+            (index(bx.min.y - pad, origin.y), index(bx.max.y + pad, origin.y)),
+            (index(bx.min.z - pad, origin.z), index(bx.max.z + pad, origin.z)),
+        ];
+        let count = r.iter().try_fold(1usize, |n, (lo, hi)| n.checked_mul(usize::try_from(hi.checked_sub(*lo)?.checked_add(1)?).ok()?))?;
+        (count <= MAX_CELLS_PER_TRIANGLE).then_some(r)
+    };
+    let mut cells: std::collections::HashMap<(i64, i64, i64), Vec<u32>> = std::collections::HashMap::new();
+    let mut big = Vec::new();
+    for (j, (_, bx)) in b.iter().enumerate() {
+        match span(bx, gap) {
+            Some([x, y, z]) => {
+                for ix in x.0..=x.1 {
+                    for iy in y.0..=y.1 {
+                        for iz in z.0..=z.1 {
+                            cells.entry((ix, iy, iz)).or_default().push(j as u32);
+                        }
+                    }
+                }
+            }
+            None => big.push(j),
+        }
+    }
+    // Per triangle of `b`: the last triangle of `a` tested against it, plus one.
+    let mut seen = vec![0usize; b.len()];
+    for (i, t) in a.iter().enumerate() {
+        for &j in &big {
+            if let Some(u) = b.get(j).filter(|u| close(&t.1, &u.1)) {
+                seen[j] = i + 1;
+                if call(t, u)? {
+                    return Some(true);
+                }
+            }
+        }
+        let Some([x, y, z]) = span(&t.1, 0.0) else {
+            // A large triangle of `a`: against all of `b`.
+            for (j, u) in b.iter().enumerate() {
+                if seen[j] != i + 1 && close(&t.1, &u.1) && call(t, u)? {
+                    return Some(true);
+                }
+            }
+            continue;
+        };
+        for ix in x.0..=x.1 {
+            for iy in y.0..=y.1 {
+                for iz in z.0..=z.1 {
+                    for &j in cells.get(&(ix, iy, iz)).into_iter().flatten() {
+                        let (Some(mark), Some(u)) = (seen.get_mut(j as usize), b.get(j as usize)) else { continue };
+                        if *mark == i + 1 {
+                            continue;
+                        }
+                        *mark = i + 1;
+                        if close(&t.1, &u.1) && call(t, u)? {
+                            return Some(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Some(false)
+}
+
 /// Two triangles that pass through each other (see [`Mesh::crosses`]).
 fn triangles_cross(t: &[Vec3; 3], u: &[Vec3; 3], tol: f64) -> bool {
     // Signed distances of one triangle's corners from the other's plane, when they lie more
@@ -347,52 +461,8 @@ impl Mesh {
         if ta.is_empty() || tb.is_empty() {
             return false;
         }
-        // A grid over the shared box holds the other mesh's triangles.
-        let n = ((tb.len() as f64).cbrt().ceil() as usize).clamp(1, 24);
-        let size = region.size();
-        let cell = |v: f64, lo: f64, s: f64| -> usize { if s > 0.0 { (((v - lo) / s * n as f64).floor().max(0.0) as usize).min(n - 1) } else { 0 } };
-        let span = |bx: &Aabb3| -> [(usize, usize); 3] {
-            [
-                (cell(bx.min.x, region.min.x, size.x), cell(bx.max.x, region.min.x, size.x)),
-                (cell(bx.min.y, region.min.y, size.y), cell(bx.max.y, region.min.y, size.y)),
-                (cell(bx.min.z, region.min.z, size.z), cell(bx.max.z, region.min.z, size.z)),
-            ]
-        };
-        let mut cells: Vec<Vec<u32>> = vec![Vec::new(); n * n * n];
-        for (i, (_, bx)) in tb.iter().enumerate() {
-            let [x, y, z] = span(bx);
-            for ix in x.0..=x.1 {
-                for iy in y.0..=y.1 {
-                    for iz in z.0..=z.1 {
-                        if let Some(c) = cells.get_mut((ix * n + iy) * n + iz) {
-                            c.push(i as u32);
-                        }
-                    }
-                }
-            }
-        }
-        // Per triangle of `o`: the last triangle of `self` tested against it, plus one.
-        let mut seen = vec![0usize; tb.len()];
-        for (i, (t, bx)) in ta.iter().enumerate() {
-            let [x, y, z] = span(bx);
-            for ix in x.0..=x.1 {
-                for iy in y.0..=y.1 {
-                    for iz in z.0..=z.1 {
-                        for j in cells.get((ix * n + iy) * n + iz).into_iter().flatten() {
-                            let (Some(mark), Some((u, ub))) = (seen.get_mut(*j as usize), tb.get(*j as usize)) else { continue };
-                            if *mark == i + 1 {
-                                continue;
-                            }
-                            *mark = i + 1;
-                            if boxes_meet(bx, ub) && triangles_cross(t, u, tol) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        false
+        let mut unlimited = usize::MAX;
+        find_close_pair(&ta, &tb, 0.0, &mut unlimited, |(t, _), (u, _)| triangles_cross(t, u, tol)).unwrap_or(false)
     }
 
     /// Closest intersection of a ray with the mesh: (distance along `dir`, triangle index).
