@@ -27,7 +27,7 @@ fn assert_watertight(m: &Mesh, name: &str) {
 }
 
 fn plan_body(b: &Body, tol: f64) -> (Mesh, PlanStats) {
-    match plan(&b.solid, tol) {
+    match plan(&b.solid, tol, Some(crate::tess::size::Turn { angle: crate::DISPLAY_ANGLE, floor: tol * 1e-3 })) {
         Ok((p, stats)) => (p.evaluate(), stats),
         Err(e) => panic!("plan: {e}"),
     }
@@ -62,6 +62,33 @@ fn cut(a: &Body, b: &Body) -> Body {
 }
 
 const PI: f64 = std::f64::consts::PI;
+
+/// Smallest corner angle (degrees) over the mesh.
+fn min_angle(m: &Mesh) -> f64 {
+    let mut least = 180.0f64;
+    for t in &m.triangles {
+        let [a, b, c] = t.map(|i| m.positions[i as usize]);
+        for (p, q, r) in [(a, b, c), (b, c, a), (c, a, b)] {
+            let (u, v) = (q - p, r - p);
+            if let (Some(u), Some(v)) = (u.normalized(), v.normalized()) {
+                least = least.min(u.dot(v).clamp(-1.0, 1.0).acos().to_degrees());
+            }
+        }
+    }
+    least
+}
+
+#[test]
+fn a_box_is_a_regular_grid_on_every_face() {
+    // 40 × 30 × 20: sides at most 1/5 of the diagonal (10.77 mm), so 4 × 3 × 2 cells.
+    let b = ok(crate::box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)));
+    let (m, s) = plan_body(&b, 0.05);
+    assert_eq!(s.planar, 6);
+    assert_watertight(&m, "box");
+    let cells = 2 * (4 * 3 + 4 * 2 + 3 * 2);
+    assert_eq!(m.triangles.len(), 2 * cells, "two triangles per grid cell");
+    assert!(min_angle(&m) > 40.0, "{}", min_angle(&m));
+}
 
 #[test]
 fn primitives_are_watertight_with_the_right_volume() {
@@ -148,7 +175,7 @@ fn render_wireframes() {
         let Ok(old) = body.tessellate(tol) else { panic!("reference") };
         let t_old = t0.elapsed().as_secs_f64() * 1e3;
         let t0 = std::time::Instant::now();
-        let new = match plan(&body.solid, tol) {
+        let new = match plan(&body.solid, tol, Some(crate::tess::size::Turn { angle: crate::DISPLAY_ANGLE, floor: tol * 1e-3 })) {
             Ok((p, st)) => Some((p.evaluate(), st)),
             Err(e) => {
                 println!("{name}: no plan ({e})");
@@ -242,4 +269,13 @@ fn a_drill_point_apex_leaves_no_zero_area_triangles() {
             assert!((b - a).cross(c - a).len() > 1e-12, "{name}: zero-area triangle {a:?} {b:?} {c:?}");
         }
     }
+}
+
+#[test]
+fn a_placed_body_meshes_like_the_original() {
+    let b = ok(crate::box_solid(Vec3::ZERO, Vec3::new(2.0, 3.0, 4.0)));
+    let placed = ok(crate::transform(&b, Vec3::new(15.0, -2.0, 8.0), Vec3::ZERO, Vec3::X, 0.7));
+    let (m, _) = plan_body(&b, 0.005);
+    let (p, _) = plan_body(&placed, 0.005);
+    assert_eq!(m.tri_face, p.tri_face);
 }

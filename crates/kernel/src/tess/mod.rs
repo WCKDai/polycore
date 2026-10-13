@@ -20,6 +20,7 @@ pub(crate) mod cdt;
 pub(crate) mod coons;
 pub(crate) mod edges;
 pub(crate) mod grid;
+pub(crate) mod size;
 pub(crate) mod surface;
 pub(crate) mod uv;
 
@@ -40,6 +41,16 @@ pub struct PlanStats {
     pub delaunay: usize,
 }
 
+/// Curved faces from which their sizes are worked out on the worker pool.
+const PARALLEL_SIZES: usize = 8;
+/// Curved faces from which faces are planned on the worker pool (measured on the oracle
+/// parts: two curved faces plan faster serially, four break even, six run twice as fast).
+const PARALLEL_FACES: usize = 4;
+/// Intersection curves (a Newton solve per point), or edges of any kind, from which edges are
+/// sampled on the worker pool.
+const PARALLEL_CURVES: usize = 2;
+const PARALLEL_EDGES: usize = 256;
+
 /// Most lines a curved face's grid gets in one direction.
 const MAX_LINES: usize = 1024;
 /// Most points Ruppert refinement may add to one face, beyond its seeds.
@@ -49,16 +60,34 @@ fn unsupported(what: impl std::fmt::Display) -> KernelError {
     KernelError::Failed(format!("not supported yet: tessellation: {what}"))
 }
 
-/// Plan the display tessellation of `solid` with chord tolerance `tol`.
-pub(crate) fn plan(solid: &Solid, tol: f64) -> Result<(TessPlan, PlanStats)> {
+/// Plan the display tessellation of `solid` with chord tolerance `tol` and, when given, a
+/// facet angle no facet may turn more than (where it sags above the angle's floor).
+pub(crate) fn plan(solid: &Solid, tol: f64, turn: Option<size::Turn>) -> Result<(TessPlan, PlanStats)> {
     let faces: Vec<&mt::Face> = solid.face_iter().collect();
     let (edges, edge_faces) = edge_order(faces.iter().copied());
-    // Every edge once, in parallel; faces then read their nodes.
-    let sampled = crate::par::map("edge nodes", &edges, 64, |e| Ok(edges::sample_edge(e, tol)));
+    let rules = size::Rules::new(tol, size::extent(solid.vertex_iter().map(|v| crate::body::from_p3(v.point()))), turn);
+    // Each face's surface and target side length, then every edge once at the smaller size of
+    // its faces; faces then read their nodes. A planar face costs microseconds and a curved
+    // one about a hundred, so the pool is used only where curved faces (or intersection
+    // curves) make up the work.
+    let evals: Vec<Option<EvalSurface>> = faces.iter().map(|f| surface::eval_surface(&f.surface())).collect();
+    let curved = evals.iter().filter(|e| !matches!(e, Some(EvalSurface::Plane { .. }))).count();
+    let sizes =
+        crate::par::map("face sizes", &evals, curved >= PARALLEL_SIZES, |eval| Ok(eval.as_ref().map(|s| size::face_size(s, &uv::domain(s), &rules))));
+    let sized: Vec<(Option<EvalSurface>, Option<(f64, [f64; 2])>)> =
+        evals.into_iter().zip(sizes).map(|(e, s)| s.map(|s| (e, s))).collect::<Result<_>>()?;
+    let face_h = |f: usize| sized.get(f).and_then(|(_, s)| s.map(|(h, _)| h)).unwrap_or(rules.max_len);
+    let edge_h: Vec<f64> = edge_faces.iter().map(|fs| fs.iter().map(|&f| face_h(f)).fold(rules.max_len, f64::min)).collect();
+    let jobs: Vec<(&mt::Edge, f64)> = edges.iter().zip(edge_h).collect();
+    let solved = edges.iter().filter(|e| matches!(e.curve(), mt::Curve::IntersectionCurve(_))).count();
+    let sampled = crate::par::map("edge nodes", &jobs, solved >= PARALLEL_CURVES || edges.len() >= PARALLEL_EDGES, |(e, h)| {
+        Ok(edges::sample_edge(e, &rules, *h))
+    });
     let mut nodes: HashMap<_, Vec<Vec3>> = HashMap::with_capacity(edges.len());
     for (e, pts) in edges.iter().zip(sampled) {
         nodes.insert(e.id(), pts?);
     }
+    relax_crowded_faces(&faces, &jobs, &rules, &mut nodes);
     let oriented = |e: &mt::Edge| -> Option<Vec<Vec3>> {
         let mut pts = nodes.get(&e.id())?.clone();
         if !e.orientation() {
@@ -67,10 +96,12 @@ pub(crate) fn plan(solid: &Solid, tol: f64) -> Result<(TessPlan, PlanStats)> {
         Some(pts)
     };
     let indexed: Vec<(usize, &mt::Face)> = faces.iter().copied().enumerate().collect();
-    let planned = crate::par::map("face tessellation", &indexed, 8, |(fi, face)| {
+    let planned = crate::par::map("face tessellation", &indexed, curved >= PARALLEL_FACES, |(fi, face)| {
         let fi = *fi;
-        let surface = face.surface();
-        let eval = surface::eval_surface(&surface).ok_or_else(|| unsupported(format!("face {fi}: surface not evaluable")))?;
+        let (eval, size) = match sized.get(fi) {
+            Some((Some(eval), Some(size))) => (eval.clone(), *size),
+            _ => return Err(unsupported(format!("face {fi}: surface not evaluable"))),
+        };
         // Boundary nodes, loop by loop (each edge's last node is the next edge's first).
         let mut loops3: Vec<Vec<Vec3>> = Vec::new();
         for wire in face.absolute_boundaries() {
@@ -85,7 +116,7 @@ pub(crate) fn plan(solid: &Solid, tol: f64) -> Result<(TessPlan, PlanStats)> {
             }
         }
         let mut stats = PlanStats::default();
-        let fp = plan_face(fi, &eval, &loops3, tol, &mut stats)?;
+        let fp = plan_face(fi, &eval, &loops3, &rules, size, &mut stats)?;
         let fp = FacePlan {
             flip: !face.orientation(),
             triangles: if face.orientation() { fp.triangles } else { fp.triangles.into_iter().map(|[a, b, c]| [a, c, b]).collect() },
@@ -109,8 +140,56 @@ pub(crate) fn plan(solid: &Solid, tol: f64) -> Result<(TessPlan, PlanStats)> {
     Ok((plan, stats))
 }
 
+/// Bounded work for the facet angle, as the reference mesher bounds it: a face whose boundary
+/// would get more than `MAX_ANGLE_BOUNDARY` segments has its curved edges sampled again at twice
+/// the angle, as often as it takes, down to the tolerance alone (a plate with a thousand small
+/// holes is not worth a hundred times the work to draw each hole round). An edge keeps one set
+/// of nodes for both its faces, at the coarser of their levels, so every rim of a crowded face
+/// gets the same share whatever the order of the faces.
+fn relax_crowded_faces(faces: &[&mt::Face], jobs: &[(&mt::Edge, f64)], rules: &size::Rules, nodes: &mut HashMap<mt::EdgeID, Vec<Vec3>>) {
+    use truck_meshalgo::tessellation::Deflection;
+    let Some(turn) = rules.turn else { return };
+    let h_of: HashMap<mt::EdgeID, (&mt::Edge, f64)> = jobs.iter().map(|(e, h)| (e.id(), (*e, *h))).collect();
+    let boundaries: Vec<Vec<mt::EdgeID>> =
+        faces.iter().map(|f| f.absolute_boundaries().iter().flat_map(|w| w.edge_iter().map(|e| e.id())).collect()).collect();
+    let mut level: HashMap<mt::EdgeID, u8> = HashMap::new();
+    for l in 1..=Deflection::MAX_RELAX {
+        let segments = |id: &mt::EdgeID| nodes.get(id).map_or(0, |n| n.len().saturating_sub(1));
+        let mut crowded: Vec<mt::EdgeID> = boundaries
+            .iter()
+            .filter(|ids| ids.iter().map(segments).sum::<usize>() > Deflection::MAX_ANGLE_BOUNDARY)
+            .flatten()
+            .filter(|id| level.get(*id).copied().unwrap_or(0) < l)
+            .filter(|id| h_of.get(*id).is_some_and(|(e, _)| !matches!(e.curve(), mt::Curve::Line(_))))
+            .copied()
+            .collect();
+        crowded.sort_unstable_by_key(|id| format!("{id:?}"));
+        crowded.dedup();
+        if crowded.is_empty() {
+            break;
+        }
+        let relaxed = size::Rules { turn: turn.relaxed(l), ..*rules };
+        for id in crowded {
+            if let Some((e, h)) = h_of.get(&id) {
+                nodes.insert(id, edges::sample_edge(e, &relaxed, *h));
+                level.insert(id, l);
+            }
+        }
+    }
+}
+
 /// One face: boundary loops in 3D (shared edge nodes) to parameters and triangles.
-fn plan_face(fi: usize, s: &EvalSurface, loops3: &[Vec<Vec3>], tol: f64, stats: &mut PlanStats) -> Result<FacePlan> {
+/// `size`: the face's target side length (mm) and the surface's mean speed along u and v.
+fn plan_face(
+    fi: usize,
+    s: &EvalSurface,
+    loops3: &[Vec<Vec3>],
+    rules: &size::Rules,
+    size: (f64, [f64; 2]),
+    stats: &mut PlanStats,
+) -> Result<FacePlan> {
+    let tol = rules.tol;
+    let (h, speed) = size;
     let dom = uv::domain(s);
     let accept = (tol * 10.0).max(1e-6);
     let fail = |why: &str| unsupported(format!("face {fi}: {why}"));
@@ -172,26 +251,43 @@ fn plan_face(fi: usize, s: &EvalSurface, loops3: &[Vec<Vec3>], tol: f64, stats: 
     if uvs.len() < 3 {
         return Err(fail("degenerate boundary"));
     }
-    let planar = matches!(s, EvalSurface::Plane { .. });
-    let (extra, triangles) = if planar {
-        stats.planar += 1;
-        cdt::triangulate(&uvs, &ranges, cdt::Fill { seeds: &[], refine: None }).ok_or_else(|| fail("boundary crosses itself"))?
-    } else {
-        let mut bbox = [(f64::MAX, f64::MIN); 2];
-        for p in &uvs {
-            for d in 0..2 {
-                bbox[d] = (bbox[d].0.min(p[d]), bbox[d].1.max(p[d]));
-            }
+    let mut bbox = [(f64::MAX, f64::MIN); 2];
+    for p in &uvs {
+        for d in 0..2 {
+            bbox[d] = (bbox[d].0.min(p[d]), bbox[d].1.max(p[d]));
         }
-        let mut us = uv::divide(s, 0, bbox[0], bbox[1], tol, MAX_LINES);
-        let mut vs = uv::divide(s, 1, bbox[1], bbox[0], tol, MAX_LINES);
+    }
+    // Constrained Delaunay in (u, v) scaled to millimetres: equilateral seeds of side `h`,
+    // refined where triangles leave the surface, are too long or bend too much, then shaped by
+    // Ruppert refinement.
+    let delaunay = || {
+        let polys: Vec<&[[f64; 2]]> = ranges.iter().filter_map(|r| uvs.get(r.clone())).collect();
+        let seeds = cdt::lattice(bbox, [h / speed[0], h / speed[1]], &polys, speed);
+        let eval = |u: f64, v: f64| s.derivs(u, v).map(|(p, su, sv)| (p, su.cross(sv).normalized()));
+        let sag = cdt::Sag { eval: &eval, tol, h, turn: rules.turn, scale: speed };
+        let fill = cdt::Fill { seeds: &seeds, refine: Some((sag, MAX_REFINE)), shape: !matches!(s, EvalSurface::Plane { .. }) };
+        cdt::triangulate(&uvs, &ranges, fill).ok_or_else(|| fail("boundary crosses itself"))
+    };
+    // Planar and curved faces alike: a structured grid where the boundary runs along the
+    // parameter box (a rectangle, a cylinder half), a Coons grid on four corners, else Delaunay.
+    let planar = matches!(s, EvalSurface::Plane { .. });
+    let (extra, triangles) = {
+        let mut us = uv::divide(s, 0, bbox[0], bbox[1], rules, h, MAX_LINES);
+        let mut vs = uv::divide(s, 1, bbox[1], bbox[0], rules, h, MAX_LINES);
         thin(&mut us, &mut vs, grid::MAX_FACE_GRID);
         let structured = match (ranges.len(), grid::quad(&uvs)) {
             (1, Some(q)) => {
-                // Interior lines: the boundary's own where opposite sides agree, else the
-                // tolerance division.
+                // Interior lines: the boundary's own where opposite sides agree (refined where the
+                // surface turns more between them inside the face), else the division.
                 let lines = |d: usize, div: &Vec<f64>| {
-                    grid::aligned_lines(&uvs, &q, d).unwrap_or_else(|| div.iter().copied().filter(|x| *x > bbox[d].0 && *x < bbox[d].1).collect())
+                    let inner = |l: Vec<f64>| l.into_iter().filter(|x| *x > bbox[d].0 && *x < bbox[d].1).collect::<Vec<f64>>();
+                    match grid::aligned_lines(&uvs, &q, d) {
+                        Some(aligned) => {
+                            let ends: Vec<f64> = std::iter::once(bbox[d].0).chain(aligned).chain(std::iter::once(bbox[d].1)).collect();
+                            inner(uv::refine(s, d, &ends, bbox[1 - d], rules, h, MAX_LINES))
+                        }
+                        None => inner(div.clone()),
+                    }
                 };
                 let (lu, lv) = (lines(0, &us), lines(1, &vs));
                 let strip = match (lu.is_empty(), lv.is_empty()) {
@@ -203,28 +299,29 @@ fn plan_face(fi: usize, s: &EvalSurface, loops3: &[Vec<Vec3>], tol: f64, stats: 
             }
             _ => None,
         };
-        let cells = |lines: &Vec<f64>, (a, b): (f64, f64)| (lines.len().saturating_sub(1).max(1) as f64) / (b - a).max(f64::MIN_POSITIVE);
-        let scale = [cells(&us, bbox[0]), cells(&vs, bbox[1])];
         let structured = match structured {
-            None if ranges.len() == 1 => coons::coons(&uvs, &fixed, scale, grid::MAX_FACE_GRID),
+            None if ranges.len() == 1 => {
+                let fine = |a: [f64; 2], b: [f64; 2]| uv::fine_between(s, rules, h, a, b);
+                coons::coons(&uvs, &fixed, speed, grid::MAX_FACE_GRID, &fine)
+            }
             other => other,
         };
         match structured {
             Some(r) => {
-                stats.structured += 1;
+                if planar {
+                    stats.planar += 1;
+                } else {
+                    stats.structured += 1;
+                }
                 r
             }
             None => {
-                stats.delaunay += 1;
-                let polys: Vec<&[[f64; 2]]> = ranges.iter().filter_map(|r| uvs.get(r.clone())).collect();
-                let inner = |lines: &Vec<f64>, (a, b): (f64, f64)| lines.iter().copied().filter(|x| *x > a && *x < b).collect::<Vec<f64>>();
-                let seeds = cdt::inside_grid(&inner(&us, bbox[0]), &inner(&vs, bbox[1]), &polys);
-                let eval = |u: f64, v: f64| s.derivs(u, v).map(|(p, _, _)| p);
-                // One unit per tolerance cell in each direction: a straight direction (one
-                // cell) keeps long triangles, Ruppert shapes them in that metric.
-                let sag = cdt::Sag { eval: &eval, tol, scale };
-                let fill = cdt::Fill { seeds: &seeds, refine: Some((sag, MAX_REFINE)) };
-                cdt::triangulate(&uvs, &ranges, fill).ok_or_else(|| fail("boundary crosses itself"))?
+                if planar {
+                    stats.planar += 1;
+                } else {
+                    stats.delaunay += 1;
+                }
+                delaunay()?
             }
         }
     };

@@ -20,3 +20,6 @@ truck-meshalgo = { workspace = true }
 truck-stepio = { workspace = true }
 truck-topology = { workspace = true }
 spade = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }

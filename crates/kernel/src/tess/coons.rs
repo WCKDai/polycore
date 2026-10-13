@@ -88,7 +88,15 @@ fn lines(a: &Side, b: &Side) -> Vec<f64> {
 
 /// Triangulate the loop `uv` (with its fixed 3D nodes) as a Coons patch: boundary vertices
 /// keep their indices, the interior grid follows. Triangles counter-clockwise in (u, v).
-pub(crate) fn coons(uv: &[[f64; 2]], fixed: &[Vec3], scale: [f64; 2], max_points: usize) -> Option<(Vec<[f64; 2]>, Vec<[u32; 3]>)> {
+/// `fine(a, b)`: whether the surface between two parameter points needs no point between them
+/// (the grid lines, taken from the sides, are split inside the face where it does not).
+pub(crate) fn coons(
+    uv: &[[f64; 2]],
+    fixed: &[Vec3],
+    scale: [f64; 2],
+    max_points: usize,
+    fine: &dyn Fn([f64; 2], [f64; 2]) -> bool,
+) -> Option<(Vec<[f64; 2]>, Vec<[u32; 3]>)> {
     let n = uv.len();
     let [c0, c1, c2, c3] = corners(uv, scale)?;
     // Sides in loop order; the bottom (0) and right (1) run with the loop, the top (2) and
@@ -97,22 +105,27 @@ pub(crate) fn coons(uv: &[[f64; 2]], fixed: &[Vec3], scale: [f64; 2], max_points
     let right = side(fixed, n, c1, c2)?;
     let top = reversed(side(fixed, n, c2, c3)?);
     let left = reversed(side(fixed, n, c3, c0)?);
-    let (ss, ts) = (lines(&bottom, &top), lines(&left, &right));
+    let corner = |i: usize| uv.get(i).copied();
+    let (p00, p10, p11, p01) = (corner(c0)?, corner(c1)?, corner(c2)?, corner(c3)?);
+    // The blend at (s, t): the sides' points, less the corners counted twice.
+    let at = |s: f64, t: f64| -> Option<[f64; 2]> {
+        let (b, tp, l, r) = (along(&bottom, uv, s)?, along(&top, uv, s)?, along(&left, uv, t)?, along(&right, uv, t)?);
+        let blend = |d: usize| {
+            (1.0 - t) * b[d] + t * tp[d] + (1.0 - s) * l[d] + s * r[d]
+                - ((1.0 - s) * (1.0 - t) * p00[d] + s * (1.0 - t) * p10[d] + (1.0 - s) * t * p01[d] + s * t * p11[d])
+        };
+        Some([blend(0), blend(1)])
+    };
+    let ss = refine(lines(&bottom, &top), max_points, &|a, b, x| Some(fine(at(a, x)?, at(b, x)?)));
+    let ts = refine(lines(&left, &right), max_points, &|a, b, x| Some(fine(at(x, a)?, at(x, b)?)));
     if ss.len().checked_mul(ts.len())? > max_points {
         return None;
     }
-    let corner = |i: usize| uv.get(i).copied();
-    let (p00, p10, p11, p01) = (corner(c0)?, corner(c1)?, corner(c2)?, corner(c3)?);
     let mut out: Vec<[f64; 2]> = uv.to_vec();
     let base = u32::try_from(n).ok()?;
     for &t in &ts {
         for &s in &ss {
-            let (b, tp, l, r) = (along(&bottom, uv, s)?, along(&top, uv, s)?, along(&left, uv, t)?, along(&right, uv, t)?);
-            let blend = |d: usize| {
-                (1.0 - t) * b[d] + t * tp[d] + (1.0 - s) * l[d] + s * r[d]
-                    - ((1.0 - s) * (1.0 - t) * p00[d] + s * (1.0 - t) * p10[d] + (1.0 - s) * t * p01[d] + s * t * p11[d])
-            };
-            out.push([blend(0), blend(1)]);
+            out.push(at(s, t)?);
         }
     }
     let (ns, nt) = (ss.len(), ts.len());
@@ -152,6 +165,26 @@ pub(crate) fn coons(uv: &[[f64; 2]], fixed: &[Vec3], scale: [f64; 2], max_points
     }
     let extra = out.split_off(n);
     Some((extra, tris))
+}
+
+/// Interior lines (strictly between 0 and 1) with every interval, ends included, split while
+/// `fine(a, b, x)` fails at some position `x` across (or the lines reach `max`).
+fn refine(lines: Vec<f64>, max: usize, fine: &dyn Fn(f64, f64, f64) -> Option<bool>) -> Vec<f64> {
+    const ACROSS: [f64; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+    let all: Vec<f64> = std::iter::once(0.0).chain(lines).chain(std::iter::once(1.0)).collect();
+    let mut out = vec![0.0];
+    let mut stack: Vec<(f64, f64, u32)> = all.windows(2).rev().map(|w| (w[0], w[1], 0)).collect();
+    while let Some((a, b, depth)) = stack.pop() {
+        let ok = depth >= 16 || out.len() + stack.len() >= max || ACROSS.iter().all(|x| fine(a, b, *x).unwrap_or(true));
+        if ok {
+            out.push(b);
+        } else {
+            let m = 0.5 * (a + b);
+            stack.push((m, b, depth + 1));
+            stack.push((a, m, depth + 1));
+        }
+    }
+    out.into_iter().filter(|x| *x > 0.0 && *x < 1.0).collect()
 }
 
 fn reversed(s: Side) -> Side {
@@ -218,7 +251,7 @@ mod tests {
                     b.reverse();
                 }
                 let fixed: Vec<Vec3> = b.iter().map(|p| Vec3::new(p[0], p[1], 0.0)).collect();
-                let Some((extra, tris)) = coons(&b, &fixed, [1.0, 1.0], 10_000) else { panic!("meshes (k {k})") };
+                let Some((extra, tris)) = coons(&b, &fixed, [1.0, 1.0], 10_000, &|_, _| true) else { panic!("meshes (k {k})") };
                 let mut uv = b.clone();
                 uv.extend(extra);
                 assert!((area(&uv, &tris) - 16.0).abs() < 1e-9, "k {k} reverse {reverse}: {}", area(&uv, &tris));
@@ -230,6 +263,6 @@ mod tests {
     fn five_corners_is_not_a_coons_patch() {
         let b = [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 1.0]];
         let fixed: Vec<Vec3> = b.iter().map(|p| Vec3::new(p[0], p[1], 0.0)).collect();
-        assert!(coons(&b, &fixed, [1.0, 1.0], 100).is_none());
+        assert!(coons(&b, &fixed, [1.0, 1.0], 100, &|_, _| true).is_none());
     }
 }

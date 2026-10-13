@@ -1051,12 +1051,25 @@ impl Body {
     /// triangulation in its own parameters, with each edge sampled once (chord tolerance
     /// `tol`, mm) so faces meet exactly.
     pub fn display_plan(&self, tol: f64) -> Result<solidcraft_geom::tess::TessPlan> {
+        self.plan_within(tol, None)
+    }
+
+    /// Like [`Body::display_plan`], and no facet turns more than `angle` radians (see
+    /// [`Body::display_mesh_angular`]).
+    pub fn display_plan_angular(&self, tol: f64, angle: f64) -> Result<solidcraft_geom::tess::TessPlan> {
+        self.plan_within(tol, Some(angle))
+    }
+
+    fn plan_within(&self, tol: f64, angle: Option<f64>) -> Result<solidcraft_geom::tess::TessPlan> {
         if self.is_mesh() {
             return Err(KernelError::Invalid("a mesh body has no surfaces to tessellate".into()));
         }
         let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.05 };
         let tol = tol.max(self.size() * 1e-6);
-        guard("tessellate", || crate::tess::plan(&self.solid, tol).map(|(plan, _)| plan))
+        // The same angle and floor as the reference mesher's angular display mesh.
+        let turn =
+            angle.filter(|a| a.is_finite()).map(|a| crate::tess::size::Turn { angle: a.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR });
+        guard("tessellate", || crate::tess::plan(&self.solid, tol, turn).map(|(plan, _)| plan))
     }
 
     /// Faces with no triangles in a coarse tessellation (the mesher failed or gave up).
