@@ -19,3 +19,4 @@ truck-shapeops = { workspace = true }
 truck-meshalgo = { workspace = true }
 truck-stepio = { workspace = true }
 truck-topology = { workspace = true }
+spade = { workspace = true }

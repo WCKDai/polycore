@@ -54,6 +54,7 @@ mod native;
 mod numbered;
 mod offset;
 mod ops;
+mod par;
 mod plane_fit;
 mod polybool;
 mod polyhedron;
@@ -72,6 +73,7 @@ mod step_out;
 mod surface_kind;
 mod surfaces;
 mod sweep_path;
+mod tess;
 #[cfg(test)]
 mod thread_tests;
 mod topo;

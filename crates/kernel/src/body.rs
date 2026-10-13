@@ -1047,6 +1047,18 @@ impl Body {
         })
     }
 
+    /// The display tessellation as a plan for the CPU or GPU evaluator: every face's
+    /// triangulation in its own parameters, with each edge sampled once (chord tolerance
+    /// `tol`, mm) so faces meet exactly.
+    pub fn display_plan(&self, tol: f64) -> Result<solidcraft_geom::tess::TessPlan> {
+        if self.is_mesh() {
+            return Err(KernelError::Invalid("a mesh body has no surfaces to tessellate".into()));
+        }
+        let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.05 };
+        let tol = tol.max(self.size() * 1e-6);
+        guard("tessellate", || crate::tess::plan(&self.solid, tol).map(|(plan, _)| plan))
+    }
+
     /// Faces with no triangles in a coarse tessellation (the mesher failed or gave up).
     pub fn unmeshed_faces(&self) -> usize {
         if self.is_mesh() {
