@@ -504,7 +504,7 @@ fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option
         }
         // The rebuild leaves the cut faces' edges split where other polygons were cut; healed,
         // they match the pieces outside edge for edge.
-        let mut pieces: Vec<Traced> = match r {
+        let pieces: Vec<Traced> = match r {
             Some(m) => {
                 let healed = recorded::heal_body(&m, m.deep_copy(), size, a.split_keep(), &record::counts(&[&middle.0, b]))?;
                 let h = recorded::of_pair(&healed, &middle.1, &h_b);
@@ -512,18 +512,51 @@ fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option
             }
             None => Vec::new(),
         };
-        // Each piece outside meets the middle along its cut face (glued one shell to another).
-        if pieces.iter().chain(&outside).any(|(x, _)| x.solid.boundaries().len() != 1) {
+        // Each piece in its lumps: a cut plane crossing a frame or a ring leaves the middle (or
+        // a piece outside) in several parts, which meet the others along several cut faces.
+        let lumps = |(whole, h): Traced| -> Result<Vec<Traced>> {
+            if whole.solid.boundaries().len() == 1 {
+                return Ok(vec![(whole, h)]);
+            }
+            let parts = whole.lumps()?;
+            let histories = recorded::parts_of(&parts, &whole);
+            Ok(parts
+                .into_iter()
+                .zip(histories)
+                .map(|(p, hp)| {
+                    let h = match (hp, h.as_ref()) {
+                        (Some(hp), Some(h)) => recorded::composed(hp.substituted(0, h)),
+                        _ => None,
+                    };
+                    (p, h)
+                })
+                .collect())
+        };
+        let mut all: Vec<Traced> = Vec::new();
+        for piece in pieces.into_iter().chain(outside) {
+            all.extend(lumps(piece)?);
+        }
+        // Glue pieces that meet along their cut faces until one is left; every cut face pair
+        // goes (a pair left behind would be a slit through the result).
+        let mut joined: Vec<Traced> = Vec::new();
+        while let Some(mut cur) = all.pop() {
+            loop {
+                let found = all.iter().enumerate().find_map(|(i, (o, _))| Some((i, crate::coplanar::glue(&cur.0, o)?.ok()?)));
+                let Some((i, j)) = found else { break };
+                let other = all.swap_remove(i);
+                let h = recorded::of_pair(&j, &cur.1, &other.1);
+                cur = (j, h);
+            }
+            joined.push(cur);
+        }
+        if joined.iter().any(|(x, _)| x.solid.boundaries().len() != 1) {
             return Err(fail("a piece in several parts"));
         }
-        for (o, h_o) in outside {
-            let joined = pieces.iter().enumerate().find_map(|(i, (m, _))| Some((i, crate::coplanar::glue(m, &o)?.ok()?)));
-            let (i, j) = joined.ok_or_else(|| fail("a piece does not join back"))?;
-            if let Some(slot) = pieces.get_mut(i) {
-                let h = recorded::of_pair(&j, &slot.1, &h_o);
-                *slot = (j, h);
-            }
+        // A join onto one piece is one piece: anything apart is a cut face that did not glue.
+        if op == BoolOp::Union && a.solid.boundaries().len() == 1 && joined.len() != 1 {
+            return Err(fail("a piece does not join back"));
         }
+        let pieces = joined;
         recorded::join(pieces.into_iter().map(|(p, h)| (p, dropped(h))).collect(), &counts)
     };
     Some(run())

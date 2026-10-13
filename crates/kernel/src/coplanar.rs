@@ -335,19 +335,16 @@ pub(crate) fn boolean_apart(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Opt
         }
         for (n, d) in &back {
             // a's face points along n; b's face points along −n at the same plane (−d).
-            let shift = if op == BoolOp::Union && crate::ops::narrowing_bores() {
+            let shift = if op == BoolOp::Union {
                 // Pushed into `a`, b's face must have a's material behind it all over and that
                 // deep: over a hole in a's face (a narrowed bore's rim over the other body's
-                // bore) it would fill the hole, through a thin wall it would stick out the far
-                // side. Only checked inside `bore_union`, which then tries its other way; a
-                // general check turns some joins that come out slightly wrong today (a pad
-                // half past an edge) into failures, until such faces can be split first.
+                // bore, a rib standing half over a window) it would fill the hole, through a
+                // thin wall it would stick out the far side (#616). The other retries take
+                // such a join instead.
                 [d2, d2 * 0.25, d2 * 0.0625]
                     .into_iter()
                     .find(|depth| backed(a, b, -*n, -*d, *depth))
                     .ok_or_else(|| KernelError::Failed("pushing a face: part of it lies over a hole or past the edge of the other body".into()))?
-            } else if op == BoolOp::Union {
-                d2
             } else {
                 -d2
             };
@@ -471,9 +468,10 @@ fn backed(a: &Body, b: &Body, m: Vec3, d: f64, depth: f64) -> bool {
     !points.is_empty() && points.iter().all(|p| [0.05, 0.5, 1.0].iter().all(|k| inside.contains(*p + m * (depth * k))))
 }
 
-/// Union of bodies that touch along one identical planar face, back to back (a body joined
-/// with its mirror image): the two faces go and the shells are stitched along their edges.
-/// `None` when no such pair of faces exists.
+/// Union of bodies that touch along identical planar faces, back to back (a body joined with
+/// its mirror image, or the pieces of a body cut apart by a plane, which may meet in several
+/// faces): every such pair of faces goes and the shells are stitched along their edges. `None`
+/// when no such pair of faces exists.
 pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
     use mt::{BoundedCurve, ParametricCurve};
     let size = a.size().max(b.size());
@@ -484,13 +482,18 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
         let (t0, t1) = c.range_tuple();
         from_p3(c.subs((t0 + t1) * 0.5))
     };
-    // Matching faces: same plane, opposite normals, the same edges.
+    // Matching faces: same plane, opposite normals, the same edges. Every pair is glued: a
+    // pair left behind would stay inside the result as a zero-thickness slit (issue #616).
     let (pa, pb) = (planes(a), planes(b));
     let fa_list: Vec<&mt::Face> = a.solid.face_iter().collect();
     let fb_list: Vec<&mt::Face> = b.solid.face_iter().collect();
+    // B edge → the matching A edge; B vertex → the matching A vertex.
+    let mut map: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
+    let mut vmap: HashMap<mt::VertexID, mt::Vertex> = HashMap::new();
+    let (mut glued_a, mut glued_b): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
     for (ia, x) in &pa {
         for (ib, y) in &pb {
-            if x.n.dot(y.n) > -1.0 + 1e-9 || (x.d + y.d).abs() > tol {
+            if glued_a.contains(ia) || glued_b.contains(ib) || x.n.dot(y.n) > -1.0 + 1e-9 || (x.d + y.d).abs() > tol {
                 continue;
             }
             let (Some(fa), Some(fb)) = (fa_list.get(*ia), fb_list.get(*ib)) else { continue };
@@ -499,9 +502,7 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
             if ea.len() != eb.len() {
                 continue;
             }
-            // B edge → the matching A edge.
-            let mut map: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
-            let mut vmap: HashMap<mt::VertexID, mt::Vertex> = HashMap::new();
+            let (mut pair_map, mut pair_vmap) = (Vec::new(), Vec::new());
             let mut ok = true;
             for e in &eb {
                 let ends = (key(from_p3(e.absolute_front().point())), key(from_p3(e.absolute_back().point())));
@@ -515,75 +516,81 @@ pub(crate) fn glue(a: &Body, b: &Body) -> Option<Result<Body>> {
                     break;
                 };
                 let same = key(from_p3(f.absolute_front().point())) == ends.0;
-                map.insert(e.id(), if same { f.absolute_clone() } else { f.absolute_clone().inverse() });
+                pair_map.push((e.id(), if same { f.absolute_clone() } else { f.absolute_clone().inverse() }));
                 let (fa_v, fb_v) = if same {
                     (f.absolute_front().clone(), f.absolute_back().clone())
                 } else {
                     (f.absolute_back().clone(), f.absolute_front().clone())
                 };
-                vmap.insert(e.absolute_front().id(), fa_v);
-                vmap.insert(e.absolute_back().id(), fb_v);
+                pair_vmap.push((e.absolute_front().id(), fa_v));
+                pair_vmap.push((e.absolute_back().id(), fb_v));
             }
             if !ok {
                 continue;
             }
-            return Some(guard("glue", || {
-                let fail = |m: &str| KernelError::Failed(format!("joining touching faces: {m}"));
-                // B's other edges, rebuilt on A's vertices where they meet the seam.
-                let mut edges: HashMap<mt::EdgeID, mt::Edge> = map.clone();
-                for e in b.solid.edge_iter() {
-                    if edges.contains_key(&e.id()) {
-                        continue;
-                    }
-                    let (f0, f1) = (e.absolute_front(), e.absolute_back());
-                    if !vmap.contains_key(&f0.id()) && !vmap.contains_key(&f1.id()) {
-                        edges.insert(e.id(), e.absolute_clone());
-                        continue;
-                    }
-                    let v0 = vmap.get(&f0.id()).cloned().unwrap_or_else(|| f0.clone());
-                    let v1 = vmap.get(&f1.id()).cloned().unwrap_or_else(|| f1.clone());
-                    edges.insert(e.id(), mt::Edge::new(&v0, &v1, e.curve()));
-                }
-                let mut faces: Vec<mt::Face> = fa_list.iter().enumerate().filter(|(i, _)| i != ia).map(|(_, f)| (*f).clone()).collect();
-                // Every face but the two glued is kept; an edge along the seam is an edge of both.
-                let kept = |operand: usize, n: usize, skip: usize| {
-                    (0..n).filter(move |i| *i != skip).map(move |i| record::from_face(operand, i, Change::Kept))
-                };
-                let from: Vec<FaceProv> = kept(0, fa_list.len(), *ia).chain(kept(1, fb_list.len(), *ib)).collect();
-                let mut origins = record::edge_origins(&a.solid, 0);
-                for (old, o) in record::edge_origins(&b.solid, 1) {
-                    if let Some(new) = edges.get(&old) {
-                        origins.entry(new.id()).or_default().extend(o);
-                    }
-                }
-                for (i, f) in fb_list.iter().enumerate() {
-                    if i == *ib {
-                        continue;
-                    }
-                    let wires: Vec<mt::Wire> = f
-                        .absolute_boundaries()
-                        .iter()
-                        .map(|w| {
-                            w.edge_iter()
-                                .filter_map(|e| edges.get(&e.id()).map(|ne| if e.front() == e.absolute_front() { ne.clone() } else { ne.inverse() }))
-                                .collect::<Vec<_>>()
-                                .into()
-                        })
-                        .collect();
-                    let mut nf = mt::Face::try_new(wires, f.surface()).map_err(|e| fail(&e.to_string()))?;
-                    if !f.orientation() {
-                        nf.invert();
-                    }
-                    faces.push(nf);
-                }
-                let solid = Solid::try_new(vec![faces.into()]).map_err(|e| fail(&e.to_string()))?;
-                // Each edge's origins in the solid's edge order.
-                let origins = crate::body::edge_order(solid.face_iter()).0.iter().map(|e| origins.get(&e.id()).cloned()).collect();
-                crate::boolean_record::heal_build(solid, size, &[], Some(from), origins, &record::counts(&[a, b]))
-            }));
+            map.extend(pair_map);
+            vmap.extend(pair_vmap);
+            glued_a.push(*ia);
+            glued_b.push(*ib);
         }
     }
-    None
+    if glued_a.is_empty() {
+        return None;
+    }
+    Some(guard("glue", || {
+        let fail = |m: &str| KernelError::Failed(format!("joining touching faces: {m}"));
+        // B's other edges, rebuilt on A's vertices where they meet a seam.
+        let mut edges: HashMap<mt::EdgeID, mt::Edge> = map.clone();
+        for e in b.solid.edge_iter() {
+            if edges.contains_key(&e.id()) {
+                continue;
+            }
+            let (f0, f1) = (e.absolute_front(), e.absolute_back());
+            if !vmap.contains_key(&f0.id()) && !vmap.contains_key(&f1.id()) {
+                edges.insert(e.id(), e.absolute_clone());
+                continue;
+            }
+            let v0 = vmap.get(&f0.id()).cloned().unwrap_or_else(|| f0.clone());
+            let v1 = vmap.get(&f1.id()).cloned().unwrap_or_else(|| f1.clone());
+            edges.insert(e.id(), mt::Edge::new(&v0, &v1, e.curve()));
+        }
+        let mut faces: Vec<mt::Face> = fa_list.iter().enumerate().filter(|(i, _)| !glued_a.contains(i)).map(|(_, f)| (*f).clone()).collect();
+        // Every face but the glued ones is kept; an edge along a seam is an edge of both.
+        let kept = |operand: usize, n: usize, skip: &[usize]| {
+            (0..n).filter(|i| !skip.contains(i)).map(move |i| record::from_face(operand, i, Change::Kept)).collect::<Vec<_>>()
+        };
+        let from: Vec<FaceProv> = kept(0, fa_list.len(), &glued_a).into_iter().chain(kept(1, fb_list.len(), &glued_b)).collect();
+        let mut origins = record::edge_origins(&a.solid, 0);
+        for (old, o) in record::edge_origins(&b.solid, 1) {
+            if let Some(new) = edges.get(&old) {
+                origins.entry(new.id()).or_default().extend(o);
+            }
+        }
+        for (i, f) in fb_list.iter().enumerate() {
+            if glued_b.contains(&i) {
+                continue;
+            }
+            let wires: Vec<mt::Wire> = f
+                .absolute_boundaries()
+                .iter()
+                .map(|w| {
+                    w.edge_iter()
+                        .filter_map(|e| edges.get(&e.id()).map(|ne| if e.front() == e.absolute_front() { ne.clone() } else { ne.inverse() }))
+                        .collect::<Vec<_>>()
+                        .into()
+                })
+                .collect();
+            let mut nf = mt::Face::try_new(wires, f.surface()).map_err(|e| fail(&e.to_string()))?;
+            if !f.orientation() {
+                nf.invert();
+            }
+            faces.push(nf);
+        }
+        let solid = Solid::try_new(vec![faces.into()]).map_err(|e| fail(&e.to_string()))?;
+        // Each edge's origins in the solid's edge order.
+        let origins = crate::body::edge_order(solid.face_iter()).0.iter().map(|e| origins.get(&e.id()).cloned()).collect();
+        crate::boolean_record::heal_build(solid, size, &[], Some(from), origins, &record::counts(&[a, b]))
+    }))
 }
 
 /// Union of bodies touching back to back where a planar face of one lies wholly inside a

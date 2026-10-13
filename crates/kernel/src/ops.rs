@@ -286,11 +286,6 @@ thread_local! {
     static BORES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Is a union with a narrowed bore running (see [`crate::coplanar::bore_union`])?
-pub(crate) fn narrowing_bores() -> bool {
-    BORES.with(|c| c.get())
-}
-
 /// Boolean of two bodies. The result may be empty (`Ok(None)`) for a cut that removes
 /// everything or an intersection of disjoint bodies. Results are checked against volume bounds
 /// and retried with shifted copies and other tolerances when they fail or look wrong.
@@ -339,6 +334,18 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         BoolOp::Cut => r = r.and_then(|result| result.map(|body| body.with_preserved_boolean_planar_sources(a, b, true)).transpose()),
         BoolOp::Union => r = r.and_then(|result| result.map(|body| body.with_preserved_union_planar_sources(a, b)).transpose()),
         BoolOp::Intersect => {}
+    }
+    // A retry's result is held to what the operation can do at all; one that fails is refused
+    // rather than returned wrong (issue #616).
+    if (!diagnostics.events.is_empty() || diagnostics.truncated)
+        && let Ok(result) = &r
+        && let Err(e) = crate::boolean_guard::check_retry(a, b, op, result.as_ref())
+    {
+        let tried = diagnostics.warning().unwrap_or_default();
+        r = Err(match e {
+            KernelError::Failed(m) => KernelError::Failed(format!("{m} ({})", tried.trim_start_matches("Boolean retry: "))),
+            other => other,
+        });
     }
     if r.is_ok() {
         merge(diagnostics);

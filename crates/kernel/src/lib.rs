@@ -17,6 +17,7 @@ mod blend_corner;
 mod blend_variable;
 mod body;
 mod boolean_diagnostics;
+mod boolean_guard;
 mod boolean_record;
 mod bore_guard;
 mod build;
@@ -36,6 +37,8 @@ mod iges_in;
 mod iges_out;
 #[cfg(test)]
 mod intersection_curve_tests;
+#[cfg(test)]
+mod issue_616_tests;
 mod lip;
 mod loopblend;
 mod measure;
