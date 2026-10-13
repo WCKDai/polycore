@@ -473,6 +473,23 @@ fn faces_in(body: &Body, n: Vec3, d: f64, tol: f64) -> Vec<usize> {
     planes(body).into_iter().filter(|(_, p)| p.n.dot(n) > 1.0 - 1e-9 && (p.d - d).abs() < tol).map(|(i, _)| i).collect()
 }
 
+/// Do faces `i` and `j` of `body` lie on one plane or one cylinder?
+fn same_surface(body: &Body, i: usize, j: usize, tol: f64) -> bool {
+    match (crate::face_surface(body, i), crate::face_surface(body, j)) {
+        (Some(crate::FaceSurface::Plane { normal: n1, point: p1 }), Some(crate::FaceSurface::Plane { normal: n2, point: p2 })) => {
+            n1.dot(n2) > 1.0 - 1e-9 && n1.dot(p2 - p1).abs() < tol
+        }
+        (Some(crate::FaceSurface::Cylinder { .. }), Some(crate::FaceSurface::Cylinder { .. })) => {
+            let c = cylinders(body);
+            match (c.iter().find(|x| x.index == i), c.iter().find(|x| x.index == j)) {
+                (Some(x), Some(y)) => same_cylinder(x, y, tol),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// `body` (with its history `h` over its operand) with its faces in the plane (n, d) split
 /// where the faces of `tool` next to the tool's faces in the opposite plane cross them: the
 /// outline of the tool's contact imprinted on the body's.
@@ -488,7 +505,15 @@ fn imprinted(body: Body, mut h: Option<History>, n: Vec3, d: f64, tool: &Body, t
     beside.sort_unstable();
     beside.dedup();
     let mut body = body;
+    // One split per surface: the halves of a round side lie on one cylinder, and splitting
+    // along it again re-traces the line already there, leaving a sliver (or not) depending
+    // on how the second trace falls.
+    let mut used: Vec<usize> = Vec::new();
     for t in beside {
+        if used.iter().any(|u| same_surface(tool, *u, t, tol)) {
+            continue;
+        }
+        used.push(t);
         let faces = faces_in(&body, n, d, tol);
         if faces.is_empty() {
             break;
