@@ -1,5 +1,6 @@
-//! Surface bodies (open shells) and the operations that turn them into solids: Patch (a planar
-//! face filling a closed loop of edges or a sketch region), Stitch (surfaces sharing edges sewn
+//! Surface bodies (open shells) and the operations that turn them into solids: Patch (a face
+//! filling a closed loop of edges — planar, or B-spline patches for a loop that is not — or a
+//! planar sketch region), Stitch (surfaces sharing edges sewn
 //! into one body, a solid when they close), Trim (a surface cut by a tool, one side kept),
 //! Thicken (a surface offset along its normals into a solid) and copying faces out of a body.
 
@@ -76,13 +77,31 @@ pub(crate) fn edge_near(body: &Body, p: Vec3) -> Option<mt::Edge> {
     best.filter(|(d, _)| *d <= body.size() * 0.05 + 1e-6).map(|(_, e)| e)
 }
 
-/// A planar surface filling a closed loop of a body's edges (each picked by a point on it). Its
-/// history is over `[body]`: the face is new, its edges the body's.
+/// A surface filling a closed loop of a body's edges (each picked by a point on it): one face on
+/// the body's own edges, planar when the loop is certainly planar ([`crate::plane_fit`]), else a
+/// B-spline height field over the loop's plane ([`crate::fill`]; loops that do not bound one are
+/// refused). Its history is over `[body]`: the face is new, its edges the body's own.
 pub fn patch_edges(body: &Body, at: &[Vec3]) -> Result<Body> {
     body.require_brep("patch")?;
     if at.is_empty() || at.len() > 10_000 {
         return Err(KernelError::Invalid("pick the edges of a closed loop".into()));
     }
+    guard("patch", || {
+        let chain = picked_loop(body, at)?;
+        let Some(face) = crate::plane_fit::planar_face(&chain, crate::fill::planarity_tolerance(body))? else {
+            // Not certainly planar: a fitted surface.
+            return crate::fill::fill_loop(body, &chain);
+        };
+        // A new face on the body's own edges.
+        let mut rec = Rebuild::default();
+        rec.made(&face, Vec::new());
+        Ok(rebuilt_body(surface_body(vec![face]), &[&body.solid], &rec))
+    })
+}
+
+/// The edges of `body` picked by points on them, chained into one closed loop (each turned to
+/// run along it). Call it under [`guard`]: sampling an intersection curve can fail in truck.
+pub(crate) fn picked_loop(body: &Body, at: &[Vec3]) -> Result<Vec<mt::Edge>> {
     let mut edges: Vec<mt::Edge> = Vec::new();
     for p in at {
         let e = edge_near(body, *p).ok_or_else(|| KernelError::Invalid(format!("no edge at {p:?}")))?;
@@ -90,34 +109,25 @@ pub fn patch_edges(body: &Body, at: &[Vec3]) -> Result<Body> {
             edges.push(e);
         }
     }
-    guard("patch", || {
-        // Chain the edges into one loop (turning them round as needed).
-        let mut pool = edges;
-        let first = pool.pop().ok_or_else(|| KernelError::Invalid("no edges".into()))?;
-        let start = first.front().id();
-        let mut at_v = first.back().clone();
-        let mut chain = vec![first];
-        while at_v.id() != start {
-            let k = pool
-                .iter()
-                .position(|e| e.front().id() == at_v.id() || e.back().id() == at_v.id())
-                .ok_or_else(|| KernelError::Invalid("the edges do not form a closed loop".into()))?;
-            let e = pool.remove(k);
-            let e = if e.front().id() == at_v.id() { e } else { e.inverse() };
-            at_v = e.back().clone();
-            chain.push(e);
-        }
-        if !pool.is_empty() {
-            return Err(KernelError::Invalid("the edges form more than one loop".into()));
-        }
-        let wire: mt::Wire = chain.into();
-        let face = mt::builder::try_attach_plane(&[wire])
-            .map_err(|_| KernelError::Invalid("not supported yet: patching a loop that is not planar".into()))?;
-        // A new face on the body's own edges.
-        let mut rec = Rebuild::default();
-        rec.made(&face, Vec::new());
-        Ok(rebuilt_body(surface_body(vec![face]), &[&body.solid], &rec))
-    })
+    let mut pool = edges;
+    let first = pool.pop().ok_or_else(|| KernelError::Invalid("no edges".into()))?;
+    let start = first.front().id();
+    let mut at_v = first.back().clone();
+    let mut chain = vec![first];
+    while at_v.id() != start {
+        let k = pool
+            .iter()
+            .position(|e| e.front().id() == at_v.id() || e.back().id() == at_v.id())
+            .ok_or_else(|| KernelError::Invalid("the edges do not form a closed loop".into()))?;
+        let e = pool.remove(k);
+        let e = if e.front().id() == at_v.id() { e } else { e.inverse() };
+        at_v = e.back().clone();
+        chain.push(e);
+    }
+    if !pool.is_empty() {
+        return Err(KernelError::Invalid("the edges form more than one loop".into()));
+    }
+    Ok(chain)
 }
 
 /// Faces of a body copied out as a surface body (faces picked by points on them). Its history is
