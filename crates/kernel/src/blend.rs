@@ -823,6 +823,11 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
     // that earlier blends left between selected edges, so corners round off), a single edge,
     // or a chain of curved edges.
     let mut todo: Vec<Vec3> = edges.to_vec();
+    // Edges refused since the last blend that could have changed them: (pick, the box around the
+    // edge, the refusal). A blend only changes the body near the edges it rounds, so an edge
+    // refused away from every later blend would be refused the same way again: it is not tried
+    // again (a refusal costs a rolling-ball attempt, seconds each on a long curved edge).
+    let mut refused: Vec<(Vec3, (Vec3, Vec3), KernelError)> = Vec::new();
     for _ in 0..(2 * edges.len() + 4) {
         if todo.is_empty() {
             return Ok(cur);
@@ -835,13 +840,21 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
             && let Some(Ok((res, rec))) = crate::loopblend::loop_blend(&solid, &ids, size, r, shape == Shape::Round)
             && let Ok(b) = guard(what, || Ok(res)).and_then(|res| record::rebuilt(res, &[&solid], &rec))
         {
+            let near = edges_box(&solid, &ids, r + tol);
+            refused.retain(|(_, b, _)| !boxes_meet(*b, near));
             cur = record::after(b, &cur, &counts);
             todo.retain(|p| !covered.iter().any(|q| q.dist(*p) < 1e-12));
             continue;
         }
         let mut first_err: Option<KernelError> = None;
-        let mut done: Option<(Body, Vec<usize>)> = None;
+        let mut done: Option<(Body, Vec<usize>, (Vec3, Vec3))> = None;
         for (j, p) in todo.iter().enumerate() {
+            if let Some((_, _, e)) = refused.iter().find(|(q, _, _)| q.dist(*p) < 1e-12) {
+                if first_err.is_none() || (matches!(e, KernelError::TooLarge(_)) && !matches!(first_err, Some(KernelError::TooLarge(_)))) {
+                    first_err = Some(e.clone());
+                }
+                continue;
+            }
             let Some((idx, dist)) = cur.nearest_edge(*p, tol)? else { return Err(KernelError::Invalid("the body has no edges".into())) };
             if dist > size * 0.05 + 1e-3 {
                 return Err(KernelError::Invalid(format!("no edge near {:?}", [p.x, p.y, p.z])));
@@ -861,6 +874,8 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
                     })
                     .map(|(i, _)| i)
                     .collect();
+                #[cfg(test)]
+                ROLLS.with(|n| n.set(n.get() + 1));
                 guard(what, || crate::curveblend::curve_blend(&solid, ids, size, r, shape == Shape::Round))
                     .map(|o| (o, if on_chain.is_empty() { vec![j] } else { on_chain }))
             };
@@ -888,22 +903,26 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
                     },
                 },
             };
+            // What this attempt could change: the edge and its smooth chain, with room for the blend.
+            let reach = edges_box(&solid, chain.as_deref().unwrap_or(&[edge.id()]), r + tol);
             match attempt.and_then(|((o, rec), js)| record::rebuilt(o, &[&solid], &rec).map(|b| (b, js))) {
-                Ok(x) => {
-                    done = Some(x);
+                Ok((b, js)) => {
+                    done = Some((b, js, reach));
                     break;
                 }
                 // Reported: the first refusal, unless a later one is a size a smaller radius may
                 // fit (the others may be refused only until that edge is blended).
                 Err(e) => {
                     if first_err.is_none() || (matches!(e, KernelError::TooLarge(_)) && !matches!(first_err, Some(KernelError::TooLarge(_)))) {
-                        first_err = Some(e);
+                        first_err = Some(e.clone());
                     }
+                    refused.push((*p, reach, e));
                 }
             }
         }
         match done {
-            Some((b, js)) => {
+            Some((b, js, near)) => {
+                refused.retain(|(_, b2, _)| !boxes_meet(*b2, near));
                 cur = record::after(b, &cur, &counts);
                 let mut k = 0;
                 todo.retain(|_| {
@@ -916,6 +935,36 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
         }
     }
     if todo.is_empty() { Ok(cur) } else { Err(unsupported("blending these edges together")) }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Rolling-ball attempts made by [`blend`] on this thread (tests count them).
+    pub(crate) static ROLLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The box around these edges of `solid` (their ends and middles), grown by `margin`.
+fn edges_box(solid: &Solid, ids: &[mt::EdgeID], margin: f64) -> (Vec3, Vec3) {
+    use mt::{BoundedCurve, ParametricCurve};
+    let mut lo = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut hi = -lo;
+    for e in Body::unique_edges(solid).iter().filter(|e| ids.contains(&e.id())) {
+        let c = e.curve();
+        let (t0, t1) = c.range_tuple();
+        for k in 0..=8 {
+            let q = from_p3(c.subs(t0 + (t1 - t0) * f64::from(k) / 8.0));
+            lo = lo.min(q);
+            hi = hi.max(q);
+        }
+    }
+    let m = Vec3::new(margin, margin, margin);
+    (lo - m, hi + m)
+}
+
+/// Whether two boxes overlap (an empty box meets every box: nothing is known about it).
+fn boxes_meet(a: (Vec3, Vec3), b: (Vec3, Vec3)) -> bool {
+    let empty = |x: (Vec3, Vec3)| !(x.0.x <= x.1.x && x.0.y <= x.1.y && x.0.z <= x.1.z);
+    empty(a) || empty(b) || (a.0.x <= b.1.x && b.0.x <= a.1.x && a.0.y <= b.1.y && b.0.y <= a.1.y && a.0.z <= b.1.z && b.0.z <= a.1.z)
 }
 
 /// Neighbouring edges along one boundary loop of a planar face that between them hold at least
