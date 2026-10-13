@@ -2249,6 +2249,33 @@ fn shell_open_beside_a_round_as_large_as_the_wall_is_refused() {
     assert!(shell(&f, &bottom, 2.0).unwrap().validity().is_empty());
 }
 
+#[test]
+fn loft_joined_onto_a_box_top_is_one_shell() {
+    // #396: a loft from a Ø12 circle on the box top (z = 20) to a hexagon at z = 35. The union
+    // returned both shells side by side, touching on the disc, which an STL shows as two parts.
+    let bx = box_solid(Vec3::new(-20.0, -15.0, 0.0), Vec3::new(20.0, 15.0, 20.0)).unwrap();
+    let hex: Vec<Vec2> = (0..6).map(|k| Vec2::new(4.0 * (PI / 3.0 * k as f64).cos(), 4.0 * (PI / 3.0 * k as f64).sin())).collect();
+    let loft_at = |x: f64| {
+        let hex: Vec<Vec2> = hex.iter().map(|p| *p + Vec2::new(x, 0.0)).collect();
+        loft(&[(Plane::XY.offset(20.0), Loop2::circle(Vec2::new(x, 0.0), 6.0)), (Plane::XY.offset(35.0), Loop2::polygon(&hex))]).unwrap()
+    };
+    let l = loft_at(0.0);
+    let u = boolean(&bx, &l, BoolOp::Union).unwrap().unwrap();
+    assert_eq!((u.shell_count(), u.face_count()), (1, 6 + 8 - 1), "the loft's bottom disc goes");
+    assert!(u.validity().is_empty(), "{:?}", u.validity());
+    let (v, vl) = (measure(&u).unwrap().volume, measure(&l).unwrap().volume);
+    assert!(rel(v, 24000.0 + vl) < 1e-5, "{v} vs {}", 24000.0 + vl);
+    // Either order of the operands.
+    let w = boolean(&l, &bx, BoolOp::Union).unwrap().unwrap();
+    assert_eq!(w.shell_count(), 1);
+    assert!(rel(measure(&w).unwrap().volume, 24000.0 + vl) < 1e-5);
+    // Overhanging the box edge (x = 20) the disc is not inside the top face: whatever the join
+    // does, it never returns touching shells as one body.
+    if let Ok(Some(r)) = boolean(&bx, &loft_at(17.0), BoolOp::Union) {
+        assert!(r.shell_count() == 1 || r.union_lumps().is_ok(), "{} touching shells", r.shell_count());
+    }
+}
+
 /// A disc whose circular edge is rounded smaller than the wall (#319): moved in by the
 /// thickness the round collapses to a sharp edge, where the floor meets the side along a
 /// circle (two arcs with the same ends), not a straight line.

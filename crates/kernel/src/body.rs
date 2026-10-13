@@ -1159,6 +1159,12 @@ impl Body {
         self.lumps_with_clearance(4.0 * (self.size() * 1e-3).max(1e-3))
     }
 
+    /// A union's pieces must be clear of each other by the contact distance of [`Body::meets`];
+    /// closer shells are touching material that was never fused (#396).
+    pub(crate) fn union_lumps(&self) -> Result<Vec<Body>> {
+        self.lumps_with_clearance(2.0 * (self.size() * 1e-4).max(1e-6))
+    }
+
     fn lumps_with_clearance(&self, clearance: f64) -> Result<Vec<Body>> {
         if self.mesh.is_some() || self.solid.boundaries().len() < 2 {
             return Ok(vec![self.clone()]);
