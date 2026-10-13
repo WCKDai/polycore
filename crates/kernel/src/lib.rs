@@ -97,7 +97,7 @@ pub use offset::with_same_surface;
 pub use ops::{BoolOp, boolean, can_join_touching_faces, split_by_plane, transform, transform_matrix, union_apart};
 pub use polybool::{faceted_boolean, planar_boolean};
 pub use polyhedron::{HalfSpace, convex_polyhedron, draft, offset_faces, shell};
-pub use prism::{extrude_planar_regions, planar_regions_boolean};
+pub use prism::{PLANAR_FIT_TOL, extrude_planar_regions, planar_regions_boolean};
 pub use prism_measure::certified_prism_equivalent;
 pub use sew::{EdgeSpec, FaceSpec, SurfSpec, sew};
 pub use splitface::{SplitTool, split_body, split_faces, split_faces_with_map};
