@@ -473,28 +473,43 @@ fn faces_in(body: &Body, n: Vec3, d: f64, tol: f64) -> Vec<usize> {
     planes(body).into_iter().filter(|(_, p)| p.n.dot(n) > 1.0 - 1e-9 && (p.d - d).abs() < tol).map(|(i, _)| i).collect()
 }
 
-/// Do faces `i` and `j` of `body` lie on one plane or one cylinder?
-fn same_surface(body: &Body, i: usize, j: usize, tol: f64) -> bool {
-    match (crate::face_surface(body, i), crate::face_surface(body, j)) {
-        (Some(crate::FaceSurface::Plane { normal: n1, point: p1 }), Some(crate::FaceSurface::Plane { normal: n2, point: p2 })) => {
-            n1.dot(n2) > 1.0 - 1e-9 && n1.dot(p2 - p1).abs() < tol
-        }
-        (Some(crate::FaceSurface::Cylinder { .. }), Some(crate::FaceSurface::Cylinder { .. })) => {
-            let c = cylinders(body);
-            match (c.iter().find(|x| x.index == i), c.iter().find(|x| x.index == j)) {
-                (Some(x), Some(y)) => same_cylinder(x, y, tol),
-                _ => false,
-            }
+/// Do two face surfaces lie on one plane or one cylinder?
+fn same_surface(x: &Option<crate::FaceSurface>, y: &Option<crate::FaceSurface>, tol: f64) -> bool {
+    use crate::FaceSurface::{Cylinder, Plane};
+    match (x, y) {
+        (Some(Plane { normal: n1, point: p1 }), Some(Plane { normal: n2, point: p2 })) => n1.dot(*n2) > 1.0 - 1e-9 && n1.dot(*p2 - *p1).abs() < tol,
+        (Some(Cylinder { origin: o1, axis: a1, radius: r1 }), Some(Cylinder { origin: o2, axis: a2, radius: r2 })) => {
+            let off = *o2 - *o1;
+            a1.dot(*a2).abs() > 1.0 - 1e-9 && (r1 - r2).abs() < tol && (off - *a1 * off.dot(*a1)).len() < tol
         }
         _ => false,
     }
 }
 
+/// The box around faces `faces` of `body` (by their boundaries), grown by `gap`.
+fn faces_box(body: &Body, faces: &[usize], gap: f64) -> Option<Aabb3> {
+    let fs: Vec<&mt::Face> = body.solid.face_iter().collect();
+    let mut bb = Aabb3::EMPTY;
+    for f in faces {
+        let b = face_box(fs.get(*f)?, gap)?;
+        bb.add(b.min);
+        bb.add(b.max);
+    }
+    (!bb.is_empty()).then(|| Aabb3 { min: bb.min - Vec3::new(gap, gap, gap), max: bb.max + Vec3::new(gap, gap, gap) })
+}
+
 /// `body` (with its history `h` over its operand) with its faces in the plane (n, d) split
 /// where the faces of `tool` next to the tool's faces in the opposite plane cross them: the
-/// outline of the tool's contact imprinted on the body's.
+/// outline of the tool's contact imprinted on the body's. Only the faces near the contact are
+/// split, and each surface once.
 fn imprinted(body: Body, mut h: Option<History>, n: Vec3, d: f64, tool: &Body, tol: f64) -> Result<(Body, Option<History>)> {
     let contact = faces_in(tool, -n, -d, tol);
+    let gap = tol * 10.0;
+    let Some(region) = faces_box(tool, &contact, gap) else { return Ok((body, h)) };
+    let near = |b: &Body, faces: Vec<usize>| -> Vec<usize> {
+        let fs: Vec<&mt::Face> = b.solid.face_iter().collect();
+        faces.into_iter().filter(|f| fs.get(*f).and_then(|x| face_box(x, gap)).is_some_and(|bx| !boxes_separate(bx, region, gap))).collect()
+    };
     let bounds = crate::history::edge_faces(&tool.solid);
     let mut beside: Vec<usize> = bounds
         .iter()
@@ -508,25 +523,19 @@ fn imprinted(body: Body, mut h: Option<History>, n: Vec3, d: f64, tool: &Body, t
     // One split per surface: the halves of a round side lie on one cylinder, and splitting
     // along it again re-traces the line already there, leaving a sliver (or not) depending
     // on how the second trace falls.
-    let mut used: Vec<usize> = Vec::new();
+    let mut used: Vec<Option<crate::FaceSurface>> = Vec::new();
     for t in beside {
-        if used.iter().any(|u| same_surface(tool, *u, t, tol)) {
+        let surface = crate::face_surface(tool, t);
+        if used.iter().any(|u| same_surface(u, &surface, tol)) {
             continue;
         }
-        used.push(t);
-        let faces = faces_in(&body, n, d, tol);
+        used.push(surface);
+        let faces = near(&body, faces_in(&body, n, d, tol));
         if faces.is_empty() {
             break;
         }
-        // Faces the tool's face does not cross stay as they are.
-        let crossed: Vec<usize> = faces
-            .into_iter()
-            .filter(|f| crate::splitface::split_any(&body, &[*f], &crate::SplitTool::Face { body: tool, face: t }).is_ok())
-            .collect();
-        if crossed.is_empty() {
-            continue;
-        }
-        let (split, _) = crate::splitface::split_any(&body, &crossed, &crate::SplitTool::Face { body: tool, face: t })?;
+        // Faces the tool's face does not cross stay as they are; none crossed is an error.
+        let Ok((split, _)) = crate::splitface::split_any(&body, &faces, &crate::SplitTool::Face { body: tool, face: t }) else { continue };
         h = crate::boolean_record::through(&split, 0, h.as_ref());
         body = split;
     }
