@@ -464,14 +464,20 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Prisms along one direction (plates with holes): exact, in 2D (so only the volume
     // bounds are checked).
     if let Some(Ok(r)) = crate::prism::prism_boolean(a, b, op) {
-        // Slab-by-slab prism joins sew a closed solid, but leave cap and wall
-        // pieces along slab boundaries. Merge those coplanar faces just as the
-        // general B-rep boolean does, retaining intentional Split Face lines.
+        // Slab-by-slab prism booleans sew a closed solid, but leave cap and wall pieces
+        // along slab boundaries: a cut along Z through a box whose side wall already has a
+        // port in it splits that wall into strips at the port's top and bottom, though the
+        // cut never touches it. Merge those coplanar faces for every operation, just as the
+        // general B-rep boolean does, retaining intentional Split Face lines. Authored
+        // boundaries (painted faces, regularization protection) keep their pieces.
         let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
+        let authored = |x: &Body| x.regularization_protected || x.paint().is_some_and(|p| !p.faces.is_empty());
         let r = if op == BoolOp::Union {
             r.map(|body| guard("heal prism boolean", || recorded::heal_body(&body, (*body.solid).clone(), size, &keep, &counts)).unwrap_or(body))
-        } else {
+        } else if authored(a) || authored(b) {
             r
+        } else {
+            r.map(|body| guard("heal prism boolean", || recorded::heal_prism_result(&body, size, &keep, &counts)).unwrap_or(body))
         };
         match &r {
             Some(body) => {

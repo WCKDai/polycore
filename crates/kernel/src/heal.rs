@@ -476,7 +476,7 @@ fn planar_surfaces(shell: &mt::Shell, tol: f64) -> Option<mt::Shell> {
 /// Heal a solid; returns the input unchanged when nothing applies or healing fails.
 #[cfg(test)]
 pub fn heal(solid: Solid, size: f64) -> Solid {
-    healed(solid, size, &[], false).0
+    healed(solid, size, &[], false, false).0
 }
 
 /// What healing made each face and edge of its result from.
@@ -535,14 +535,21 @@ impl HealMap {
 /// along lines they were split along on purpose (`keep`), with what each face and edge of the
 /// result was made from (`None` when that could not be followed).
 pub(crate) fn heal_traced(solid: Solid, size: f64, keep: &[Vec<Vec3>]) -> (Solid, Option<HealMap>) {
-    healed(solid, size, keep, true)
+    healed(solid, size, keep, true, false)
+}
+
+/// [`heal_traced`] that only merges coplanar neighbouring faces, leaving every edge, curve and
+/// surface as it is: for results whose geometry is already exact (a prism boolean's), where
+/// joining edges would change more than the faces split in pieces.
+pub(crate) fn merge_faces_traced(solid: Solid, size: f64, keep: &[Vec<Vec3>]) -> (Solid, Option<HealMap>) {
+    healed(solid, size, keep, true, true)
 }
 
 /// The healed solid, and what it was made from when `traced`.
-fn healed(solid: Solid, size: f64, keep: &[Vec<Vec3>], traced: bool) -> (Solid, Option<HealMap>) {
+fn healed(solid: Solid, size: f64, keep: &[Vec<Vec3>], traced: bool, faces_only: bool) -> (Solid, Option<HealMap>) {
     // Edges a boolean made are intersection curves, which panic where they no longer
     // evaluate; the solid then stays as it is.
-    match crate::guard("heal", || Ok(heal_shells(&solid, size, keep, traced))) {
+    match crate::guard("heal", || Ok(heal_shells(&solid, size, keep, traced, faces_only))) {
         Ok(Some((healed, map))) => (healed, map),
         _ => {
             let map = if traced { crate::guard("heal map", || Ok(HealMap::identity(&solid))).ok() } else { None };
@@ -588,7 +595,7 @@ impl Trace {
     }
 }
 
-fn heal_shells(solid: &Solid, size: f64, keep: &[Vec<Vec3>], traced: bool) -> Option<(Solid, Option<HealMap>)> {
+fn heal_shells(solid: &Solid, size: f64, keep: &[Vec<Vec3>], traced: bool, faces_only: bool) -> Option<(Solid, Option<HealMap>)> {
     let tol = (size * 1e-7).max(1e-9);
     let mut shells = Vec::new();
     let mut changed = false;
@@ -603,11 +610,11 @@ fn heal_shells(solid: &Solid, size: f64, keep: &[Vec<Vec3>], traced: bool) -> Op
         let mut from: Vec<Vec<usize>> = (first..first + count).map(|i| vec![i]).collect();
         first += count;
         // Faces come out in place, one for one, except where coplanar ones merge.
-        if let Some(m) = planar_surfaces(&cur, (size * 1e-7).max(1e-9)) {
+        if !faces_only && let Some(m) = planar_surfaces(&cur, (size * 1e-7).max(1e-9)) {
             cur = m;
             changed = true;
         }
-        if let Some(m) = exact_edges(&cur, (size * 1e-5).max(1e-7), &mut trace) {
+        if !faces_only && let Some(m) = exact_edges(&cur, (size * 1e-5).max(1e-7), &mut trace) {
             cur = m;
             changed = true;
         }
@@ -616,7 +623,7 @@ fn heal_shells(solid: &Solid, size: f64, keep: &[Vec<Vec3>], traced: bool) -> Op
             from = groups.iter().map(|g| g.iter().filter_map(|i| from.get(*i)).flatten().copied().collect()).collect();
             changed = true;
         }
-        if let Some(m) = merge_collinear(&cur, &mut trace) {
+        if !faces_only && let Some(m) = merge_collinear(&cur, &mut trace) {
             cur = m;
             changed = true;
         }

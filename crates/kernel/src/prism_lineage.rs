@@ -235,9 +235,10 @@ impl<'a> Context<'a> {
 
     /// The origins of the edge between the wall over a segment tagged `t` and a cap lying on the
     /// operand faces `cap`: the operand's edge between the wall and its own cap there (the very
-    /// edge the segment was read off, or the one it runs along where its slab ends, when that is
-    /// one), else where the wall meets the cap (all of the faces it lies on).
-    fn cap_edge(&self, t: Tag, cap: &BTreeSet<FaceOrigin>) -> Option<Vec<EdgeOrigin>> {
+    /// edge the segment was read off, or the one it runs along where its slab ends: the one
+    /// running through `at`, a point of the edge, where the wall meets its caps along several),
+    /// else where the wall meets the cap (all of the faces it lies on).
+    fn cap_edge(&self, t: Tag, cap: &BTreeSet<FaceOrigin>, at: Vec3) -> Option<Vec<EdgeOrigin>> {
         let (x, w) = (t.operand, t.wall?);
         let own: Vec<usize> =
             cap.iter().filter_map(|o| if let Face { operand, face } = *o { (operand == x).then_some(face) } else { None }).collect();
@@ -250,6 +251,40 @@ impl<'a> Context<'a> {
         match along.as_slice() {
             [e] => Some(vec![EdgeOrigin::Edge { operand: x, edge: *e }]),
             [] => Some(vec![EdgeOrigin::meet(Self::wall(t)?, Side::new(cap.iter().copied())?)]),
+            // One wall with openings meets its caps along several edges (a side wall with ports
+            // cut through it meets the ports' floors at each port): the one this edge lies on,
+            // else (a new opening beside them) where the wall meets the cap.
+            many => match self.edge_through(x, many, at)? {
+                Some(edge) => Some(vec![EdgeOrigin::Edge { operand: x, edge }]),
+                None => Some(vec![EdgeOrigin::meet(Self::wall(t)?, Side::new(cap.iter().copied())?)]),
+            },
+        }
+    }
+
+    /// Of the operand's edges `edges`, the one the point `at` lies on (`Some(None)` when none
+    /// does; `None` when several do).
+    fn edge_through(&self, operand: usize, edges: &[usize], at: Vec3) -> Option<Option<usize>> {
+        if edges.len() > 4096 {
+            return None;
+        }
+        let body = self.operands.get(operand)?;
+        let order = crate::body::edge_order(body.solid.face_iter()).0;
+        let mut on = edges.iter().filter(|e| {
+            order.get(**e).is_some_and(|edge| {
+                use mt::{BoundedCurve, ParametricCurve};
+                let c = edge.curve();
+                let (t0, t1) = c.range_tuple();
+                // The edge as a fine polyline: a line exactly, an arc within its chords' sag.
+                let n = if matches!(c, mt::Curve::Line(_)) { 1 } else { 64 };
+                let pts: Vec<Vec3> = (0..=n).map(|k| from_p3(c.subs(t0 + (t1 - t0) * k as f64 / n as f64))).collect();
+                let length: f64 = pts.windows(2).map(|w| w[0].dist(w[1])).sum();
+                let near = self.tol * 10.0 + if n == 1 { 0.0 } else { length * 2e-3 };
+                pts.windows(2).any(|w| at.dist_to_segment(w[0], w[1]) <= near)
+            })
+        });
+        match (on.next(), on.next()) {
+            (Some(e), None) => Some(Some(*e)),
+            (None, _) => Some(None),
             _ => None,
         }
     }
@@ -412,7 +447,7 @@ impl<'a> Context<'a> {
             let o = match (kinds.get(*f)?, kinds.get(*g)?) {
                 (Kind::Wall(segment), Kind::Cap(end)) | (Kind::Cap(end), Kind::Wall(segment)) => {
                     let layer = if *end == 0 { 0 } else { layers.len() - 1 };
-                    self.cap_edge(tag(layer, *segment)?, tops.get(*end)?)?
+                    self.cap_edge(tag(layer, *segment)?, tops.get(*end)?, crate::heal::edge_points(e).get(2).copied()?)?
                 }
                 (Kind::Wall(..), Kind::Wall(..)) => {
                     let (s, next, split) = *[e.absolute_front().id(), e.absolute_back().id()].iter().find_map(|v| junctions.get(v))?;
@@ -468,9 +503,10 @@ impl<'a> Context<'a> {
             let (front, back) = (from_p3(e.absolute_front().point()), from_p3(e.absolute_back().point()));
             let (h1, h2) = (self.plane.height(front), self.plane.height(back));
             let (lo, hi) = (h1.min(h2), h1.max(h2));
+            let middle = || crate::heal::edge_points(e).get(2).copied();
             let o = match (x, y) {
-                (Spec::Wall { .. }, Spec::Cap { .. }) => self.cap_edge(x.end(lo, self.tol)?.tag, cap_of.get(j)?.as_ref()?)?,
-                (Spec::Cap { .. }, Spec::Wall { .. }) => self.cap_edge(y.end(lo, self.tol)?.tag, cap_of.get(i)?.as_ref()?)?,
+                (Spec::Wall { .. }, Spec::Cap { .. }) => self.cap_edge(x.end(lo, self.tol)?.tag, cap_of.get(j)?.as_ref()?, middle()?)?,
+                (Spec::Cap { .. }, Spec::Wall { .. }) => self.cap_edge(y.end(lo, self.tol)?.tag, cap_of.get(i)?.as_ref()?, middle()?)?,
                 (Spec::Wall { .. }, Spec::Wall { .. }) if hi - lo <= self.tol => {
                     // One over the other at a level: the lower first.
                     let (below, above) = match (x.top(lo, self.tol), y.bottom(lo, self.tol)) {

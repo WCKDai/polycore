@@ -74,6 +74,8 @@ mod sweep_path;
 mod thread_tests;
 mod topo;
 mod tspline;
+#[cfg(test)]
+mod untouched_faces_tests;
 
 pub use blend::{ChamferSide, chamfer, chamfer_sides, fillet, fillet_each, fillet_max, fillet_max_each};
 pub use blend_corner::fillet_radii;
