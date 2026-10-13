@@ -8,6 +8,8 @@ use std::sync::Arc;
 mod adapter;
 mod binary;
 mod metadata;
+mod preview;
+pub use preview::native_preview_mesh;
 
 // 01/02 were development-only prototypes; independent metadata records start at 03.
 const MAGIC: &[u8; 8] = b"SCBREP03";

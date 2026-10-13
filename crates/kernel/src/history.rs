@@ -13,7 +13,7 @@ use crate::body::{Body, FaceSource, Solid};
 use crate::{KernelError, Result};
 
 /// Where a result face came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FaceOrigin {
     /// A face of input `operand` (its index in the operand's face order).
     Face { operand: usize, face: usize },
@@ -28,7 +28,7 @@ pub enum FaceOrigin {
 }
 
 /// How a result face relates to its origins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Change {
     /// The same face as its origin (same region).
     Kept,
@@ -42,7 +42,7 @@ pub enum Change {
     Generated,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FaceProv {
     pub origins: Vec<FaceOrigin>,
     pub change: Change,
@@ -51,7 +51,7 @@ pub struct FaceProv {
 /// One side of a meeting: the origins of the face on that side of the edge. One origin, or
 /// several where that face was made from several (a merged face) and the edge lies along it
 /// as a whole. Never empty; sorted, without repeats, so equal sides compare equal.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Side(Vec<FaceOrigin>);
 
 impl Side {
@@ -99,7 +99,7 @@ impl From<FaceOrigin> for Side {
 }
 
 /// Where a result edge came from.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EdgeOrigin {
     /// (Part of) edge `edge` of input `operand`.
     Edge { operand: usize, edge: usize },
@@ -110,14 +110,14 @@ pub enum EdgeOrigin {
 
 /// A result edge: the result faces it separates and what it came from (empty when it is new
 /// and lies between faces new to the operation).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EdgeProv {
     pub faces: Vec<usize>,
     pub origins: Vec<EdgeOrigin>,
 }
 
 /// History of an operation's result: one entry per face and per edge, in the result's orders.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct History {
     /// How many operands the operation had.
     pub operands: usize,

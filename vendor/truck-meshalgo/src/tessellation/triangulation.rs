@@ -483,11 +483,18 @@ fn loop_orientation(curve: &[Point2]) -> bool {
 }
 
 impl PolyBoundary {
-    fn new(
-        pieces: Vec<PolyBoundaryPiece>,
-        surface: &impl PreMeshableSurface,
-        tol: Deflection,
-    ) -> Self {
+    fn new(pieces: Vec<PolyBoundaryPiece>, surface: &impl PreMeshableSurface, tol: Deflection) -> Self {
+        Self::with_steps(pieces, surface, tol, None)
+    }
+    // SolidCraft: only the disposable preview supplies fixed seam subdivisions.
+    fn with_steps<S: PreMeshableSurface>(pieces: Vec<PolyBoundaryPiece>, surface: &S, tol: Deflection, steps: Option<usize>) -> Self {
+        let polyline_on_surface = |surface: &S, p: Point2, q: Point2, tol| {
+            if let Some(n) = steps {
+                (0..=n).map(|i| p + (q - p) * (i as f64 / n as f64)).collect()
+            } else {
+                polyline_on_surface(surface, p, q, tol)
+            }
+        };
         let (mut closed, mut open) = (Vec::new(), Vec::new());
         pieces.into_iter().for_each(|PolyBoundaryPiece(mut vec)| {
             match vec[0].distance(vec[vec.len() - 1]) < 1.0e-3 {
@@ -682,18 +689,42 @@ fn spade_round(x: f64) -> f64 {
 }
 
 /// Tessellates one surface trimmed by polyline.
-fn trimming_tessellation<S>(
-    surface: &S,
-    polyboundary: &PolyBoundary,
-    tol: Deflection,
-    cap: usize,
-) -> PolygonMesh
-where
-    S: PreMeshableSurface,
-{
+fn trimming_tessellation<S>(surface: &S, polyboundary: &PolyBoundary, tol: Deflection, cap: usize) -> PolygonMesh
+where S: PreMeshableSurface {
+    trimming_with_steps(surface, polyboundary, tol, cap, None)
+}
+
+/// Fixed-size SolidCraft preview path; regular tessellation retains its adaptive policy.
+pub(super) fn preview_face<S: RobustMeshableSurface>(surface: &S, loops: &[Vec<Point3>], steps: usize) -> Option<PolygonMesh> {
+    if !(1..=16).contains(&steps) || loops.is_empty()
+        || loops.iter().any(|w| w.len() < 3)
+        || loops.iter().map(Vec::len).sum::<usize>() > 4096 {
+        return None;
+    }
+    let search = |surface: &S, point, hint| {
+        surface.search_parameter(point, hint, 16)
+            .or_else(|| surface.search_parameter(point, None, 16))
+            .or_else(|| surface.search_nearest_parameter(point, hint, 16).map(|uv| sane(surface, point, uv)))
+            .or_else(|| surface.search_nearest_parameter(point, None, 16).map(|uv| sane(surface, point, uv)))
+    };
+    let pieces = loops.iter().map(|w| {
+        PolyBoundaryPiece::try_new(surface, std::iter::once(PolylineCurve(w.clone())), search)
+    }).collect::<Option<Vec<_>>>()?;
+    let boundary = PolyBoundary::with_steps(pieces, surface, Deflection::chord(1e-3), Some(steps));
+    // Projection can duplicate points at singularities; periodic seams add at most
+    // eight fixed polylines. Reject non-finite parameters before spade sees them.
+    if boundary.0.iter().map(Vec::len).sum::<usize>() > 8192 + 8 * (steps + 1)
+        || boundary.0.iter().flatten().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
+        return None;
+    }
+    Some(trimming_with_steps(surface, &boundary, Deflection::chord(1e-3), (steps + 1).pow(2), Some(steps)))
+}
+
+// SolidCraft: the normal entry point supplies None, preserving adaptive meshing.
+fn trimming_with_steps<S: PreMeshableSurface>(surface: &S, polyboundary: &PolyBoundary, tol: Deflection, cap: usize, steps: Option<usize>) -> PolygonMesh {
     let mut triangulation = Cdt::new();
     polyboundary.insert_to(&mut triangulation);
-    insert_surface(&mut triangulation, surface, polyboundary, tol, cap);
+    insert_surface(&mut triangulation, surface, polyboundary, tol, cap, steps);
     let mut mesh = triangulation_into_polymesh(
         triangulation.vertices(),
         triangulation.inner_faces(),
@@ -711,14 +742,21 @@ fn insert_surface(
     polyline: &PolyBoundary,
     tol: Deflection,
     cap: usize,
+    steps: Option<usize>,
 ) {
     let bdb: BoundingBox<Point2> = polyline.0.iter().flatten().collect();
     let range = ((bdb.min()[0], bdb.max()[0]), (bdb.min()[1], bdb.max()[1]));
     if !(range.0 .0.is_finite() && range.0 .1.is_finite() && range.1 .0.is_finite() && range.1 .1.is_finite()) {
         return;
     }
-    let (udiv, vdiv) = bounded_surface_division(&surface, range, tol, cap);
-    let (udiv, vdiv) = balanced_grid(&surface, udiv, vdiv, cap);
+    // SolidCraft: fixed preview grids skip both adaptive division and balancing.
+    let (udiv, vdiv) = if let Some(n) = steps {
+        let division = |(a, b): (f64, f64)| (0..=n).map(|i| a * (1. - i as f64 / n as f64) + b * (i as f64 / n as f64)).collect();
+        (division(range.0), division(range.1))
+    } else {
+        let (u, v) = bounded_surface_division(&surface, range, tol, cap);
+        balanced_grid(&surface, u, v, cap)
+    };
     let insert_res: Vec<Vec<Option<_>>> = udiv
         .into_iter()
         .map(|u| {

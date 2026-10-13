@@ -18,6 +18,13 @@ mod parallelizable {
 
 pub use parallelizable::*;
 
+/// SolidCraft: a disposable preview of a face from already sampled boundary loops.
+/// Caps input points and uses a fixed parameter grid, including periodic seams.
+/// This is approximate display, never an accuracy-controlled modelling mesh.
+pub fn preview_face<S: RobustMeshableSurface>(surface: &S, loops: &[Vec<Point3>], steps: usize) -> Option<PolygonMesh> {
+    triangulation::preview_face(surface, loops, steps)
+}
+
 /// Gathered the traits used in tessellation.
 pub trait PolylineableCurve:
     ParametricCurve3D + BoundedCurve + ParameterDivision1D<Point = Point3> + Parallelizable {
