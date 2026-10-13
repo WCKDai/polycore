@@ -186,6 +186,67 @@ pub fn copy_faces(body: &Body, at: &[Vec3]) -> Result<Body> {
     Ok(rebuilt_body(copied, &[&body.solid], &Rebuild::default()))
 }
 
+/// The faces picked by points on them (each once, in the order picked); every face when no
+/// point is given.
+fn picked_faces(body: &Body, at: &[Vec3]) -> Result<Vec<usize>> {
+    if at.len() > 10_000 {
+        return Err(KernelError::Invalid("too many faces picked".into()));
+    }
+    if at.is_empty() {
+        return Ok((0..body.face_count()).collect());
+    }
+    let mut chosen = Vec::new();
+    for p in at {
+        let i = nearest_face(body, *p)?;
+        if !chosen.contains(&i) {
+            chosen.push(i);
+        }
+    }
+    Ok(chosen)
+}
+
+/// A body's faces taken apart: each picked face (by points on it; every face when none are
+/// given) its own surface body, and the faces left, if any, one surface body. A solid comes
+/// apart into surfaces. Histories are over `[body]`: each face is the body's.
+pub fn unstitch(body: &Body, at: &[Vec3]) -> Result<(Vec<Body>, Option<Body>)> {
+    body.require_brep("unstitch")?;
+    let chosen = picked_faces(body, at)?;
+    let faces: Vec<&mt::Face> = body.solid.face_iter().collect();
+    if faces.len() < 2 {
+        return Err(KernelError::Invalid("the body has one face: nothing to unstitch".into()));
+    }
+    let piece = |picked: Vec<mt::Face>| rebuilt_body(surface_body(picked), &[&body.solid], &Rebuild::default());
+    let pieces: Vec<Body> = chosen.iter().filter_map(|i| faces.get(*i)).map(|f| piece(vec![(*f).clone()])).collect();
+    let rest: Vec<mt::Face> = faces.iter().enumerate().filter(|(i, _)| !chosen.contains(i)).map(|(_, f)| (*f).clone()).collect();
+    Ok((pieces, (!rest.is_empty()).then(|| piece(rest))))
+}
+
+/// A surface body with the picked faces (by points on them; every face when none are given)
+/// turned over: their normals point the other way. A solid is refused (its faces face out).
+/// The history is over `[body]`: each face is the body's, turned over or not.
+pub fn reverse_faces(body: &Body, at: &[Vec3]) -> Result<Body> {
+    body.require_brep("reverse normal")?;
+    if !body.is_surface() {
+        return Err(KernelError::Invalid("a solid's faces face out: unstitch it into surfaces first".into()));
+    }
+    let chosen = picked_faces(body, at)?;
+    let mut rec = Rebuild::default();
+    let faces: Vec<mt::Face> = body
+        .solid
+        .face_iter()
+        .enumerate()
+        .map(|(i, f)| {
+            if !chosen.contains(&i) {
+                return f.clone();
+            }
+            let turned = f.inverse();
+            rec.whole(&turned, f);
+            turned
+        })
+        .collect();
+    Ok(rebuilt_body(surface_body(faces), &[&body.solid], &rec))
+}
+
 /// Index of the face nearest a point (over its mesh triangles).
 fn nearest_face(body: &Body, p: Vec3) -> Result<usize> {
     let m = body.tessellate(body.size() * 2e-3)?;
@@ -708,6 +769,42 @@ mod tests {
         assert!(extrude_sheet(&Plane::XY, &[gap], 0.0, 1.0).is_err());
         let nan = vec![Seg2::Line { a: Vec2::new(0.0, f64::NAN), b: Vec2::new(1.0, 0.0) }];
         assert!(extrude_sheet(&Plane::XY, &[nan], 0.0, 1.0).is_err());
+    }
+
+    /// A box taken apart into its six faces (each a 10 × 10 surface) and stitched back into
+    /// the same solid; two picked faces come off on their own, the other four stay together;
+    /// a one-face body has nothing to take apart.
+    #[test]
+    fn unstitch_a_box_and_stitch_it_back() {
+        let b = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
+        let (pieces, rest) = unstitch(&b, &[]).unwrap();
+        assert!(rest.is_none() && pieces.len() == 6);
+        for p in &pieces {
+            assert!(p.is_surface() && p.face_count() == 1 && rel(measure(p).unwrap().area, 100.0) < 1e-9);
+        }
+        let back = stitch(&pieces.iter().collect::<Vec<_>>(), 1e-6).unwrap();
+        assert!(!back.is_surface() && rel(measure(&back).unwrap().volume, 1000.0) < 1e-9);
+        let (two, rest) = unstitch(&b, &[Vec3::new(5.0, 5.0, 10.0), Vec3::new(5.0, 5.0, 0.0)]).unwrap();
+        let rest = rest.unwrap();
+        assert!(two.len() == 2 && rest.is_surface() && rest.face_count() == 4);
+        assert!(unstitch(&two[0], &[]).is_err());
+    }
+
+    /// A patch thickened along its normal grows up; turned over, the same thickness grows down.
+    /// A solid's faces are not turned over.
+    #[test]
+    fn reverse_faces_turns_the_thicken_side() {
+        let r = Region2 {
+            outer: Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)]),
+            holes: vec![],
+        };
+        let s = patch_region(&Plane::XY, &r).unwrap();
+        let up = measure(&thicken(&s, 2.0, false).unwrap()).unwrap().bbox;
+        let turned = reverse_faces(&s, &[]).unwrap();
+        assert!(turned.is_surface() && turned.face_count() == 1);
+        let down = measure(&thicken(&turned, 2.0, false).unwrap()).unwrap().bbox;
+        assert!((up.min.z - down.min.z - 2.0).abs() < 1e-9 && (up.max.z - down.max.z - 2.0).abs() < 1e-9, "{up:?} vs {down:?}");
+        assert!(reverse_faces(&box_solid(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0)).unwrap(), &[]).is_err());
     }
 
     #[test]
