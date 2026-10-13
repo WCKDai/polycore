@@ -247,6 +247,21 @@ pub fn reverse_faces(body: &Body, at: &[Vec3]) -> Result<Body> {
     Ok(rebuilt_body(surface_body(faces), &[&body.solid], &rec))
 }
 
+/// A body with some of its faces (indices in its face order) taken away and the gap left open:
+/// a surface body of the faces left. Deleting every face is refused. The history is over
+/// `[body]`: each face left is the body's.
+pub fn remove_faces(body: &Body, faces: &[usize]) -> Result<Body> {
+    body.require_brep("Delete Face")?;
+    if faces.is_empty() {
+        return Err(KernelError::Invalid("no faces given".into()));
+    }
+    let left: Vec<mt::Face> = body.solid.face_iter().enumerate().filter(|(i, _)| !faces.contains(i)).map(|(_, f)| f.clone()).collect();
+    if left.is_empty() {
+        return Err(KernelError::Invalid("that would delete every face of the body".into()));
+    }
+    Ok(rebuilt_body(surface_body(left), &[&body.solid], &Rebuild::default()))
+}
+
 /// Index of the face nearest a point (over its mesh triangles).
 fn nearest_face(body: &Body, p: Vec3) -> Result<usize> {
     let m = body.tessellate(body.size() * 2e-3)?;
@@ -805,6 +820,23 @@ mod tests {
         let down = measure(&thicken(&turned, 2.0, false).unwrap()).unwrap().bbox;
         assert!((up.min.z - down.min.z - 2.0).abs() < 1e-9 && (up.max.z - down.max.z - 2.0).abs() < 1e-9, "{up:?} vs {down:?}");
         assert!(reverse_faces(&box_solid(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0)).unwrap(), &[]).is_err());
+    }
+
+    /// A box's top taken away without healing: a five-face surface; patching the opening and
+    /// stitching closes the same box. Every face, or none, is refused.
+    #[test]
+    fn remove_faces_leaves_the_gap_open() {
+        let b = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
+        let top = nearest_face(&b, Vec3::new(5.0, 5.0, 10.0)).unwrap();
+        let open = remove_faces(&b, &[top]).unwrap();
+        assert!(open.is_surface() && open.face_count() == 5);
+        assert!(rel(measure(&open).unwrap().area, 500.0) < 1e-9);
+        let lid = patch_edges(&open, &[Vec3::new(5.0, 0.0, 10.0), Vec3::new(10.0, 5.0, 10.0), Vec3::new(5.0, 10.0, 10.0), Vec3::new(0.0, 5.0, 10.0)])
+            .unwrap();
+        let back = stitch(&[&open, &lid], 1e-6).unwrap();
+        assert!(!back.is_surface() && rel(measure(&back).unwrap().volume, 1000.0) < 1e-9);
+        assert!(remove_faces(&b, &(0..6).collect::<Vec<_>>()).is_err());
+        assert!(remove_faces(&b, &[]).is_err());
     }
 
     #[test]
