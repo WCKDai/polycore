@@ -702,7 +702,13 @@ fn crossings(s: &Seg2, t: &Seg2, tol: f64) -> Vec<(f64, f64)> {
         (Seg2::Line { a, b }, Seg2::Line { a: c, b: d }) => {
             let (r, q) = (b - a, d - c);
             let den = r.cross(q);
-            if den.abs() > 1e-300 {
+            // Lines lying on one another within the tolerance do not cross: their ends split
+            // them. A hair from parallel they still meet at a point, anywhere along the overlap,
+            // and a split there leaves a piece shorter than the tolerance or a vertex that
+            // neither outline has.
+            let off = |p: Vec2, o: Vec2, dir: Vec2| (p - o).cross(dir).abs() / dir.len().max(1e-300);
+            let collinear = off(c, a, r) < tol && off(d, a, r) < tol || off(a, c, q) < tol && off(b, c, q) < tol;
+            if den.abs() > 1e-300 && !collinear {
                 let u = (c - a).cross(q) / den;
                 pts.push(a + r * u);
             }
@@ -2263,6 +2269,57 @@ mod planar_tests {
         assert_eq!(union.len(), 1);
         assert!((union[0].area().abs() - 112.0).abs() < 1e-9, "{}", union[0].area());
     }
+    /// Two edges lying on one another within the tolerance, a hair from parallel, meet at a
+    /// point somewhere along their overlap. Taken for a crossing, that point split the square's
+    /// edge once more: 5e-8 mm before its end, which left an edge shorter than the tolerance in
+    /// the result, or in the middle of a straight edge. The ends of an overlap are what split
+    /// the edges.
+    #[test]
+    fn overlapping_lines_a_hair_from_parallel_do_not_cross() {
+        let square = rectangle(Vec2::ZERO, Vec2::new(10.0, 10.0));
+        // A quadrilateral from x = 4 to x = 14 with one edge along the square's bottom edge,
+        // tilted by 1e-9 rad about (meet, 0), and the opposite edge at y = far.
+        let quad = |meet: f64, far: f64| {
+            let on = |x: f64| Vec2::new(x, (meet - x) * 1e-9);
+            let mut corners = [on(4.0), on(14.0), Vec2::new(14.0, far), Vec2::new(4.0, far)];
+            if far < 0.0 {
+                corners.reverse();
+            }
+            Region2 { outer: Loop2::polygon(&corners), holes: vec![] }
+        };
+        let lengths = |r: &Region2| {
+            let mut all: Vec<f64> = r.outer.segs.iter().map(Seg2::length).collect();
+            all.sort_by(f64::total_cmp);
+            all
+        };
+        let same = |got: &[f64], want: &[f64]| got.len() == want.len() && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6);
+        for meet in [10.0 - 5e-8, 7.0] {
+            // Below the square, against its bottom edge: cut away, it leaves the square, the
+            // bottom edge split only at x = 4, where the quadrilateral's corner lies on it.
+            let below = quad(meet, -5.0);
+            let cut = planar_regions_boolean(std::slice::from_ref(&square), std::slice::from_ref(&below), BoolOp::Cut, 1e-7).unwrap();
+            assert_eq!(cut.len(), 1, "{meet}");
+            assert!(same(&lengths(&cut[0]), &[4.0, 6.0, 10.0, 10.0, 10.0]), "{meet}: cut edges {:?}", lengths(&cut[0]));
+            assert!((cut[0].area() - 100.0).abs() < 1e-6, "{meet}: {}", cut[0].area());
+            // Over the square, flush with that edge and reaching past it to x = 14: the
+            // union's outline runs along y = 0 once, in the pieces 0..4, 4..10 and 10..14.
+            let flush = quad(meet, 5.0);
+            let union = planar_regions_boolean(std::slice::from_ref(&square), std::slice::from_ref(&flush), BoolOp::Union, 1e-7)
+                .unwrap_or_else(|e| panic!("{meet}: union {e}"));
+            assert_eq!(union.len(), 1, "{meet}");
+            assert!(same(&lengths(&union[0]), &[4.0, 4.0, 4.0, 5.0, 5.0, 6.0, 10.0, 10.0]), "{meet}: union edges {:?}", lengths(&union[0]));
+            assert!((union[0].area() - 120.0).abs() < 1e-6, "{meet}: {}", union[0].area());
+            // The two edges themselves, either way round.
+            let (edge, tilted) = (square.outer.segs[0], flush.outer.segs[0]);
+            assert!(crossings(&edge, &tilted, 1e-7).is_empty() && crossings(&tilted, &edge, 1e-7).is_empty(), "{meet}");
+        }
+        // Lines further apart than the tolerance at their ends still cross: tilted by 1e-3 rad
+        // about (7, 0), the edge from (4, 3e-3) to (14, -7e-3) meets the bottom edge at x = 7.
+        let (edge, steep) = (square.outer.segs[0], Seg2::Line { a: Vec2::new(4.0, 3e-3), b: Vec2::new(14.0, -7e-3) });
+        let hits = crossings(&edge, &steep, 1e-7);
+        assert!(hits.len() == 1 && (hits[0].0 - 0.7).abs() < 1e-12 && (hits[0].1 - 0.3).abs() < 1e-12, "{hits:?}");
+    }
+
     #[test]
     fn tiny_tool_between_circle_and_display_chord_is_not_lost() {
         let circle = Region2 { outer: Loop2::circle(Vec2::ZERO, 10.0), holes: vec![] };
