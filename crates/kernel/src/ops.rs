@@ -248,8 +248,10 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         };
     }
     r = r.map(|result| result.map(|body| body.inherit_regularization_protection(a).inherit_regularization_protection(b)));
-    if matches!(op, BoolOp::Cut | BoolOp::Union) {
-        r = r.and_then(|result| result.map(|body| body.with_preserved_boolean_planar_sources(a, b, op == BoolOp::Cut)).transpose());
+    match op {
+        BoolOp::Cut => r = r.and_then(|result| result.map(|body| body.with_preserved_boolean_planar_sources(a, b, true)).transpose()),
+        BoolOp::Union => r = r.and_then(|result| result.map(|body| body.with_preserved_union_planar_sources(a, b)).transpose()),
+        BoolOp::Intersect => {}
     }
     if r.is_ok() {
         merge(diagnostics);
