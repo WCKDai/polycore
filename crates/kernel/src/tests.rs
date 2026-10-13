@@ -126,6 +126,32 @@ fn revolve_washer_and_sphere() {
 }
 
 #[test]
+fn revolve_adjacent_profiles_on_the_axis() {
+    // Two rectangles on the axis, revolved together: their merged outline keeps a vertex
+    // where the shared edge met the axis. The swept axis pieces used to be zero-area faces,
+    // and cutting the body's flat end out of another failed.
+    let r = Region2 {
+        outer: Loop2::polygon(&[
+            Vec2::new(0.0, 0.0),
+            Vec2::new(30.0, 0.0),
+            Vec2::new(60.0, 0.0),
+            Vec2::new(60.0, 20.0),
+            Vec2::new(30.0, 20.0),
+            Vec2::new(0.0, 20.0),
+        ]),
+        holes: vec![],
+    };
+    let b = revolve(&Plane::XZ, &[r], Vec2::ZERO, Vec2::X, 2.0 * PI).unwrap().pop().unwrap();
+    assert!(rel(measure(&b).unwrap().volume, PI * 400.0 * 60.0) < 5e-4);
+    let faces = b.faces(1e-3).unwrap();
+    assert!(faces.iter().all(|f| f.area > 1e-6), "{:?}", faces.iter().map(|f| f.area).collect::<Vec<_>>());
+    let disc = cylinder(Vec3::new(-1.0, 0.0, 0.0), Vec3::X, 40.0, 3.0).unwrap();
+    let cut = boolean(&disc, &b, BoolOp::Cut).unwrap().unwrap();
+    let want = PI * 1600.0 * 3.0 - PI * 400.0 * 2.0;
+    assert!(rel(measure(&cut).unwrap().volume, want) < 1e-3, "{} vs {want}", measure(&cut).unwrap().volume);
+}
+
+#[test]
 fn chamfer_and_step() {
     let b = box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
     let c = chamfer(&b, &[Vec3::new(20.0, 10.0, 20.0)], 2.0).unwrap();

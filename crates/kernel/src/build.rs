@@ -341,7 +341,15 @@ pub fn revolve(plane: &Plane, regions: &[Region2], axis_origin: Vec2, axis_dir: 
                 _ => nl,
             }
         };
-        let given = numbered_region(r)?.map_loops(|l| reseam(snap_loop(l)));
+        // Adjacent profiles revolved together leave the axis edge split where they met: one
+        // edge again, so the builders for a profile with an edge on the axis take it (swept
+        // pieces of the axis are zero-area faces that booleans fail on).
+        let on_axis = |p: Vec2| d.cross(p - axis_origin).abs() < 1e-9;
+        let axis_run = |s: &Seg2, t: &Seg2| {
+            let (a, b, c) = (s.start(), s.end(), t.end());
+            on_axis(a) && on_axis(b) && on_axis(c) && (b - a).dot(c - b) > 0.0
+        };
+        let given = numbered_region(r)?.map_loops(|l| reseam(snap_loop(l).merged_lines(axis_run)));
         let r = &given.region();
         // A half disc on the axis revolved fully is a sphere: build it without poles. Every
         // patch is swept from the half disc's arcs.
@@ -388,7 +396,6 @@ pub fn revolve(plane: &Plane, regions: &[Region2], axis_origin: Vec2, axis_dir: 
         // there, which truck only tessellates reliably with the axis through the world origin. Off
         // it, the body measured too large and booleans with it failed or removed the wrong side.
         // Build such a profile there and move it into place, as `revolve_touching_axis` does.
-        let on_axis = |p: Vec2| d.cross(p - axis_origin).abs() < 1e-9;
         let axis_edges = r.outer.segs.iter().filter(|s| matches!(**s, Seg2::Line { a, b } if on_axis(a) && on_axis(b))).count();
         let shift = if axis_edges > 0 { o } else { Vec3::ZERO };
         let (profile, f) = if shift.len() > 0.0 {
