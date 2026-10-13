@@ -42,13 +42,54 @@ pub struct Body {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FaceSource {
-    ExtrudeSide { segment: solidcraft_geom::Seg2, plane: Option<solidcraft_geom::Plane>, coalesced: bool },
-    CertifiedExtrudeSide { producer: u64, sketch: u64, curve: String, plane: Option<solidcraft_geom::Plane> },
-    ExtrudeCap { high: bool, region: solidcraft_geom::Region2, plane: solidcraft_geom::Plane },
-    CertifiedExtrudeCap { producer: u64, sketch: u64, high: bool, outer: Vec<String>, holes: Vec<Vec<String>>, plane: solidcraft_geom::Plane },
-    Box { producer: Option<u64>, axis: u8, high: bool, plane: solidcraft_geom::Plane },
-    ShellPlanar { producer: Option<u64>, source: Box<FaceSource>, inner: bool, plane: solidcraft_geom::Plane },
-    Imported { item: u64, face: u64, payload_sha256: Option<String>, producer: Option<u64> },
+    ExtrudeSide {
+        segment: solidcraft_geom::Seg2,
+        plane: Option<solidcraft_geom::Plane>,
+        coalesced: bool,
+    },
+    CertifiedExtrudeSide {
+        producer: u64,
+        sketch: u64,
+        curve: String,
+        plane: Option<solidcraft_geom::Plane>,
+    },
+    ExtrudeCap {
+        high: bool,
+        region: solidcraft_geom::Region2,
+        plane: solidcraft_geom::Plane,
+    },
+    CertifiedExtrudeCap {
+        producer: u64,
+        sketch: u64,
+        high: bool,
+        outer: Vec<String>,
+        holes: Vec<Vec<String>>,
+        plane: solidcraft_geom::Plane,
+    },
+    Box {
+        producer: Option<u64>,
+        axis: u8,
+        high: bool,
+        plane: solidcraft_geom::Plane,
+    },
+    /// A cylinder primitive's cap: `high` at the far end (its `top`), else at the base.
+    CylinderCap {
+        producer: u64,
+        high: bool,
+        plane: solidcraft_geom::Plane,
+    },
+    ShellPlanar {
+        producer: Option<u64>,
+        source: Box<FaceSource>,
+        inner: bool,
+        plane: solidcraft_geom::Plane,
+    },
+    Imported {
+        item: u64,
+        face: u64,
+        payload_sha256: Option<String>,
+        producer: Option<u64>,
+    },
 }
 
 pub type CapSignature = (Vec<String>, Vec<Vec<String>>);
@@ -58,9 +99,11 @@ impl FaceSource {
     fn plane_mut(&mut self) -> Option<&mut solidcraft_geom::Plane> {
         match self {
             Self::ExtrudeSide { plane, .. } | Self::CertifiedExtrudeSide { plane, .. } => plane.as_mut(),
-            Self::ExtrudeCap { plane, .. } | Self::CertifiedExtrudeCap { plane, .. } | Self::Box { plane, .. } | Self::ShellPlanar { plane, .. } => {
-                Some(plane)
-            }
+            Self::ExtrudeCap { plane, .. }
+            | Self::CertifiedExtrudeCap { plane, .. }
+            | Self::Box { plane, .. }
+            | Self::CylinderCap { plane, .. }
+            | Self::ShellPlanar { plane, .. } => Some(plane),
             Self::Imported { .. } => None,
         }
     }
@@ -504,6 +547,7 @@ impl Body {
             FaceSource::ExtrudeCap { plane, .. }
             | FaceSource::CertifiedExtrudeCap { plane, .. }
             | FaceSource::Box { plane, .. }
+            | FaceSource::CylinderCap { plane, .. }
             | FaceSource::ShellPlanar { plane, .. } => Some(*plane),
             FaceSource::Imported { .. } => self.planar_face(index),
         }
@@ -527,6 +571,32 @@ impl Body {
         })
         .ok()
         .flatten()
+    }
+
+    /// Certify the two caps of a body built by [`crate::cylinder`]. Its wall stays uncertified.
+    pub fn with_cylinder_certificate(mut self, producer: u64) -> Result<Self> {
+        if producer == 0 {
+            return Err(KernelError::Invalid("invalid cylinder producer".into()));
+        }
+        let Some(sources) = &self.face_sources else {
+            return Err(KernelError::Failed("cylinder construction source".into()));
+        };
+        let mut sources = sources.as_ref().clone();
+        let mut ends = [false; 2];
+        for source in sources.iter_mut() {
+            if let Some(FaceSource::ExtrudeCap { high, plane, .. }) = source {
+                let end = ends.get_mut(usize::from(*high)).ok_or_else(|| KernelError::Failed("cylinder cap role".into()))?;
+                if std::mem::replace(end, true) {
+                    return Err(KernelError::Failed("duplicate cylinder cap role".into()));
+                }
+                *source = Some(FaceSource::CylinderCap { producer, high: *high, plane: *plane });
+            }
+        }
+        if ends != [true; 2] {
+            return Err(KernelError::Failed("cylinder cap role count".into()));
+        }
+        self.face_sources = Some(std::sync::Arc::new(sources));
+        Ok(self)
     }
 
     pub fn with_box_certificate(mut self, producer: u64) -> Result<Self> {
