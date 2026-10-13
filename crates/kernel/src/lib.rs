@@ -43,6 +43,7 @@ mod mesh_convert;
 mod meshbody;
 #[cfg(test)]
 mod modify_history_tests;
+mod native;
 mod numbered;
 mod offset;
 mod ops;
@@ -84,6 +85,7 @@ pub use lip::raise_band;
 pub use measure::{BodyMeasure, measure};
 pub use mesh_convert::convert_prismatic_mesh;
 pub use meshbody::{MAX_TRIANGLES, mesh_body};
+pub use native::{decode_native_body, encode_native_body};
 pub use offset::with_same_surface;
 pub use ops::{BoolOp, boolean, can_join_touching_faces, split_by_plane, transform, transform_matrix, union_apart};
 pub use polybool::{faceted_boolean, planar_boolean};

@@ -3,11 +3,12 @@
 //! (B-spline basis and NURBS surfaces in [`bspline`], one-surface fills of closed loops in
 //! [`fill`], T-splines in [`tspline`]). Units are millimetres.
 //!
-//! This crate has no knowledge of sketches, documents or the B-rep kernel; every other crate
+//! This crate has no knowledge of sketches, documents or a modelling backend; every other crate
 //! builds on it.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod brep;
 pub mod bspline;
 pub mod env;
 pub mod fill;
