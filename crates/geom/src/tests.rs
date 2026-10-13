@@ -59,6 +59,40 @@ fn raycast_hits_front_face() {
     assert!(m.raycast(Vec3::new(5.0, 5.0, 10.0), Vec3::new(0.0, 0.0, -1.0)).is_none());
 }
 
+/// A ray through a vertex or edge that triangles share never slips between them: a grid of
+/// triangles on a square, hit at every inner vertex and edge midpoint from oblique directions
+/// (on the square's own border nothing is shared, and a ray grazing it may miss).
+#[test]
+fn raycast_never_slips_between_triangles() {
+    let n = 6;
+    let positions: Vec<Vec3> =
+        (0..=n).flat_map(|j| (0..=n).map(move |i| Vec3::new(f64::from(i) * 40.0 / 6.0 + 100.0, f64::from(j) * 5.0, 20.0))).collect();
+    let id = |i: u32, j: u32| j * (n + 1) + i;
+    let mut triangles = Vec::new();
+    for j in 0..n {
+        for i in 0..n {
+            triangles.push([id(i, j), id(i + 1, j), id(i + 1, j + 1)]);
+            triangles.push([id(i, j), id(i + 1, j + 1), id(i, j + 1)]);
+        }
+    }
+    let tri_face = vec![0; triangles.len()];
+    let m = Mesh { positions, triangles, tri_face, ..Default::default() };
+    let dirs = [Vec3::new(-0.57735, 0.57735, -0.57735), Vec3::new(0.3, -0.7, -0.648), Vec3::new(-0.123456789, -0.2, -1.0), Vec3::new(0.0, 0.0, -1.0)];
+    let mut targets = Vec::new();
+    for j in 1..2 * n {
+        for i in 1..2 * n {
+            targets.push(Vec3::new(f64::from(i) * 20.0 / 6.0 + 100.0, f64::from(j) * 2.5, 20.0));
+        }
+    }
+    for d in dirs {
+        for p in &targets {
+            let o = *p - d * 50.0;
+            let hit = m.raycast(o, d);
+            assert!(hit.is_some_and(|(t, _)| (t - 50.0).abs() < 1e-6), "{p:?} along {d:?}: {hit:?}");
+        }
+    }
+}
+
 #[test]
 fn planes() {
     assert_eq!(Plane::XY.normal(), Vec3::Z);

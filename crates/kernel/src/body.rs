@@ -1093,9 +1093,21 @@ impl Body {
         has.iter().filter(|h| !**h).count()
     }
 
-    /// Display mesh: like [`Body::tessellate`], with seam edges flagged.
+    /// Display mesh: like [`Body::tessellate`], with seam edges flagged. Meshed from the
+    /// body's [`Body::display_plan`] (shared edge nodes, structured grids), or the way
+    /// [`Body::tessellate`] meshes when no plan can be made.
     pub fn display_mesh(&self, tol: f64) -> Result<Mesh> {
-        self.flagged(self.tessellate(tol)?)
+        if self.is_mesh() {
+            return self.flagged(self.tessellate(tol)?);
+        }
+        let m = match self.display_plan(tol) {
+            Ok(plan) => plan.evaluate(),
+            Err(e) => {
+                log::debug!("display mesh: {e}; meshing the reference way");
+                self.tessellate(tol)?
+            }
+        };
+        self.flagged(m)
     }
 
     /// Display mesh whose curved faces and edges look curved whatever the body's size: like
@@ -1104,6 +1116,30 @@ impl Body {
     /// sagitta of a small radius on a large body (a sheet-metal bend, a small hole), which the
     /// tolerance alone leaves as one flat facet.
     pub fn display_mesh_angular(&self, tol: f64, angle: f64) -> Result<Mesh> {
+        if self.is_mesh() {
+            return self.flagged(self.tessellate(tol)?);
+        }
+        match self.display_plan_angular(tol, angle) {
+            Ok(plan) => self.display_mesh_of(&plan),
+            Err(e) => {
+                log::debug!("display mesh: {e}; meshing the reference way");
+                self.reference_display_mesh_angular(tol, angle)
+            }
+        }
+    }
+
+    /// The display mesh of a plan made from this body ([`Body::display_plan`],
+    /// [`Body::display_plan_angular`]): evaluated on the CPU, with its edges flagged.
+    pub fn display_mesh_of(&self, plan: &solidcraft_geom::tess::TessPlan) -> Result<Mesh> {
+        self.flagged(plan.evaluate())
+    }
+
+    /// The reference mesher's angular display mesh: what [`Body::display_mesh_angular`] falls
+    /// back to when no plan can be made.
+    pub fn reference_display_mesh_angular(&self, tol: f64, angle: f64) -> Result<Mesh> {
+        if self.is_mesh() {
+            return self.flagged(self.tessellate(tol)?);
+        }
         self.flagged(self.tessellate_within(tol, angle, false)?)
     }
 

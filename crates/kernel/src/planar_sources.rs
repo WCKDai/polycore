@@ -406,7 +406,9 @@ mod tests {
             assert!(display.contains(Vec3::new(width / 2. - thickness / 2., 0., thickness / 2.)));
             assert!(display.contains(Vec3::new(width / 2. - thickness / 2., 0., 15.)));
             assert!(!display.contains(Vec3::new(0., 0., 15.)));
-            assert_eq!(raw.measure().volume, display.measure().volume);
+            // Different meshers (the display plan and the reference), both within 0.01 mm.
+            let (rv, dv) = (raw.measure().volume, display.measure().volume);
+            assert!((rv - dv).abs() <= raw.measure().area * 0.01, "display volume {dv} vs {rv}");
             let expected = (width * 60. - (4. - std::f64::consts::PI) * 36.) * 30.
                 - ((width - 2. * thickness) * (60. - 2. * thickness) - (4. - std::f64::consts::PI) * (6. - thickness).powi(2)) * (30. - thickness);
             assert!((cup.tessellate(1e-4).unwrap().measure().volume - expected).abs() < 0.2);
@@ -549,7 +551,8 @@ mod tests {
         assert!(!display.contains(Vec3::new(0., 0., 5.)));
         assert!(display.contains(Vec3::new(28., 0., 5.)));
         assert!((display.measure().volume - (60. * 54. * 10. - 4. * x * y * 9.)).abs() < 1e-7);
-        assert_eq!(raw.measure().volume, display.measure().volume);
+        // Different triangulations of the same polyhedron: equal up to rounding.
+        assert!((raw.measure().volume - display.measure().volume).abs() < 1e-9 * raw.measure().volume);
         let imported = crate::step_import(&crate::step_export(&[&pocket], "regularized pocket").unwrap()).unwrap();
         assert!(imported.warnings.is_empty());
         let copy = &imported.bodies[0].body;
