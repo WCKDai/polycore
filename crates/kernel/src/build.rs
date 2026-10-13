@@ -384,9 +384,25 @@ pub fn revolve(plane: &Plane, regions: &[Region2], axis_origin: Vec2, axis_dir: 
             out.push(b);
             continue;
         }
-        let solid: Solid = guard("revolve", || Ok(builder::rsweep(&f, p3(o), v3(axis), mt::Rad(angle))))?;
+        // Edges on the axis (a spherical shell's two radial lines, say) sweep into degenerate faces
+        // there, which truck only tessellates reliably with the axis through the world origin. Off
+        // it, the body measured too large and booleans with it failed or removed the wrong side.
+        // Build such a profile there and move it into place, as `revolve_touching_axis` does.
+        let on_axis = |p: Vec2| d.cross(p - axis_origin).abs() < 1e-9;
+        let axis_edges = r.outer.segs.iter().filter(|s| matches!(**s, Seg2::Line { a, b } if on_axis(a) && on_axis(b))).count();
+        let shift = if axis_edges > 0 { o } else { Vec3::ZERO };
+        let (profile, f) = if shift.len() > 0.0 {
+            let local = Plane { origin: plane.origin - shift, ..*plane };
+            let profile = region_wires(&local, &given.oriented())?;
+            let f = attach_profile(&wires_of(&profile))?;
+            (profile, f)
+        } else {
+            (profile, f)
+        };
+        let solid: Solid = guard("revolve", || Ok(builder::rsweep(&f, p3(o - shift), v3(axis), mt::Rad(angle))))?;
         let closed = angle.abs() >= std::f64::consts::TAU;
         let history = guard("revolve history", || Ok(record::swept_face(&solid, &f, &seeds(&profile), closed)))?;
+        let solid = if shift.len() > 0.0 { builder::translated(&solid, v3(shift)) } else { solid };
         out.push(record::attach(Body::new(solid)?, &[], history, Default::default())?);
     }
     Ok(out)
