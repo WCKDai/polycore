@@ -198,6 +198,124 @@ pub(crate) fn extension_fits(face: &mt::Face, p: Vec3, q: Vec3, tol: f64) -> boo
     inside
 }
 
+/// Parameters along `x + λ d` where the line meets `surf`, within `reach` of `x` (Newton on
+/// (u, v, λ) from several starts; nearest first).
+fn line_surface_hits(surf: &mt::Surface, x: Vec3, d: Vec3, reach: f64, tol: f64) -> Vec<f64> {
+    use mt::{ParametricSurface, SearchNearestParameter};
+    let mut out: Vec<f64> = Vec::new();
+    for k in [0i32, 1, -1, 2, -2, 4, -4] {
+        let mut l = reach * f64::from(k) / 4.0;
+        let Some((mut u, mut v)) = surf.search_nearest_parameter(p3(x + d * l), None, 100) else { continue };
+        for _ in 0..60 {
+            let f = from_p3(surf.subs(u, v)) - (x + d * l);
+            if !f.is_finite() {
+                break;
+            }
+            if f.len() <= tol {
+                if l.abs() <= reach && !out.iter().any(|o| (o - l).abs() <= tol * 10.0) {
+                    out.push(l);
+                }
+                break;
+            }
+            let (su, sv) = (surf.uder(u, v), surf.vder(u, v));
+            let m = [[su.x, sv.x, -d.x], [su.y, sv.y, -d.y], [su.z, sv.z, -d.z]];
+            let Some([du, dv, dl]) = crate::polyhedron::solve3_pub(m, [-f.x, -f.y, -f.z]) else { break };
+            if ![du, dv, dl].iter().all(|z| z.is_finite()) {
+                break;
+            }
+            // Damp long steps: the start may be far from the root.
+            let step = (Vec3::new(su.x, su.y, su.z) * du + Vec3::new(sv.x, sv.y, sv.z) * dv).len().max(dl.abs());
+            let k = if step > reach { reach / step } else { 1.0 };
+            u += du * k;
+            v += dv * k;
+            l += dl * k;
+        }
+    }
+    out.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
+    out
+}
+
+/// A circle through the curve of `e` (centre, axis, radius), when it is one.
+fn edge_circle(e: &mt::Edge, tol: f64) -> Option<(Vec3, Vec3, f64)> {
+    use mt::{BoundedCurve, ParametricCurve};
+    let c = e.curve();
+    let (lo, hi) = c.range_tuple();
+    let at = |f: f64| from_p3(c.subs(lo + (hi - lo) * f));
+    let (a, b, m) = (at(0.0), at(1.0), at(0.5));
+    let (u, w) = (b - a, m - a);
+    let n = u.cross(w);
+    let n2 = n.len2();
+    if !(n2 > 1e-30) {
+        return None;
+    }
+    // Circumcentre of a, b, m.
+    let centre = a + (n.cross(u) * w.len2() + w.cross(n) * u.len2()) / (2.0 * n2);
+    let radius = centre.dist(a);
+    let axis = n.normalized()?;
+    let ok = (1..16).all(|i| {
+        let q = at(f64::from(i) / 16.0);
+        (q.dist(centre) - radius).abs() <= tol && (q - centre).dot(axis).abs() <= tol
+    });
+    (ok && radius.is_finite()).then_some((centre, axis, radius))
+}
+
+/// Where `q` lies on the edge's curve: its parameter, if within `tol` of the curve and inside
+/// the edge's range.
+pub(crate) fn on_edge(e: &mt::Edge, q: Vec3, tol: f64) -> Option<f64> {
+    use mt::{BoundedCurve, ParametricCurve, SearchNearestParameter};
+    let c = e.curve();
+    let (lo, hi) = c.range_tuple();
+    let hint =
+        (0..=32).map(|i| lo + (hi - lo) * f64::from(i) / 32.0).min_by(|x, y| from_p3(c.subs(*x)).dist(q).total_cmp(&from_p3(c.subs(*y)).dist(q)))?;
+    let t = c.search_nearest_parameter(p3(q), hint, 100)?;
+    let margin = (hi - lo) * 1e-9;
+    (t.is_finite() && t >= lo - margin && t <= hi + margin && from_p3(c.subs(t)).dist(q) <= tol).then_some(t.clamp(lo, hi))
+}
+
+/// Whether `q` lies on the edge's curve continued past its ends (a line or a circle).
+pub(crate) fn on_extension(e: &mt::Edge, q: Vec3, tol: f64) -> bool {
+    match e.curve() {
+        mt::Curve::Line(_) => {
+            let (a, b) = (vtx(e.absolute_front()), vtx(e.absolute_back()));
+            (b - a).normalized().is_some_and(|u| (q - a - u * (q - a).dot(u)).len() <= tol)
+        }
+        _ => edge_circle(e, tol).is_some_and(|(c, n, r)| ((q - c).dot(n)).abs() <= tol && ((q - c - n * (q - c).dot(n)).len() - r).abs() <= tol),
+    }
+}
+
+/// The edge `e` with its end at `v` moved to `nv`, along its own curve: shortened (any curve),
+/// or continued past `v` (a line or a circle). In the stored orientation of `e`.
+pub(crate) fn retarget(e: &mt::Edge, v: &mt::Vertex, nv: &mt::Vertex, tol: f64) -> Result<mt::Edge> {
+    let (f, bk) = (e.absolute_front(), e.absolute_back());
+    if f == bk {
+        return Err(unsupported("a closed edge where the blend ends"));
+    }
+    if matches!(e.curve(), mt::Curve::Line(_)) {
+        return Ok(if f == v { builder::line(nv, bk) } else { builder::line(f, nv) });
+    }
+    use mt::Cut;
+    let q = vtx(nv);
+    if let Some(t) = on_edge(e, q, tol) {
+        use mt::BoundedCurve;
+        let mut c = e.curve();
+        // The piece kept must not shrink to nothing.
+        let (lo, hi) = c.range_tuple();
+        let margin = (hi - lo) * 1e-6;
+        if (f == v && t >= hi - margin) || (f != v && t <= lo + margin) {
+            return Err(too_large("the blend is larger than the neighbouring faces"));
+        }
+        let rest = c.cut(t);
+        let (piece, a, b) = if f == v { (rest, nv, bk) } else { (c, f, nv) };
+        return mt::Edge::try_new(a, b, piece).map_err(|err| KernelError::Failed(format!("blend: corner edge: {err}")));
+    }
+    // Continued past v: the arc from the new end through v to the far end.
+    if edge_circle(e, tol).is_some() && on_extension(e, q, tol) {
+        let through = p3(vtx(v));
+        return Ok(if f == v { builder::circle_arc(nv, bk, through) } else { builder::circle_arc(f, nv, through) });
+    }
+    Err(too_large("the blend is larger than the neighbouring faces"))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn blend_geometry(
     solid: &Solid,
@@ -237,6 +355,10 @@ fn blend_geometry(
         planes: Vec<(Vec3, Vec3)>,
         ca: Option<mt::Vertex>,
         cb: Option<mt::Vertex>,
+        /// Points of the end's section on a curved end face, from A to B.
+        cap: Option<Vec<Vec3>>,
+        /// How far along the edge the section reaches from the end vertex.
+        reach: f64,
     }
     let mut ends: Vec<End> = Vec::new();
     for (v, p) in [(&v0, p0), (&v1, p1)] {
@@ -249,10 +371,98 @@ fn blend_geometry(
         };
         let (ga, gb) = match others[..] {
             [g] => (g, g),
-            [x, y] if shape == Shape::Round && shared(i1, x).is_some() && shared(i2, y).is_some() => (x, y),
-            [x, y] if shape == Shape::Round && shared(i1, y).is_some() && shared(i2, x).is_some() => (y, x),
+            [x, y] if shared(i1, x).is_some() && shared(i2, y).is_some() => (x, y),
+            [x, y] if shared(i1, y).is_some() && shared(i2, x).is_some() => (y, x),
             _ => return Err(unsupported("each end of the edge must touch exactly one more face")),
         };
+        // An end face that is not a plane, or meets the side faces in curves: the rails end where
+        // they reach its surface, and the blend's end is where its surface meets the end face
+        // (the cross-section through `p` slid along d onto it, point by point).
+        let is_line = |e: &mt::Edge| matches!(e.curve(), mt::Curve::Line(_));
+        if ga == gb
+            && let (Some(e1), Some(e2)) = (shared(i1, ga), shared(i2, gb))
+            && (faces.get(ga).and_then(|f| plane_normal(f)).is_none() || !is_line(&e1) || !is_line(&e2))
+        {
+            let g = faces.get(ga).ok_or_else(|| KernelError::Failed("face".into()))?;
+            let surf = g.surface();
+            let on_tol = (size * 1e-5).max(1e-6);
+            let reach = 3.0 * (s + r);
+            let (sa, sb) = (p + t1 * s, p + t2 * s);
+            let c0 = centre(p);
+            let theta = std::f64::consts::PI - phi;
+            let profile = |f: f64| -> Vec3 {
+                match shape {
+                    Shape::Flat => sa + (sb - sa) * f,
+                    Shape::Round => c0 + ((sa - c0) * ((1.0 - f) * theta).sin() + (sb - c0) * (f * theta).sin()) / theta.sin(),
+                }
+            };
+            // A rail's end: on the side edge, else on its continuation within the side face.
+            let rail_end = |x: Vec3, e: &mt::Edge, fi: usize| -> Result<(Vec3, f64)> {
+                let hits = line_surface_hits(&surf, x, d, reach, tol);
+                if let Some(l) = hits.iter().find(|l| on_edge(e, x + d * **l, on_tol).is_some()) {
+                    return Ok((x + d * *l, *l));
+                }
+                let side = faces.get(fi).ok_or_else(|| KernelError::Failed("face".into()))?;
+                hits.iter()
+                    .find(|l| on_extension(e, x + d * **l, on_tol) && extension_fits(side, p, x + d * **l, tol))
+                    .map(|l| (x + d * *l, *l))
+                    .ok_or_else(|| too_large("the blend is larger than the neighbouring faces"))
+            };
+            let ((a, la), (b, lb)) = (rail_end(sa, &e1, i1)?, rail_end(sb, &e2, i2)?);
+            let flat_plane = shape == Shape::Flat && plane_normal(g).is_some();
+            let mut cap: Option<Vec<Vec3>> = None;
+            let mut far = la.abs().max(lb.abs());
+            for n in [16usize, 32, 64] {
+                if flat_plane {
+                    cap = Some(vec![a, b]);
+                    break;
+                }
+                // The section's points on the end face, each continuing from the last.
+                let mut pts = vec![a];
+                let mut last = la;
+                let mut ok = true;
+                for i in 1..n {
+                    let x = profile(i as f64 / n as f64);
+                    match line_surface_hits(&surf, x, d, reach, tol).into_iter().min_by(|u, v| (u - last).abs().total_cmp(&(v - last).abs())) {
+                        Some(l) => {
+                            pts.push(x + d * l);
+                            last = l;
+                            far = far.max(l.abs());
+                        }
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if !ok {
+                    break;
+                }
+                pts.push(b);
+                // The fitted curve must stay on both surfaces between the points.
+                let Some(bs) = crate::build::interpolate_cubic(&pts) else { break };
+                let fits = (0..n).all(|i| {
+                    use mt::{ParametricCurve, ParametricSurface, SearchNearestParameter};
+                    let q = from_p3(bs.subs((i as f64 + 0.5) / n as f64));
+                    let on_g = surf.search_nearest_parameter(p3(q), None, 100).is_some_and(|(u, v)| from_p3(surf.subs(u, v)).dist(q) <= on_tol);
+                    let on_blend = match shape {
+                        Shape::Round => {
+                            let w = q - c0;
+                            ((w - d * w.dot(d)).len() - r).abs() <= on_tol
+                        }
+                        Shape::Flat => (sb - sa).cross(d).normalized().is_some_and(|m| (q - sa).dot(m).abs() <= on_tol),
+                    };
+                    on_g && on_blend
+                });
+                if fits {
+                    cap = Some(pts);
+                    break;
+                }
+            }
+            let cap = cap.ok_or_else(|| unsupported("the blend's end on a curved face"))?;
+            ends.push(End { v: v.clone(), g: vec![ga], e1, e2, e3: None, a, b, planes: Vec::new(), ca: None, cb: None, cap: Some(cap), reach: far });
+            continue;
+        }
         let normal = |g: usize| -> Result<Vec3> {
             let n = faces.get(g).and_then(|f| plane_normal(f)).ok_or_else(|| unsupported("the faces at the edge ends must be planar"))?;
             if n.dot(d).abs() < 1e-9 {
@@ -311,6 +521,33 @@ fn blend_geometry(
             let (len3, u) = (far.dist(p), (far - p).normalized().ok_or_else(|| unsupported("zero-length corner edge"))?);
             let c0 = centre(p);
             let perp = |x: Vec3| x - d * x.dot(d);
+            if shape == Shape::Flat {
+                // The chamfer plane through both rails crosses the edge between them.
+                let (sa, sb) = (p + t1 * s, p + t2 * s);
+                let m = (sb - sa).cross(d).normalized().ok_or_else(|| KernelError::Failed("chamfer plane".into()))?;
+                let den = m.dot(u);
+                let root = if den.abs() > 1e-12 { m.dot(sa - p) / den } else { f64::NAN };
+                let x = perp(p + u * root - sa);
+                let along = x.dot(sb - sa) / (sb - sa).len2();
+                if !(root > tol && root < len3 - tol && along > 1e-9 && along < 1.0 - 1e-9) {
+                    return Err(unsupported("the blend does not cross the edge between the end faces"));
+                }
+                ends.push(End {
+                    v: v.clone(),
+                    g: vec![ga, gb],
+                    e1: e1.clone(),
+                    e2: e2.clone(),
+                    e3: Some((e3.clone(), p + u * root)),
+                    a,
+                    b,
+                    planes: vec![(p, na), (p, nb)],
+                    ca: None,
+                    cb: None,
+                    cap: None,
+                    reach: 0.0,
+                });
+                continue;
+            }
             let (w, up) = (perp(p - c0), perp(u));
             // |w + λ up|² = r²
             let (qa, qb, qc) = (up.len2(), 2.0 * w.dot(up), w.len2() - r * r);
@@ -330,7 +567,7 @@ fn blend_geometry(
         };
         let planes = if ga == gb { vec![(p, na)] } else { vec![(p, na), (p, nb)] };
         let [ca, cb] = consumed;
-        ends.push(End { v: v.clone(), g: if ga == gb { vec![ga] } else { vec![ga, gb] }, e1, e2, e3, a, b, planes, ca, cb });
+        ends.push(End { v: v.clone(), g: if ga == gb { vec![ga] } else { vec![ga, gb] }, e1, e2, e3, a, b, planes, ca, cb, cap: None, reach: 0.0 });
     }
     let [end0, end1] = &ends[..] else { return Err(KernelError::Failed("ends".into())) };
     if end0.g.iter().any(|g| end1.g.contains(g)) {
@@ -393,6 +630,16 @@ fn blend_geometry(
         let (va, vb) = (vertex(&end.ca, end.a), vertex(&end.cb, end.b));
         let (sa, sb) = (p + t1 * s, p + t2 * s);
         let (chain, vq) = match (&end.e3, &end.planes[..]) {
+            _ if end.cap.is_some() => {
+                let pts = end.cap.as_deref().unwrap_or_default();
+                let curve = if pts.len() == 2 {
+                    builder::line(&va, &vb)
+                } else {
+                    let bs = crate::build::interpolate_cubic(pts).ok_or_else(|| unsupported("the blend's end on a curved face"))?;
+                    mt::Edge::try_new(&va, &vb, mt::Curve::BSplineCurve(bs)).map_err(|e| KernelError::Failed(format!("blend end: {e}")))?
+                };
+                (vec![curve], None)
+            }
             (None, [plane]) => (vec![section(p, &va, &vb, sa, sb, *plane)?], None),
             (Some((_, q)), [pa, pb]) => {
                 let vq = builder::vertex(p3(*q));
@@ -411,20 +658,18 @@ fn blend_geometry(
     // between two end faces stops where the blend crosses it; the blended edge moves to A or B.
     let mut subst: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
     let mut dropped: Vec<mt::EdgeID> = Vec::new();
-    let shorten = |e: &mt::Edge, v: &mt::Vertex, nv: &mt::Vertex| {
-        let (f, bk) = (e.absolute_front(), e.absolute_back());
-        if f == v { builder::line(nv, bk) } else { builder::line(f, nv) }
-    };
+    let on_tol = (size * 1e-5).max(1e-6);
+    let shorten = |e: &mt::Edge, v: &mt::Vertex, nv: &mt::Vertex| retarget(e, v, nv, on_tol);
     for (end, a, b, q) in [(end0, a0, b0, q0), (end1, a1, b1, q1)] {
         for (e, nv, used) in [(&end.e1, a, &end.ca), (&end.e2, b, &end.cb)] {
             if used.is_some() {
                 dropped.push(e.id());
                 continue;
             }
-            subst.insert(e.id(), shorten(e, &end.v, nv));
+            subst.insert(e.id(), shorten(e, &end.v, nv)?);
         }
         if let (Some((e3, _)), Some(q)) = (&end.e3, q) {
-            subst.insert(e3.id(), shorten(e3, &end.v, q));
+            subst.insert(e3.id(), shorten(e3, &end.v, q)?);
         }
     }
     // The side edges at the ends are pieces of themselves; the rails and corner curves are new.
@@ -479,6 +724,7 @@ fn blend_geometry(
             let reach = ends
                 .iter()
                 .flat_map(|e| e.planes.iter().map(|(_, n)| (s + r) * (1.0 - n.dot(d).powi(2)).max(0.0).sqrt() / n.dot(d).abs()))
+                .chain(ends.iter().map(|e| e.reach))
                 .fold(0.0, f64::max)
                 + r;
             let start = p0 - d * reach;
@@ -601,32 +847,45 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
                 return Err(KernelError::Invalid(format!("no edge near {:?}", [p.x, p.y, p.z])));
             }
             let edge = Body::unique_edges(&solid).into_iter().nth(idx).ok_or_else(|| KernelError::Invalid("edge index".into()))?;
-            let attempt = match guard(what, || blend_one(&solid, &edge, size, r, shape)) {
-                Ok(o) => Ok((o, vec![j])),
-                // A curved edge, or one between curved faces: roll a ball along its smooth chain.
-                Err(e) if !curved_case(&solid, &edge) => Err(e),
-                Err(e) => match smooth_chain(&solid, &edge) {
-                    Some(ids) => {
-                        let on_chain: Vec<usize> = todo
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, q)| {
-                                cur.nearest_edge(**q, tol)
-                                    .ok()
-                                    .flatten()
-                                    .and_then(|(i, _)| Body::unique_edges(&solid).into_iter().nth(i))
-                                    .is_some_and(|x| ids.contains(&x.id()))
-                            })
-                            .map(|(i, _)| i)
-                            .collect();
-                        guard(what, || crate::curveblend::curve_blend(&solid, &ids, size, r, shape == Shape::Round))
-                            .map(|o| (o, if on_chain.is_empty() { vec![j] } else { on_chain }))
-                            .map_err(|e2| match e2 {
-                                KernelError::TooLarge(m) => KernelError::TooLarge(format!("{m} ({e})")),
-                                e2 => KernelError::Failed(format!("{e2} ({e})")),
-                            })
-                    }
-                    None => Err(e),
+            // Roll a ball along the edge's smooth chain (the points of `todo` on it go with it).
+            let roll = |ids: &[mt::EdgeID]| {
+                let on_chain: Vec<usize> = todo
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, q)| {
+                        cur.nearest_edge(**q, tol)
+                            .ok()
+                            .flatten()
+                            .and_then(|(i, _)| Body::unique_edges(&solid).into_iter().nth(i))
+                            .is_some_and(|x| ids.contains(&x.id()))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                guard(what, || crate::curveblend::curve_blend(&solid, ids, size, r, shape == Shape::Round))
+                    .map(|o| (o, if on_chain.is_empty() { vec![j] } else { on_chain }))
+            };
+            // A straight edge running on smoothly into curved ones (a flange into its bend, a
+            // side into a rounded corner): the blend follows the whole smooth chain, as the
+            // rolling ball would.
+            let chain = smooth_chain(&solid, &edge);
+            let runs_on = !curved_case(&solid, &edge)
+                && chain.as_ref().is_some_and(|ids| {
+                    ids.len() > 1 && Body::unique_edges(&solid).iter().any(|x| ids.contains(&x.id()) && !matches!(x.curve(), mt::Curve::Line(_)))
+                });
+            let attempt = match chain.as_deref().filter(|_| runs_on).map(roll) {
+                Some(Ok(o)) => Ok(o),
+                Some(Err(e2)) => guard(what, || blend_one(&solid, &edge, size, r, shape)).map(|o| (o, vec![j])).map_err(|_| e2),
+                None => match guard(what, || blend_one(&solid, &edge, size, r, shape)) {
+                    Ok(o) => Ok((o, vec![j])),
+                    // A curved edge, or one between curved faces: roll a ball along its smooth chain.
+                    Err(e) if !curved_case(&solid, &edge) => Err(e),
+                    Err(e) => match chain.as_deref() {
+                        Some(ids) => roll(ids).map_err(|e2| match e2 {
+                            KernelError::TooLarge(m) => KernelError::TooLarge(format!("{m} ({e})")),
+                            e2 => KernelError::Failed(format!("{e2} ({e})")),
+                        }),
+                        None => Err(e),
+                    },
                 },
             };
             match attempt.and_then(|((o, rec), js)| record::rebuilt(o, &[&solid], &rec).map(|b| (b, js))) {
@@ -761,8 +1020,9 @@ fn curved_case(solid: &Solid, edge: &mt::Edge) -> bool {
 fn smooth_chain(solid: &Solid, edge: &mt::Edge) -> Option<Vec<mt::EdgeID>> {
     use mt::{BoundedCurve, ParametricCurve};
     let all = Body::unique_edges(solid);
+    // Along the edge as it runs from its front to its back (an edge may run against its curve).
     let dir = |e: &mt::Edge, at_end: bool| -> Option<Vec3> {
-        let c = e.curve();
+        let c = e.oriented_curve();
         let (t0, t1) = c.range_tuple();
         let d = c.der(if at_end { t1 } else { t0 });
         Vec3::new(d.x, d.y, d.z).normalized()
@@ -1349,6 +1609,102 @@ mod tests {
             assert!(!fits(1.5)); // endpoint in the circular hole
             assert!(!fits(0.5)); // endpoint in material, but the extension crossed the hole
             assert!(!fits(-1e8)); // an arbitrarily long slide cannot escape the face
+        }
+    }
+
+    /// A box with a cylinder joined across one side (#556): the bottom edge of that side runs
+    /// into the cylinder, which is curved where the edge ends.
+    fn box_and_boss() -> Body {
+        let b = crate::build::box_solid(Vec3::ZERO, Vec3::new(40.0, 40.0, 20.0)).unwrap();
+        let c = crate::build::cylinder(Vec3::new(40.0, 20.0, 0.0), Vec3::Z, 12.0, 40.0).unwrap();
+        crate::ops::boolean(&b, &c, crate::BoolOp::Union).unwrap().unwrap()
+    }
+
+    #[test]
+    fn a_blend_runs_into_a_cylinder_at_its_end() {
+        let body = box_and_boss();
+        let vol = |b: &Body| b.tessellate(1e-4).unwrap().measure().volume;
+        let v0 = vol(&body);
+        // The edge (40, 0..8, 0) ends in the cylinder wall at y = 8.
+        let len = 20.0 - (144.0f64 - 0.0).sqrt();
+        for (shape, size, area) in [(Shape::Round, 0.5, (1.0 - std::f64::consts::PI / 4.0) * 0.25), (Shape::Flat, 0.5, 0.125)] {
+            let out = blend(&body, &[Vec3::new(40.0, 4.0, 0.0)], size, shape, "blend").unwrap();
+            assert!(out.validity().is_empty(), "{:?}", out.validity());
+            let removed = v0 - vol(&out);
+            // The section runs on a little past y = 8 under the cylinder wall.
+            assert!(removed > area * len * 0.99 && removed < area * (len + 0.02), "{removed} vs {}", area * len);
+            assert_eq!(out.face_count(), body.face_count() + 1);
+        }
+    }
+
+    #[test]
+    fn a_blend_ends_on_a_hole_wall() {
+        // A plate with a hole cutting through the middle of its top front edge: each piece of
+        // that edge ends on the hole's wall.
+        let plate = crate::build::box_solid(Vec3::ZERO, Vec3::new(40.0, 20.0, 10.0)).unwrap();
+        let hole = crate::build::cylinder(Vec3::new(20.0, 0.0, -1.0), Vec3::Z, 5.0, 12.0).unwrap();
+        let body = crate::ops::boolean(&plate, &hole, crate::BoolOp::Cut).unwrap().unwrap();
+        let vol = |b: &Body| b.tessellate(1e-4).unwrap().measure().volume;
+        let v0 = vol(&body);
+        for (shape, area) in [(Shape::Round, (1.0 - std::f64::consts::PI / 4.0)), (Shape::Flat, 0.5)] {
+            let out = blend(&body, &[Vec3::new(5.0, 0.0, 10.0)], 1.0, shape, "blend").unwrap();
+            assert!(out.validity().is_empty(), "{:?}", out.validity());
+            let removed = v0 - vol(&out);
+            assert!(removed > area * 14.0 && removed < area * 15.2, "{removed}");
+        }
+    }
+
+    #[test]
+    fn a_chamfer_ends_across_two_faces() {
+        // A plate's outline chamfered, then the mitre at a corner chamfered: its low end meets
+        // both side faces, and the chamfer plane cuts back the vertical edge between them.
+        let k = 5.0;
+        let b = crate::build::box_solid(Vec3::ZERO, Vec3::new(100.0, 50.0, 20.0)).unwrap();
+        let outline = [Vec3::new(50.0, 0.0, 20.0), Vec3::new(100.0, 25.0, 20.0), Vec3::new(50.0, 50.0, 20.0), Vec3::new(0.0, 25.0, 20.0)];
+        let c = chamfer(&b, &outline, k).unwrap();
+        let out = blend(&c, &[Vec3::new(k / 2.0, k / 2.0, 20.0 - k / 2.0)], 1.0, Shape::Flat, "chamfer").unwrap();
+        assert!(out.validity().is_empty(), "{:?}", out.validity());
+        assert_eq!(out.lumps().unwrap().len(), 1);
+        assert_eq!(out.face_count(), c.face_count() + 1);
+        let vol = |b: &Body| b.tessellate(1e-4).unwrap().measure().volume;
+        // About the triangle (sides 1 and 1 at 120°) along the mitre; its ends slant.
+        let removed = vol(&c) - vol(&out);
+        let along = 0.5 * 120f64.to_radians().sin() * k * 3f64.sqrt();
+        assert!(removed > along * 0.8 && removed < along * 1.2, "{removed} vs {along}");
+    }
+
+    #[test]
+    fn a_curved_edge_blend_ends_in_a_face_at_an_angle() {
+        // A groove of radius 8 along y with its axis 4 below the top: the arcs where it meets the
+        // front and back faces end in the top face at 60° to it.
+        let b = crate::build::box_solid(Vec3::ZERO, Vec3::new(40.0, 20.0, 20.0)).unwrap();
+        let c = crate::build::cylinder(Vec3::new(20.0, -1.0, 16.0), Vec3::Y, 8.0, 22.0).unwrap();
+        let body = crate::ops::boolean(&b, &c, crate::BoolOp::Cut).unwrap().unwrap();
+        let vol = |b: &Body| b.tessellate(1e-4).unwrap().measure().volume;
+        let v0 = vol(&body);
+        for shape in [Shape::Round, Shape::Flat] {
+            let out = blend(&body, &[Vec3::new(20.0, 0.0, 8.0)], 0.5, shape, "blend").unwrap();
+            assert!(out.validity().is_empty(), "{:?}", out.validity());
+            // One blend face per piece of the arc (the groove's surface is in two faces).
+            assert_eq!(out.face_count(), body.face_count() + 2);
+            // About the section along the arc (240°, at the section's distance from the axis).
+            let area = if shape == Shape::Round { (1.0 - std::f64::consts::PI / 4.0) * 0.25 } else { 0.125 };
+            let along = 8.2 * 240f64.to_radians();
+            let removed = v0 - vol(&out);
+            assert!(removed > area * along * 0.9 && removed < area * along * 1.1, "{removed} vs {}", area * along);
+        }
+    }
+
+    #[test]
+    fn a_blend_of_an_edge_running_into_a_rounded_corner_follows_it() {
+        // A box with one vertical edge rounded: a top edge meeting that round smoothly is blended
+        // with the round's top arc and the next top edge, as one smooth chain.
+        let b = crate::build::box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)).unwrap();
+        let rounded = blend(&b, &[Vec3::new(40.0, 30.0, 10.0)], 5.0, Shape::Round, "fillet").unwrap();
+        for shape in [Shape::Round, Shape::Flat] {
+            let out = blend(&rounded, &[Vec3::new(20.0, 30.0, 20.0)], 1.0, shape, "blend").unwrap();
+            assert!(out.validity().is_empty(), "{:?}", out.validity());
+            assert_eq!(out.face_count(), rounded.face_count() + 3);
         }
     }
 
