@@ -586,7 +586,7 @@ fn top_of(f: &mt::Face, plane: &Plane) -> f64 {
 /// Certify that a curved wall is swept along `d` from its surface representation.
 /// Seam vertices alone cannot establish this: a half-cylinder's seam normals can
 /// both be perpendicular to a transverse direction, silently filling its hole.
-fn wall_along(surface: &mt::Surface, d: Vec3, tol: f64, remaining: &mut usize) -> bool {
+pub(crate) fn wall_along(surface: &mt::Surface, d: Vec3, tol: f64, remaining: &mut usize) -> bool {
     if let mt::Surface::RevolutedCurve(processor) = surface {
         let revolution = processor.entity();
         let mt::Curve::Line(line) = revolution.entity_curve() else { return false };

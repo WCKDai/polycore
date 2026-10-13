@@ -21,6 +21,7 @@ mod boolean_guard;
 mod boolean_record;
 mod bore_guard;
 mod build;
+mod clearance;
 mod coplanar;
 mod curveblend;
 mod delete_face;

@@ -558,6 +558,8 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Coincident planar faces: push them apart (exactly). Tried once, before the general
     // boolean; why it failed is reported if everything else fails too.
     let mut apart_failed = String::new();
+    // The exact polygon boolean's answer, when it was asked for early.
+    let mut planar = None;
     if !APART.with(|c| c.get()) {
         APART.with(|c| c.set(true));
         let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::boolean_apart(a, b, op));
@@ -576,6 +578,22 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             }
             Some(Err(e)) => apart_failed = format!("; {e}"),
             Some(Ok(None)) | None => {}
+        }
+        // A face with no room to move would take or add what it moves through. The exact
+        // polygon boolean takes the bodies as they lie (bodies with only planar faces, or a
+        // planar tool clear of the other body's curved faces): it is asked now, before the
+        // general boolean has its tries at faces lying in each other.
+        if apart_failed.contains(crate::coplanar::NO_ROOM) {
+            // What its own booleans report counts only when its result is taken.
+            let (exact, diagnostics) = capture_boolean_diagnostics(|| crate::polybool::planar_boolean(a, b, op));
+            match exact {
+                Ok(Some(body)) if check(&body).0 => {
+                    merge(diagnostics);
+                    record(BooleanFallback::new(BooleanStrategy::PlanarFallback));
+                    return Ok(Some(body));
+                }
+                other => planar = Some(other),
+            }
         }
     }
     // A face standing wholly inside a coincident face of the other body, back to back, and no
@@ -663,7 +681,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     last.push_str(&apart_failed);
     // Coincident faces defeat the B-rep boolean; bodies with only planar faces have an exact
     // polygon fallback.
-    match crate::polybool::planar_boolean(a, b, op) {
+    match planar.unwrap_or_else(|| crate::polybool::planar_boolean(a, b, op)) {
         Ok(Some(body)) => {
             let (ok, v) = check(&body);
             if ok {
