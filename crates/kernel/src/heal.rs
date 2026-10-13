@@ -199,60 +199,129 @@ fn merge_coplanar(shell: &mt::Shell, tol: f64, keep: &[Vec<Vec3>]) -> Option<(mt
     Some((out.into(), from))
 }
 
-/// Join pairs of collinear straight edges at vertices only they use.
+/// Join runs of collinear straight edges at vertices only they use: each run becomes one edge,
+/// every face it borders is rebuilt once (linear in the shell, however long the runs; a faceted
+/// body such as a modeled thread has thousands of such edges).
 fn merge_collinear(shell: &mt::Shell, trace: &mut Trace) -> Option<mt::Shell> {
     let mut faces: Vec<mt::Face> = shell.face_iter().cloned().collect();
-    let mut changed = false;
-    for _round in 0..10_000 {
-        let mut at: HashMap<mt::VertexID, Vec<mt::Edge>> = HashMap::new();
-        let mut seen = std::collections::HashSet::new();
-        for f in &faces {
-            for e in f.edge_iter() {
-                if seen.insert(e.id()) {
-                    at.entry(e.front().id()).or_default().push(e.absolute_clone());
-                    at.entry(e.back().id()).or_default().push(e.absolute_clone());
-                }
-            }
-        }
-        let pair = at.iter().find_map(|(v, es)| {
-            let [a, b] = &es[..] else { return None };
-            if !matches!(a.curve(), mt::Curve::Line(_)) || !matches!(b.curve(), mt::Curve::Line(_)) {
-                return None;
-            }
-            let other = |e: &mt::Edge| if e.front().id() == *v { e.back().clone() } else { e.front().clone() };
-            let mid = if a.front().id() == *v { a.front().clone() } else { a.back().clone() };
-            let (pa, pm, pb) = (from_p3(other(a).point()), from_p3(mid.point()), from_p3(other(b).point()));
-            let (u, w) = ((pm - pa).normalized()?, (pb - pm).normalized()?);
-            (u.dot(w) > 1.0 - 1e-10).then(|| (a.clone(), b.clone(), other(a), other(b)))
-        });
-        let Some((a, b, va, vb)) = pair else { break };
-        let joined = builder::line(&va, &vb);
-        trace.made(&joined, [a.id(), b.id()]);
-        for f in &mut faces {
-            if !f.edge_iter().any(|e| e.id() == a.id()) {
+    let mut edges: Vec<mt::Edge> = Vec::new();
+    let mut index: HashMap<mt::EdgeID, usize> = HashMap::new();
+    let mut at: HashMap<mt::VertexID, Vec<usize>> = HashMap::new();
+    for f in &faces {
+        for e in f.edge_iter() {
+            if index.contains_key(&e.id()) {
                 continue;
             }
-            let mut wires = Vec::new();
-            for w in f.absolute_boundaries() {
-                let mut es: Vec<mt::Edge> = Vec::new();
-                for e in w.edge_iter() {
-                    if e.id() == b.id() {
-                        continue;
-                    }
-                    if e.id() == a.id() {
-                        // a+b (in either order) become the joined edge, in this wire's direction.
-                        es.push(if e.front() == &va { joined.clone() } else { joined.inverse() });
-                        continue;
-                    }
-                    es.push(e.clone());
-                }
-                wires.push(mt::Wire::from(es));
-            }
-            *f = absolute_face(f, wires)?;
+            index.insert(e.id(), edges.len());
+            at.entry(e.front().id()).or_default().push(edges.len());
+            at.entry(e.back().id()).or_default().push(edges.len());
+            edges.push(e.absolute_clone());
         }
-        changed = true;
     }
-    changed.then(|| faces.into())
+    // Edges that continue each other in line through a vertex nothing else uses.
+    let mut parent: Vec<usize> = (0..edges.len()).collect();
+    let mut any = false;
+    for (v, es) in &at {
+        let [ia, ib] = es[..] else { continue };
+        let (Some(a), Some(b)) = (edges.get(ia), edges.get(ib)) else { continue };
+        if !matches!(a.curve(), mt::Curve::Line(_)) || !matches!(b.curve(), mt::Curve::Line(_)) {
+            continue;
+        }
+        let other = |e: &mt::Edge| if e.front().id() == *v { e.back().clone() } else { e.front().clone() };
+        let mid = if a.front().id() == *v { a.front().clone() } else { a.back().clone() };
+        let (pa, pm, pb) = (from_p3(other(a).point()), from_p3(mid.point()), from_p3(other(b).point()));
+        let (Some(u), Some(w)) = ((pm - pa).normalized(), (pb - pm).normalized()) else { continue };
+        if u.dot(w) > 1.0 - 1e-10 {
+            let (ra, rb) = (find(&mut parent, ia), find(&mut parent, ib));
+            if ra != rb
+                && let Some(x) = parent.get_mut(ra)
+            {
+                *x = rb;
+                any = true;
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    let mut runs: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..edges.len() {
+        let r = find(&mut parent, i);
+        runs.entry(r).or_default().push(i);
+    }
+    // Each run's joined edge, and the position of its vertices along it.
+    let mut joined: Vec<(mt::Edge, HashMap<mt::VertexID, usize>)> = Vec::new();
+    let mut run_of: HashMap<mt::EdgeID, usize> = HashMap::new();
+    for members in runs.values().filter(|m| m.len() > 1) {
+        let mut ends: HashMap<mt::VertexID, (usize, mt::Vertex)> = HashMap::new();
+        for i in members {
+            let Some(e) = edges.get(*i) else { continue };
+            for v in [e.front(), e.back()] {
+                ends.entry(v.id()).or_insert((0, v.clone())).0 += 1;
+            }
+        }
+        let mut ends = ends.into_values().filter(|(n, _)| *n == 1).map(|(_, v)| v);
+        let (Some(first), Some(last), None) = (ends.next(), ends.next(), ends.next()) else { continue };
+        // Walk the run from one end, collecting its vertices in order.
+        let mut order = vec![first.id()];
+        let (mut cur, mut prev) = (first.id(), usize::MAX);
+        for _ in 0..members.len() {
+            let next = at.get(&cur).and_then(|es| es.iter().copied().find(|i| *i != prev && members.contains(i)));
+            let Some(e) = next.and_then(|i| edges.get(i).map(|e| (i, e))) else { break };
+            cur = if e.1.front().id() == cur { e.1.back().id() } else { e.1.front().id() };
+            prev = e.0;
+            order.push(cur);
+        }
+        if order.last() != Some(&last.id()) || order.len() != members.len() + 1 {
+            continue;
+        }
+        // Every piece must lie along the whole run, not just along its neighbour.
+        let Some(dir) = (from_p3(last.point()) - from_p3(first.point())).normalized() else { continue };
+        let straight = members
+            .iter()
+            .filter_map(|i| edges.get(*i))
+            .all(|e| (from_p3(e.back().point()) - from_p3(e.front().point())).normalized().is_some_and(|d| d.dot(dir).abs() > 1.0 - 1e-10));
+        if !straight {
+            continue;
+        }
+        let line = builder::line(&first, &last);
+        trace.made_of(&line, members.iter().filter_map(|i| edges.get(*i)).map(|e| e.id()));
+        for i in members {
+            if let Some(e) = edges.get(*i) {
+                run_of.insert(e.id(), joined.len());
+            }
+        }
+        joined.push((line, order.into_iter().enumerate().map(|(k, v)| (v, k)).collect()));
+    }
+    if joined.is_empty() {
+        return None;
+    }
+    for f in &mut faces {
+        if !f.edge_iter().any(|e| run_of.contains_key(&e.id())) {
+            continue;
+        }
+        let mut wires = Vec::new();
+        for w in f.absolute_boundaries() {
+            let mut done = std::collections::HashSet::new();
+            let mut es: Vec<mt::Edge> = Vec::new();
+            for e in w.edge_iter() {
+                let Some(r) = run_of.get(&e.id()).copied() else {
+                    es.push(e.clone());
+                    continue;
+                };
+                // The run's pieces become its joined edge, in this wire's direction.
+                if done.insert(r)
+                    && let Some((line, pos)) = joined.get(r)
+                {
+                    let forward = pos.get(&e.front().id()) < pos.get(&e.back().id());
+                    es.push(if forward { line.clone() } else { line.inverse() });
+                }
+            }
+            wires.push(mt::Wire::from(es));
+        }
+        *f = absolute_face(f, wires)?;
+    }
+    Some(faces.into())
 }
 
 /// The exact curve an approximate edge (a boolean's intersection curve) really is: a line or a
@@ -504,10 +573,15 @@ impl Trace {
 
     /// `edge` was made from the live edges `from`.
     fn made<const N: usize>(&mut self, edge: &mt::Edge, from: [mt::EdgeID; N]) {
+        self.made_of(edge, from);
+    }
+
+    /// `edge` was made from the live edges `from`, however many.
+    fn made_of(&mut self, edge: &mt::Edge, from: impl IntoIterator<Item = mt::EdgeID>) {
         if !self.on {
             return;
         }
-        let mut under: Vec<usize> = from.iter().flat_map(|id| self.of(id)).collect();
+        let mut under: Vec<usize> = from.into_iter().flat_map(|id| self.of(&id)).collect();
         under.sort_unstable();
         under.dedup();
         self.made.insert(edge.id(), under);
@@ -571,6 +645,49 @@ fn heal_shells(solid: &Solid, size: f64, keep: &[Vec<Vec3>], traced: bool) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Body;
+
+    /// Distinct faces, edges and vertices of a shell (its iterators repeat shared ones).
+    fn counts(shell: &mt::Shell) -> (usize, usize, usize) {
+        let edges: std::collections::HashSet<_> = shell.edge_iter().map(|e| e.id()).collect();
+        let vertices: std::collections::HashSet<_> = shell.vertex_iter().map(|v| v.id()).collect();
+        (shell.face_iter().count(), edges.len(), vertices.len())
+    }
+
+    /// A prism whose front face was cut into `n` strips along a single line: the strips merge
+    /// into one face, which leaves `n` collinear pieces on each of its long edges.
+    fn strip_prism(n: usize) -> Solid {
+        let pts: Vec<mt::Vertex> = (0..=n)
+            .map(|k| builder::vertex(mt::Point3::new(k as f64, 0.0, 0.0)))
+            .chain([builder::vertex(mt::Point3::new(n as f64, 3.0, 0.0)), builder::vertex(mt::Point3::new(0.0, 3.0, 0.0))])
+            .collect();
+        let edges: Vec<mt::Edge> = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| builder::line(a, b)).collect();
+        let face = builder::try_attach_plane(&[mt::Wire::from(edges)]).expect("a plane");
+        builder::tsweep(&face, mt::Vector3::new(0.0, 0.0, 2.0))
+    }
+
+    /// Runs of collinear edges join in one pass, however long: past the 10 000 pieces the old
+    /// pairwise loop stopped at, and in time (a modeled thread has thousands of such pieces,
+    /// and filleting beside one froze the app).
+    #[test]
+    fn long_collinear_runs_join_whole() {
+        let n = 12_000;
+        let started = std::time::Instant::now();
+        let healed = heal(strip_prism(n), n as f64);
+        let shell = healed.boundaries().first().expect("a shell").clone();
+        assert_eq!(counts(&shell), (6, 12, 8));
+        let body = Body::new(healed).expect("a valid body");
+        let volume = crate::measure::measure(&body).expect("measures").volume;
+        assert!((volume - n as f64 * 3.0 * 2.0).abs() < 1e-6 * volume, "{volume}");
+        assert!(started.elapsed().as_secs() < 30, "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn short_collinear_runs_join_and_keep_the_corners() {
+        let healed = heal(strip_prism(3), 3.0);
+        let shell = healed.boundaries().first().expect("a shell").clone();
+        assert_eq!(counts(&shell), (6, 12, 8));
+    }
 
     #[test]
     fn approximate_arcs_become_exact() {
