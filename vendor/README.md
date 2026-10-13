@@ -62,6 +62,16 @@ Changes:
   point that does not evaluate counts as flat instead of recursing). Surface grids refine only
   the direction that bends, and a ruling left undivided gets cells comparable to the other
   direction (long triangles from a trim loop to the grid's far ends cut through cylinders).
+- `tessellation/mod.rs`, `tessellation/triangulation.rs`, for display: a `Deflection` is the
+  chord tolerance plus an optional bound on the angle one facet spans, and
+  `RoundMeshableShape::robust_triangulation_within` divides by it: an edge or a grid direction
+  within the chord tolerance is still halved while a piece turns more than the angle, until its
+  sag is under a floor (a radius that is small beside the tolerance was one flat facet).
+  Bounded work: a face that would be bounded by more than 4096 segments has its curved edges
+  divided at twice the angle, and again, down to the chord tolerance alone, and the angle
+  stops refining a face's grid at 16 384 points. Each edge is still divided once for both its
+  faces. `triangulation` and `robust_triangulation` divide by the chord tolerance alone, as
+  before.
 - `lib.rs`: compiler warnings no longer fail the build. Example, test and bench targets are
   dropped (their sources are not vendored).
 

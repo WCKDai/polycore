@@ -73,7 +73,7 @@ mod tspline;
 pub use blend::{ChamferSide, chamfer, chamfer_sides, fillet, fillet_max};
 pub use blend_corner::fillet_radii;
 pub use blend_variable::{fillet_chord, fillet_variable, fillet_variable_points};
-pub use body::{Body, CapSignature, EdgeInfo, FaceInfo, FacePaint, FaceSource, Paint};
+pub use body::{Body, CapSignature, DISPLAY_ANGLE, EdgeInfo, FaceInfo, FacePaint, FaceSource, Paint};
 pub use boolean_diagnostics::{BooleanDiagnostics, BooleanFallback, BooleanStrategy, capture_boolean_diagnostics};
 pub use build::{PathSeg, box_solid, canonical_revolve_axis, cylinder, extrude, extrude_tapered, loft, revolve, sphere, sweep, torus};
 pub use delete_face::delete_faces;

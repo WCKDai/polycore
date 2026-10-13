@@ -148,17 +148,38 @@ pub struct FaceInfo {
 
 type MeshedShell = truck_topology::Shell<mt::Point3, PolylineCurve<mt::Point3>, Option<PolygonMesh>>;
 
+/// The most one facet of the display mesh turns (radians): a curved face or edge is divided
+/// until no facet spans more of it than this, however small its radius is beside the body.
+/// 20 degrees: a quarter turn is drawn with at least five facets, a full circle with at least 18.
+pub const DISPLAY_ANGLE: f64 = std::f64::consts::PI / 9.0;
+
+/// The sag, as a fraction of the chord tolerance, below which the angle no longer divides a
+/// facet: at [`DISPLAY_ANGLE`] and the application's tolerance of 1/1000 of the body, a radius
+/// under about 1/15000 of the body gets fewer facets than the angle asks for, and one under
+/// a millionth of it only those of the chord tolerance.
+const DISPLAY_ANGLE_FLOOR: f64 = 1e-3;
+
+/// The finest angle a display mesh is divided by (one degree).
+const MIN_DISPLAY_ANGLE: f64 = std::f64::consts::PI / 180.0;
+
 /// Triangulate each shell (not the solid: truck's solid constructor panics on the open or
 /// non-manifold shells an import can produce). Boundaries that lie on their surface only within
 /// tolerance (imports, boolean results) are projected onto it.
 fn mesh_shells(solid: &Solid, tol: f64) -> Vec<MeshedShell> {
+    mesh_shells_within(solid, Deflection::chord(tol))
+}
+
+/// [`mesh_shells`] divided by a chord tolerance and, when it has one, a bound on the angle a
+/// facet spans. Each edge is divided once for both its faces, so the faces still share its
+/// points.
+fn mesh_shells_within(solid: &Solid, deflection: Deflection) -> Vec<MeshedShell> {
     solid
         .boundaries()
         .iter()
         // The robust search tries the exact one first, so exact geometry costs nothing extra; a
         // face can also come back as an empty mesh rather than none (boolean results with
         // approximate intersection curves), so always use it.
-        .map(|sh| sh.robust_triangulation(tol))
+        .map(|sh| sh.robust_triangulation_within(deflection))
         .collect()
 }
 
@@ -838,13 +859,24 @@ impl Body {
     /// Like [`Body::tessellate`]; with `refine`, triangles that cut through curved faces are
     /// split until within `tol` of the surface (for measuring).
     pub fn tessellate_with(&self, tol: f64, refine: bool) -> Result<Mesh> {
+        self.tessellate_within(tol, f64::INFINITY, refine)
+    }
+
+    /// [`Body::tessellate_with`] in which no facet turns more than `angle` radians either
+    /// (infinite: the chord tolerance alone).
+    fn tessellate_within(&self, tol: f64, angle: f64, refine: bool) -> Result<Mesh> {
         let tol = if tol.is_finite() && tol > 0.0 { tol } else { 0.05 };
         let tol = tol.max(self.size() * 1e-6);
         if let Some(m) = &self.mesh {
             return Ok(m.to_mesh());
         }
+        let deflection = if angle.is_finite() && angle > 0.0 {
+            Deflection { chord: tol, angle: angle.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR }
+        } else {
+            Deflection::chord(tol)
+        };
         guard("tessellate", || {
-            let meshed = mesh_shells(&self.solid, tol);
+            let meshed = mesh_shells_within(&self.solid, deflection);
             let mut out = Mesh::default();
             let solid_faces: Vec<&mt::Face> = self.solid.face_iter().collect();
             for (fi, face) in meshed.iter().flat_map(|s| s.face_iter()).enumerate() {
@@ -941,7 +973,20 @@ impl Body {
 
     /// Display mesh: like [`Body::tessellate`], with seam edges flagged.
     pub fn display_mesh(&self, tol: f64) -> Result<Mesh> {
-        let mut m = self.tessellate(tol)?;
+        self.flagged(self.tessellate(tol)?)
+    }
+
+    /// Display mesh whose curved faces and edges look curved whatever the body's size: like
+    /// [`Body::display_mesh`], and no facet turns more than `angle` radians (see
+    /// [`DISPLAY_ANGLE`]). A chord tolerance that follows the body's size is larger than the
+    /// sagitta of a small radius on a large body (a sheet-metal bend, a small hole), which the
+    /// tolerance alone leaves as one flat facet.
+    pub fn display_mesh_angular(&self, tol: f64, angle: f64) -> Result<Mesh> {
+        self.flagged(self.tessellate_within(tol, angle, false)?)
+    }
+
+    /// A tessellation with its edges flagged for display (seams, tangent joins, protected creases).
+    fn flagged(&self, mut m: Mesh) -> Result<Mesh> {
         if self.is_mesh() {
             return Ok(m);
         }
@@ -1220,6 +1265,10 @@ mod lump_tests;
 #[cfg(test)]
 #[path = "refine_cache_tests.rs"]
 mod refine_cache_tests;
+
+#[cfg(test)]
+#[path = "display_mesh_tests.rs"]
+mod display_mesh_tests;
 
 #[cfg(test)]
 #[path = "regularization_protection_tests.rs"]
