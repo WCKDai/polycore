@@ -299,3 +299,31 @@ fn closed_curved_seam_is_not_supported() {
         assert!(err.to_string().contains("not supported yet: a closed curved edge"), "{err}");
     }
 }
+
+#[test]
+fn rolling_ball_past_the_end_seam_is_too_large_and_reduces() {
+    // The crossing cylinders of the test above with the small one's centre inside the large
+    // one: a round of 3 would reach past the end of the cap arc it trims, so it is too large
+    // (a smaller one fits), and the largest that fits is the analytic round over the full height
+    // (checked on its surface: its added volume is too small beside the body's to measure).
+    let (r1, r2, d, h) = (17.0, 9.5, 12.0, 10.0);
+    let (c1, c2) = (Vec3::ZERO, Vec3::new(d, 0.0, 0.0));
+    let body = boolean(&cylinder(c1, Vec3::Z, r1, h).unwrap(), &cylinder(c2, Vec3::Z, r2, h).unwrap(), BoolOp::Union).unwrap().unwrap();
+    let along = (r1 * r1 - r2 * r2 + d * d) / (2.0 * d);
+    let corner = Vec3::new(along, (r1 * r1 - along * along).sqrt(), 0.0);
+    let at = [corner + Vec3::Z * (h / 2.0)];
+    let e = fillet(&body, &at, 3.0).unwrap_err();
+    assert!(matches!(e, KernelError::TooLarge(_)), "{e}");
+    let (r, blend) = crate::fillet_max(&body, &at, 3.0).unwrap();
+    assert!(r > 1.5 && r < 3.0, "{r}");
+    assert!(blend.validity().is_empty(), "{:?}", blend.validity());
+    let g = gap(c1, r1, c2, r2, corner, r);
+    let surfaces: Vec<_> = blend.solid.face_iter().map(|f| f.oriented_surface()).filter(|s| matches!(s, mt::Surface::NurbsSurface(_))).collect();
+    let mut worst: f64 = 0.0;
+    for z in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        for p in &g.arc {
+            worst = worst.max(nearest_blend(&surfaces, *p + Vec3::Z * (h * z)).0);
+        }
+    }
+    assert!(worst < 1e-3, "blend surface is {worst} mm off the analytic round at r {r}");
+}

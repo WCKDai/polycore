@@ -300,14 +300,14 @@ fn trim_curved_seam(seam: &mt::Edge, a: Option<mt::Vertex>, b: Option<mt::Vertex
             .unwrap_or(end);
         let t = curve.search_nearest_parameter(v.point(), hint, 100).ok_or_else(|| unsupported("the blend is larger than the neighbouring faces"))?;
         if !(t.is_finite() && from_p3(mt::ParametricCurve::subs(&curve, t)).dist(from_p3(v.point())) <= size * 1e-5) {
-            return Err(unsupported("the blend is larger than the neighbouring faces"));
+            return Err(too_large("the blend is larger than the neighbouring faces"));
         }
         Ok(t)
     };
     let (ta, tb) = (at(&a, lo)?, at(&b, hi)?);
     let margin = (hi - lo) * 1e-9;
     if ta < lo - margin || tb > hi + margin || tb - ta < (hi - lo) * 1e-6 {
-        return Err(unsupported("the blend is larger than the neighbouring faces"));
+        return Err(too_large("the blend is larger than the neighbouring faces"));
     }
     if tb < hi {
         let _ = curve.cut(tb);

@@ -634,8 +634,10 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
                     done = Some(x);
                     break;
                 }
+                // Reported: the first refusal, unless a later one is a size a smaller radius may
+                // fit (the others may be refused only until that edge is blended).
                 Err(e) => {
-                    if first_err.is_none() {
+                    if first_err.is_none() || (matches!(e, KernelError::TooLarge(_)) && !matches!(first_err, Some(KernelError::TooLarge(_)))) {
                         first_err = Some(e);
                     }
                 }
@@ -909,7 +911,12 @@ pub fn fillet(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     // Corners the local blends refuse (an earlier round at an edge's end): radius per edge.
     blend(body, edges, radius, Shape::Round, "fillet").or_else(|e| {
         let sel: Vec<(Vec3, f64)> = edges.iter().map(|p| (*p, radius)).collect();
-        crate::blend_corner::fillet_radii(body, &sel).map_err(|_| e)
+        // The local blend's refusal, unless only the corner build found the radius too large.
+        crate::blend_corner::fillet_radii(body, &sel).map_err(|e2| match (&e, e2) {
+            (KernelError::TooLarge(_), _) => e,
+            (_, e2 @ KernelError::TooLarge(_)) => e2,
+            _ => e,
+        })
     })
 }
 
