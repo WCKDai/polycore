@@ -1536,6 +1536,21 @@ fn draft_of_a_round_ended_pocket() {
     assert!(rel(v, 80.0 * 60.0 * 25.0 - pocket) < 1e-4, "{v} vs {}", 80.0 * 60.0 * 25.0 - pocket);
 }
 
+/// A round wall is stored in pieces (a cylinder's two halves); one pick drafts all of it (#547).
+/// A hole drafted from the top narrows going down: a frustum from R 10 to 10 − 25 · tan 5°.
+#[test]
+fn draft_of_a_round_hole_from_one_pick() {
+    let block = box_solid(Vec3::ZERO, Vec3::new(60.0, 60.0, 25.0)).unwrap();
+    let hole = cylinder(Vec3::new(30.0, 30.0, -1.0), Vec3::Z, 10.0, 27.0).unwrap();
+    let b = boolean(&block, &hole, BoolOp::Cut).unwrap().unwrap();
+    let a = 5f64.to_radians();
+    let d = draft(&b, &[Vec3::new(40.0, 30.0, 12.5)], &Plane::XY.offset(25.0), Vec3::Z, a).unwrap();
+    let (big, small) = (10.0, 10.0 - 25.0 * a.tan());
+    let want = 60.0 * 60.0 * 25.0 - PI * 25.0 / 3.0 * (big * big + big * small + small * small);
+    let m = measure(&d).unwrap();
+    assert!(rel(m.volume, want) < 1e-4, "{} vs {want}", m.volume);
+}
+
 #[test]
 fn rounded_corners_rounded_again_make_spheres() {
     // Vertical edges first, then the top and bottom loops with the same radius: the corners
