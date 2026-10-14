@@ -854,6 +854,14 @@ fn inside_loop(lp: &Loop2, p: Vec2) -> bool {
     // counts the touch and the other misses it. Move the ray off such points: a shift far below
     // any modelling tolerance cannot change the answer for a point that is not on the loop.
     let scale = 1.0 + p.x.abs().max(p.y.abs());
+    // A point clear of the loop's box (by more than the ray shifts below) is outside it: skip
+    // the costly tests, which a region with a thousand cut-outs runs for every probe (#732).
+    if let Some((lo, hi)) = loop_box(lp) {
+        let m = scale * 1e-6;
+        if p.x < lo.x - m || p.x > hi.x + m || p.y < lo.y - m || p.y > hi.y + m {
+            return false;
+        }
+    }
     // A point on the loop keeps the half-open answer.
     if lp.segs.iter().any(|s| s.point_at(s.closest_param(p)).dist(p) < scale * 1e-9) {
         return inside_loop_ray(lp, p);
@@ -870,6 +878,24 @@ fn inside_loop(lp: &Loop2, p: Vec2) -> bool {
     };
     let ray = [0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0].into_iter().map(|k| Vec2::new(p.x, p.y + k * scale * 1e-7)).find(|q| !grazes(*q)).unwrap_or(p);
     inside_loop_ray(lp, ray)
+}
+
+/// A box holding a loop of lines and arcs (an arc's whole circle); None for other curves.
+fn loop_box(lp: &Loop2) -> Option<(Vec2, Vec2)> {
+    let mut lo = Vec2::new(f64::MAX, f64::MAX);
+    let mut hi = Vec2::new(f64::MIN, f64::MIN);
+    let mut add = |a: Vec2, b: Vec2| {
+        lo = Vec2::new(lo.x.min(a.x), lo.y.min(a.y));
+        hi = Vec2::new(hi.x.max(b.x), hi.y.max(b.y));
+    };
+    for seg in &lp.segs {
+        match *seg {
+            Seg2::Line { a, b } => add(Vec2::new(a.x.min(b.x), a.y.min(b.y)), Vec2::new(a.x.max(b.x), a.y.max(b.y))),
+            Seg2::Arc { center, radius, .. } => add(center - Vec2::new(radius.abs(), radius.abs()), center + Vec2::new(radius.abs(), radius.abs())),
+            _ => return None,
+        }
+    }
+    (lo.x <= hi.x && lo.y <= hi.y && [lo.x, lo.y, hi.x, hi.y].iter().all(|v| v.is_finite())).then_some((lo, hi))
 }
 
 /// [`inside_loop`] with the ray along +x from `p` taken as given.
