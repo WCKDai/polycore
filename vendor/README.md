@@ -125,6 +125,10 @@ SolidCraft changes:
   guarantees 1x and 4x).
 - `src/setup.rs`: the default device asks for the adapter's largest 2D texture (at least 8192)
   instead of exactly 8192.
+- `src/lib.rs`, `src/winit.rs`: `set_startup_hook` is told before each step of getting the
+  device and the window's surface up (instance, surface, adapter request, the chosen adapter,
+  device, renderer, surface configure, first present), so the app's crash journal can say which
+  step a crash inside the graphics driver happened in.
 - `src/lib.rs`, `src/winit.rs`: a window larger than the device's largest texture gets a surface
   clamped to it (`clamp_surface_extent`, aspect ratio kept) and egui is drawn at the matching
   smaller scale, instead of a `Surface::configure` validation panic (#869). The resize path and
