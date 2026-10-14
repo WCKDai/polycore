@@ -3,7 +3,7 @@
 //! planar sketch region), Stitch (surfaces sharing edges sewn
 //! into one body, a solid when they close), Trim (a surface cut by a tool, one side kept),
 //! Thicken (a surface offset along its normals into a solid), copying faces out of a body, and
-//! sheets swept from sketch curves (surface extrude, revolve and sweep).
+//! sheets swept from sketch curves (surface extrude, revolve, sweep and loft).
 
 use std::collections::HashMap;
 
@@ -274,6 +274,75 @@ fn far_wire(swept: &mt::Shell, start: &mt::Wire, map: &dyn Fn(Vec3) -> Vec3) -> 
         out.push(found.ok_or_else(|| KernelError::Failed("sweep: lost the curves along the path".into()))?);
     }
     Ok(out.into())
+}
+
+/// A surface lofted through two or more sections, each a chain of sketch segments on its plane,
+/// all open or all closed: ruled between two sections, one smooth face per segment through
+/// three or more. Closed sections are matched as the solid loft matches them; open ones are
+/// split to the same number of segments (longest first) and each turned to run the way the one
+/// before it does. Walls only, no caps; the history has no operands: every face is new.
+pub fn loft_sheet(sections: &[(Plane, Vec<Seg2>)]) -> Result<Body> {
+    if sections.len() < 2 || sections.len() > 50 {
+        return Err(KernelError::Invalid("a loft needs 2…50 sections".into()));
+    }
+    let closed: Vec<bool> = sections
+        .iter()
+        .map(|(_, c)| match (c.first(), c.last()) {
+            (Some(f), Some(l)) if c.len() <= 4096 => Ok(l.end().dist(f.start()) <= 1e-6),
+            _ => Err(KernelError::Invalid("a loft section has no curves, or too many".into())),
+        })
+        .collect::<Result<_>>()?;
+    let all_closed = closed.iter().all(|c| *c);
+    if !all_closed && closed.iter().any(|c| *c) {
+        return Err(KernelError::Invalid("the loft sections must be all open or all closed".into()));
+    }
+    for (plane, chain) in sections {
+        // Checks the frame, the numbers and that each chain runs end to end.
+        if !crate::build::frame_ok(plane) {
+            return Err(KernelError::Invalid("a loft section's frame is not finite and orthonormal".into()));
+        }
+        crate::build::chain_wire(plane, chain)?;
+    }
+    let (wires, sources) = if all_closed {
+        let loops: Vec<(Plane, solidcraft_geom::Loop2)> = sections.iter().map(|(p, c)| (*p, solidcraft_geom::Loop2 { segs: c.clone() })).collect();
+        let (wires, sources, _) = crate::build::loft_wires(&loops)?;
+        (wires, sources)
+    } else {
+        let n = sections.iter().map(|(_, c)| c.len()).max().unwrap_or(0);
+        let mut wires = Vec::with_capacity(sections.len());
+        let mut prev: Option<(Vec3, Vec3)> = None;
+        for (plane, chain) in sections {
+            let mut segs = chain.clone();
+            // Split the longest segment in half until the counts match.
+            while segs.len() < n {
+                let Some(i) = segs.iter().enumerate().max_by(|a, b| a.1.length().total_cmp(&b.1.length())).map(|(i, _)| i) else { break };
+                let (a, b) = segs[i].split_half();
+                segs.splice(i..=i, [a, b]);
+            }
+            let ends = |c: &[Seg2]| c.first().zip(c.last()).map(|(f, l)| (plane.to_world(f.start()), plane.to_world(l.end())));
+            if let (Some((ps, pe)), Some((s, e))) = (prev, ends(&segs))
+                && s.dist(ps) + e.dist(pe) > s.dist(pe) + e.dist(ps)
+            {
+                segs = segs.iter().rev().map(Seg2::reversed).collect();
+            }
+            prev = ends(&segs);
+            wires.push(crate::build::uniform_chain_wire(plane, &segs, false)?);
+        }
+        (wires, Vec::new())
+    };
+    let faces = guard("surface loft", || {
+        let smooth = if wires.len() >= 3 { crate::build::smooth_loft_faces(&wires, &sources, all_closed).ok() } else { None };
+        match smooth {
+            Some(f) => Ok(f),
+            None => crate::build::ruled_loft_faces(&wires, &sources),
+        }
+    })?;
+    let mut rec = Rebuild::default();
+    let faces: Vec<mt::Face> = faces.into_iter().map(|(f, _)| f).collect();
+    for f in &faces {
+        rec.made(f, Vec::new());
+    }
+    body_of(faces, &[], &rec)
 }
 
 /// The edge of a body nearest a point (by samples along each edge).
@@ -1051,6 +1120,47 @@ mod tests {
         assert!(sweep_sheet(&Plane::XY, std::slice::from_ref(&line), &[no_axis]).is_err());
         assert!(sweep_sheet_points(&Plane::XY, std::slice::from_ref(&line), &[Vec3::ZERO]).is_err());
         assert!(sweep_sheet_points(&Plane::XY, std::slice::from_ref(&line), &[Vec3::ZERO, Vec3::new(f64::NAN, 0.0, 0.0)]).is_err());
+    }
+
+    /// Sheets lofted between open lines and closed loops: a ruled strip (even when the second
+    /// line runs the other way, or is in two pieces), a smooth strip through three, the walls
+    /// between two squares, and a cylinder through three circles.
+    #[test]
+    fn loft_sheet_areas() {
+        use std::f64::consts::PI;
+        let at = |z: f64| Plane::XY.offset(z);
+        let line = |a: f64, b: f64| Seg2::Line { a: Vec2::new(a, 0.0), b: Vec2::new(b, 0.0) };
+        let area = |b: &Body| measure(b).unwrap().area;
+        let strip = loft_sheet(&[(at(0.0), vec![line(0.0, 10.0)]), (at(5.0), vec![line(0.0, 10.0)])]).unwrap();
+        assert!(strip.is_surface() && rel(area(&strip), 50.0) < 1e-6, "{}", area(&strip));
+        let turned = loft_sheet(&[(at(0.0), vec![line(0.0, 10.0)]), (at(5.0), vec![line(10.0, 0.0)])]).unwrap();
+        assert!(rel(area(&turned), 50.0) < 1e-6, "not twisted: {}", area(&turned));
+        let pieces = loft_sheet(&[(at(0.0), vec![line(0.0, 10.0)]), (at(5.0), vec![line(0.0, 5.0), line(5.0, 10.0)])]).unwrap();
+        assert!(rel(area(&pieces), 50.0) < 1e-6 && pieces.face_count() == 2, "{}", area(&pieces));
+        let three = loft_sheet(&[(at(0.0), vec![line(0.0, 10.0)]), (at(5.0), vec![line(0.0, 10.0)]), (at(10.0), vec![line(0.0, 10.0)])]).unwrap();
+        assert!(rel(area(&three), 100.0) < 1e-3, "{}", area(&three)); // (measured on meshes)
+        let sq = Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)]);
+        let walls = loft_sheet(&[(at(0.0), sq.segs.clone()), (at(4.0), sq.segs.clone())]).unwrap();
+        assert!(walls.is_surface() && walls.face_count() == 4 && rel(area(&walls), 160.0) < 1e-6, "{}", area(&walls));
+        let circle = Loop2::circle(Vec2::ZERO, 2.0).segs;
+        let tube = loft_sheet(&[(at(0.0), circle.clone()), (at(5.0), circle.clone()), (at(10.0), circle)]).unwrap();
+        assert!(tube.is_surface());
+        let want = 2.0 * PI * 2.0 * 10.0;
+        assert!(rel(area(&tube), want) < 2e-3, "{} vs {want}", area(&tube)); // (measured on meshes)
+    }
+
+    #[test]
+    fn loft_sheet_refuses_bad_input() {
+        let at = |z: f64| Plane::XY.offset(z);
+        let line = vec![Seg2::Line { a: Vec2::new(0.0, 0.0), b: Vec2::new(10.0, 0.0) }];
+        let sq = Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)]).segs;
+        assert!(loft_sheet(&[(at(0.0), line.clone())]).is_err(), "one section");
+        assert!(loft_sheet(&[(at(0.0), line.clone()), (at(1.0), sq)]).is_err(), "open and closed");
+        assert!(loft_sheet(&[(at(0.0), line.clone()), (at(1.0), vec![])]).is_err(), "an empty section");
+        let gap = vec![line[0], Seg2::Line { a: Vec2::new(11.0, 0.0), b: Vec2::new(12.0, 0.0) }];
+        assert!(loft_sheet(&[(at(0.0), line.clone()), (at(1.0), gap)]).is_err(), "a section with a gap");
+        let nan = vec![Seg2::Line { a: Vec2::new(f64::NAN, 0.0), b: Vec2::new(1.0, 0.0) }];
+        assert!(loft_sheet(&[(at(0.0), line), (at(1.0), nan)]).is_err());
     }
 
     #[test]

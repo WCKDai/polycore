@@ -1000,6 +1000,29 @@ pub(crate) fn cap_and_close(sides: Vec<Side>, w0: &[mt::Wire], w1: &[mt::Wire], 
 /// Ruled loft through two or more planar sections (outer loops only). The sections and the
 /// same sections in reverse order give the same body.
 pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
+    let (wires, edge_sources, reversed) = loft_wires(sections)?;
+    // The wires run from the first section given, or (turned round) the last.
+    // Three sections or more: one smooth surface through them all for each segment.
+    if wires.len() >= 3
+        && let Ok(b) = guard("loft", || {
+            let faces = smooth_loft_faces(&wires, &edge_sources, true)?;
+            let (Some(w0), Some(w1)) = (wires.first(), wires.last()) else { return Err(KernelError::Failed("smooth loft: sections".into())) };
+            cap_and_close(faces, std::slice::from_ref(w0), std::slice::from_ref(w1), reversed)
+        })
+    {
+        return Ok(b);
+    }
+    guard("loft", || {
+        let sides = ruled_loft_faces(&wires, &edge_sources)?;
+        let (Some(first), Some(last)) = (wires.first(), wires.last()) else { return Err(KernelError::Failed("loft".into())) };
+        cap_and_close(sides, std::slice::from_ref(first), std::slice::from_ref(last), reversed)
+    })
+}
+
+/// The wires of a loft's closed sections, matched: oriented alike, resampled to the same
+/// segment count and turned to start alike; with the profile segments under each wire edge, and
+/// whether the sections were turned round into the canonical order.
+pub(crate) fn loft_wires(sections: &[(Plane, Loop2)]) -> Result<(Vec<mt::Wire>, Vec<Vec<Vec<usize>>>, bool)> {
     if sections.len() < 2 || sections.len() > 50 {
         return Err(KernelError::Invalid("a loft needs 2…50 sections".into()));
     }
@@ -1060,24 +1083,22 @@ pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
         wires.push(uniform_wire(p, &r.lp)?);
         edge_sources.push(r.from);
     }
-    // The wires run from the first section given, or (turned round) the last.
-    // Three sections or more: one smooth surface through them all for each segment.
-    if wires.len() >= 3
-        && let Ok(b) = guard("loft", || smooth_loft(&wires, &edge_sources, reversed))
-    {
-        return Ok(b);
-    }
-    guard("loft", || {
-        // Each ruled face lies between two sections: it comes from the section edges it spans.
-        let mut sides: Vec<Side> = Vec::new();
-        for (w, src) in wires.windows(2).zip(edge_sources.windows(2)) {
-            let (Some(a), Some(b), Some(na), Some(nb)) = (w.first(), w.get(1), src.first(), src.get(1)) else { continue };
-            let shell = builder::try_wire_homotopy(a, b).map_err(|e| KernelError::Failed(format!("loft: {e}")))?;
-            sides.extend(record::ruled(&shell, a, b, na, nb));
+    Ok((wires, edge_sources, reversed))
+}
+
+/// Ruled faces between each two neighbouring section wires; each comes from the section edges
+/// it spans.
+pub(crate) fn ruled_loft_faces(wires: &[mt::Wire], edge_sources: &[Vec<Vec<usize>>]) -> Result<Vec<Side>> {
+    let mut sides: Vec<Side> = Vec::new();
+    for (k, w) in wires.windows(2).enumerate() {
+        let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
+        let shell = builder::try_wire_homotopy(a, b).map_err(|e| KernelError::Failed(format!("loft: {e}")))?;
+        match (edge_sources.get(k), edge_sources.get(k + 1)) {
+            (Some(na), Some(nb)) => sides.extend(record::ruled(&shell, a, b, na, nb)),
+            _ => sides.extend(shell.face_iter().map(|f| (f.clone(), None))),
         }
-        let (Some(first), Some(last)) = (wires.first(), wires.last()) else { return Err(KernelError::Failed("loft".into())) };
-        cap_and_close(sides, std::slice::from_ref(first), std::slice::from_ref(last), reversed)
-    })
+    }
+    Ok(sides)
 }
 
 /// Points across the sections (one per section, in order) as a smooth B-spline: cubic through
@@ -1097,7 +1118,10 @@ fn across(pts: &[Vec3]) -> Option<mt::BSplineCurve<mt::Point3>> {
 /// k-th edges of all sections share one knot vector and their control points pair up. Face k
 /// comes from the profile segments under the k-th edge of every section (`numbers`: by
 /// section, by edge); the caps as [`cap_and_close`] takes them (`from_end`).
-fn smooth_loft(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>], from_end: bool) -> Result<Body> {
+/// One smooth face through every section for each wire edge (cubic across four sections or
+/// more, quadratic across three), neighbours sharing their seams. `closed` wires join their
+/// last edge to their first; open ones have a seam at each end.
+pub(crate) fn smooth_loft_faces(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>], closed: bool) -> Result<Vec<Side>> {
     let fail = |m: &str| KernelError::Failed(format!("smooth loft: {m}"));
     let edges: Vec<Vec<mt::Edge>> = wires.iter().map(|w| w.edge_iter().cloned().collect()).collect();
     let n = edges.first().map(Vec::len).ok_or_else(|| fail("no sections"))?;
@@ -1111,13 +1135,17 @@ fn smooth_loft(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>], from_end: bool) 
         }
     };
     let (Some(first), Some(last)) = (edges.first(), edges.last()) else { return Err(fail("sections")) };
-    // Seams: through the k-th vertex of every section.
-    let mut seams: Vec<mt::Edge> = Vec::with_capacity(n);
-    for k in 0..n {
-        let pts: Vec<Vec3> = edges.iter().filter_map(|es| es.get(k).map(|e| from_p3(e.front().point()))).collect();
+    // Seams: through the k-th vertex of every section (an open wire's last one at the end of
+    // its last edge).
+    let vertex = |e: &mt::Edge, end: bool| if end { e.back().clone() } else { e.front().clone() };
+    let seam_count = if closed { n } else { n + 1 };
+    let mut seams: Vec<mt::Edge> = Vec::with_capacity(seam_count);
+    for k in 0..seam_count {
+        let (at, end) = if k < n { (k, false) } else { (n - 1, true) };
+        let pts: Vec<Vec3> = edges.iter().filter_map(|es| es.get(at).map(|e| from_p3(vertex(e, end).point()))).collect();
         let c = across(&pts).ok_or_else(|| fail("seam"))?;
-        let (Some(a), Some(b)) = (first.get(k), last.get(k)) else { return Err(fail("seam")) };
-        seams.push(mt::Edge::new(a.front(), b.front(), mt::Curve::BSplineCurve(c)));
+        let (Some(a), Some(b)) = (first.get(at), last.get(at)) else { return Err(fail("seam")) };
+        seams.push(mt::Edge::new(&vertex(a, end), &vertex(b, end), mt::Curve::BSplineCurve(c)));
     }
     let mut faces = Vec::with_capacity(n);
     for k in 0..n {
@@ -1139,17 +1167,16 @@ fn smooth_loft(wires: &[mt::Wire], numbers: &[Vec<Vec<usize>>], from_end: bool) 
         }
         let vk = vk.ok_or_else(|| fail("surface"))?;
         let surface = mt::BSplineSurface::try_new((uk, vk), ctrl).map_err(|e| fail(&e.to_string()))?;
-        let (Some(e0), Some(e1), Some(s0), Some(s1)) = (first.get(k), last.get(k), seams.get(k), seams.get((k + 1) % n)) else {
+        let (Some(e0), Some(e1), Some(s0), Some(s1)) = (first.get(k), last.get(k), seams.get(k), seams.get((k + 1) % seam_count)) else {
             return Err(fail("face"));
         };
         // u along the section edge, v across the sections: counter-clockwise in (u, v).
         let w: mt::Wire = vec![e0.clone(), s1.clone(), e1.inverse(), s0.inverse()].into();
         let face = mt::Face::try_new(vec![w], mt::Surface::BSplineSurface(surface)).map_err(|e| fail(&e.to_string()))?;
         let under: Vec<&usize> = numbers.iter().filter_map(|s| s.get(k)).flatten().collect();
-        faces.push((face, (under.len() >= numbers.len()).then(|| record::profile(under))));
+        faces.push((face, (under.len() >= numbers.len().max(1)).then(|| record::profile(under))));
     }
-    let (Some(w0), Some(w1)) = (wires.first(), wires.last()) else { return Err(fail("sections")) };
-    cap_and_close(faces, std::slice::from_ref(w0), std::slice::from_ref(w1), from_end)
+    Ok(faces)
 }
 
 /// A 3D path segment for sweeps.
@@ -1342,12 +1369,20 @@ pub(crate) fn interpolate_cubic(pts: &[Vec3]) -> Option<mt::BSplineCurve<mt::Poi
 /// A closed wire whose edges are cubic B-splines parameterised (nearly) by arc length, so that
 /// ruled surfaces between sections pair points proportionally along each edge.
 pub(crate) fn uniform_wire(plane: &Plane, lp: &Loop2) -> Result<mt::Wire> {
+    uniform_chain_wire(plane, &lp.segs, true)
+}
+
+/// [`uniform_wire`] of a chain of segments, open or `closed`.
+pub(crate) fn uniform_chain_wire(plane: &Plane, segs: &[Seg2], closed: bool) -> Result<mt::Wire> {
     const SAMPLES: usize = 24;
-    let n = lp.segs.len();
-    let verts: Vec<mt::Vertex> = lp.segs.iter().map(|s| builder::vertex(p3(plane.to_world(s.start())))).collect();
+    let n = segs.len();
+    let mut verts: Vec<mt::Vertex> = segs.iter().map(|s| builder::vertex(p3(plane.to_world(s.start())))).collect();
+    if !closed && let Some(last) = segs.last() {
+        verts.push(builder::vertex(p3(plane.to_world(last.end()))));
+    }
     let mut edges = Vec::with_capacity(n);
-    for (i, s) in lp.segs.iter().enumerate() {
-        let (Some(a), Some(b)) = (verts.get(i), verts.get((i + 1) % n)) else { continue };
+    for (i, s) in segs.iter().enumerate() {
+        let (Some(a), Some(b)) = (verts.get(i), verts.get(if closed { (i + 1) % n } else { i + 1 })) else { continue };
         let pts: Vec<Vec3> = (0..SAMPLES).map(|k| plane.to_world(s.point_at(k as f64 / (SAMPLES - 1) as f64))).collect();
         let curve = interpolate_cubic(&pts).ok_or_else(|| KernelError::Failed("loft curve".into()))?;
         edges.push(mt::Edge::new(a, b, mt::Curve::BSplineCurve(curve)));
