@@ -52,6 +52,13 @@ Changes:
   It does not run adaptive subdivision or grid balancing. The kernel caller bounds
   projection complexity and total allocation before using it; ordinary modelling
   tessellation keeps its existing accuracy policy.
+- `tessellation/triangulation.rs`: exact, robust and provisional-preview projections prefer an
+  equivalent in-domain parameter at collapsed surface edges, and snap to exact bounded
+  endpoints only at collapsed edges when that improves the spatial fit within the existing
+  search tolerance. Closed spline seams retain their distinct parameter endpoints.
+  This prevents huge arbitrary pole parameters from corrupting trimmed meshes (#796),
+  while retaining genuine extrapolation for unbounded planes. Work is bounded to four
+  endpoint evaluations per projected point; no search or tessellation tolerance is relaxed.
 - `tessellation/triangulation.rs`: the inside test of a face's boundary skips loops whose
   parameter box is clear of the point (it tested every segment of every loop, so a face with
   hundreds of holes meshed in quadratic time).
