@@ -3,12 +3,12 @@
 //! planar sketch region), Stitch (surfaces sharing edges sewn
 //! into one body, a solid when they close), Trim (a surface cut by a tool, one side kept),
 //! Thicken (a surface offset along its normals into a solid), copying faces out of a body, and
-//! sheets swept from sketch curves (surface extrude).
+//! sheets swept from sketch curves (surface extrude and revolve).
 
 use std::collections::HashMap;
 
 use mt::{BoundedCurve, InnerSpace, MetricSpace, ParametricCurve, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::{Plane, Region2, Seg2, Vec3};
+use solidcraft_geom::{Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
@@ -98,6 +98,68 @@ pub fn extrude_sheet(plane: &Plane, chains: &[Vec<Seg2>], start: f64, end: f64) 
         }
     }
     Ok(rebuilt_body(surface_body(faces), &[], &rec))
+}
+
+/// A surface revolved from chains of sketch segments on `plane` about the sketch line through
+/// `axis_origin` along `axis_dir`: each chain turned from `start` through `sweep` radians (a
+/// full turn at most), positive angles carrying it toward the sketch normal. A chain end on the
+/// axis stays put there (a cone's apex, a sphere's pole). The walls form one surface body with
+/// no caps, or a solid where they close (a full turn of a closed curve, or of a curve from the
+/// axis back to it); its history has no operands: every face is new.
+pub fn revolve_sheet(plane: &Plane, chains: &[Vec<Seg2>], axis_origin: Vec2, axis_dir: Vec2, start: f64, sweep: f64) -> Result<Body> {
+    use std::f64::consts::TAU;
+    if !crate::build::frame_ok(plane) || !axis_origin.is_finite() || !axis_dir.is_finite() {
+        return Err(KernelError::Invalid("revolve frame is not finite and orthonormal".into()));
+    }
+    if !(start.is_finite() && sweep.is_finite() && start.abs() <= TAU && sweep.abs() <= TAU + 1e-9) {
+        return Err(KernelError::Invalid("revolve angles must be finite, a full turn at most".into()));
+    }
+    if sweep.abs() < 1e-6 {
+        return Err(KernelError::Invalid("revolve angle is zero".into()));
+    }
+    if chains.is_empty() || chains.len() > MAX_CHAINS {
+        return Err(KernelError::Invalid("pick the curves or profiles to revolve".into()));
+    }
+    let d = axis_dir.normalized().ok_or_else(|| KernelError::Invalid("revolve axis has no direction".into()))?;
+    let side = |p: Vec2| d.cross(p - axis_origin);
+    let on_axis = |p: Vec2| side(p).abs() < 1e-7;
+    let (origin, n) = (plane.to_world(axis_origin), plane.normal());
+    let axis = plane.dir_to_world(d).normalized().ok_or_else(|| KernelError::Invalid("revolve frame has no axis".into()))?;
+    let mut rec = Rebuild::default();
+    let mut faces = Vec::new();
+    for chain in chains {
+        // On one side of the axis; the point farthest from it fixes the turning sense.
+        let pts: Vec<Vec2> = chain.iter().flat_map(|s| s.polyline(1e-3)).collect();
+        if pts.iter().any(|p| side(*p) < -1e-7) && pts.iter().any(|p| side(*p) > 1e-7) {
+            return Err(KernelError::Invalid("the curves cross the revolve axis".into()));
+        }
+        let far = pts.iter().copied().max_by(|a, b| side(*a).abs().total_cmp(&side(*b).abs())).filter(|p| !on_axis(*p));
+        let Some(far) = far else { return Err(KernelError::Invalid("the curves lie on the revolve axis".into())) };
+        let radial = plane.to_world(far) - origin;
+        let a = if axis.cross(radial).dot(n) < 0.0 { -axis } else { axis };
+        let (first, last) = match (chain.first(), chain.last()) {
+            (Some(f), Some(l)) => (f.start(), l.end()),
+            _ => return Err(KernelError::Invalid("an empty curve chain".into())),
+        };
+        let closed = first.dist(last) <= 1e-6;
+        if closed && pts.iter().any(|p| on_axis(*p)) {
+            return Err(KernelError::Invalid("not supported yet: a closed curve touching the revolve axis".into()));
+        }
+        let wire = crate::build::chain_wire(plane, chain)?;
+        let walls: mt::Shell = guard("surface revolve", || {
+            let wire = mt::builder::rotated(&wire, p3(origin), crate::body::v3(a), mt::Rad(start));
+            Ok(match (on_axis(first), on_axis(last)) {
+                (true, _) => mt::builder::cone(&wire, crate::body::v3(a), mt::Rad(sweep)),
+                (false, true) => mt::builder::cone(&wire.inverse(), crate::body::v3(a), mt::Rad(sweep)),
+                (false, false) => mt::builder::rsweep(&wire, p3(origin), crate::body::v3(a), mt::Rad(sweep)),
+            })
+        })?;
+        for f in walls.face_iter() {
+            rec.made(f, Vec::new());
+            faces.push(f.clone());
+        }
+    }
+    body_of(faces, &[], &rec)
 }
 
 /// The edge of a body nearest a point (by samples along each edge).
@@ -771,6 +833,50 @@ mod tests {
         let closed = stitch(&[&walls, &bottom, &top], 1e-6).unwrap();
         assert!(!closed.is_surface());
         assert!(rel(measure(&closed).unwrap().volume, 400.0) < 1e-9);
+    }
+
+    /// Sheets revolved about the sketch's y axis, against their analytic areas: a cylinder (and a
+    /// quarter of one, started a quarter turn round), cones with the apex at either end, a sphere
+    /// from a half circle, and a square's ring (Pappus: 2π × centroid distance × length).
+    #[test]
+    fn revolve_sheet_areas() {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let sheet = |chain: Vec<Seg2>, start: f64, sweep: f64| {
+            revolve_sheet(&Plane::XY, &[chain], Vec2::new(0.0, 0.0), Vec2::new(0.0, 1.0), start, sweep).unwrap()
+        };
+        let rev = |chain: Vec<Seg2>, start: f64, sweep: f64| measure(&sheet(chain, start, sweep)).unwrap().area;
+        let line = |a: (f64, f64), b: (f64, f64)| Seg2::Line { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1) };
+        let close = |a: f64, want: f64| assert!(rel(a, want) < 2e-3, "{a} vs {want}"); // (measured on meshes)
+        close(rev(vec![line((3.0, 0.0), (3.0, 4.0))], 0.0, 2.0 * PI), 2.0 * PI * 3.0 * 4.0);
+        close(rev(vec![line((3.0, 0.0), (3.0, 4.0))], FRAC_PI_2, FRAC_PI_2), FRAC_PI_2 * 3.0 * 4.0);
+        close(rev(vec![line((0.0, 0.0), (3.0, 4.0))], 0.0, 2.0 * PI), PI * 3.0 * 5.0);
+        close(rev(vec![line((3.0, 4.0), (0.0, 0.0))], 0.0, 2.0 * PI), PI * 3.0 * 5.0);
+        assert!(sheet(vec![line((3.0, 0.0), (3.0, 4.0))], 0.0, 1.0).is_surface());
+        // Closing shells are solids, outward: a sphere from a half circle, a square's ring.
+        let half = Seg2::Arc { center: Vec2::new(0.0, 0.0), radius: 2.0, start: -FRAC_PI_2, sweep: PI };
+        let ball = measure(&sheet(vec![half], 0.0, 2.0 * PI)).unwrap();
+        close(ball.area, 4.0 * PI * 4.0);
+        close(ball.volume, 4.0 / 3.0 * PI * 8.0);
+        assert!(sheet(vec![half], 0.0, PI).is_surface());
+        let sq = Loop2::polygon(&[Vec2::new(2.0, 0.0), Vec2::new(3.0, 0.0), Vec2::new(3.0, 1.0), Vec2::new(2.0, 1.0)]);
+        let ring = measure(&sheet(sq.segs.clone(), 0.0, 2.0 * PI)).unwrap();
+        close(ring.area, 2.0 * PI * (2.0 + 3.0 + 2.5 + 2.5));
+        close(ring.volume, 2.0 * PI * 2.5);
+    }
+
+    #[test]
+    fn revolve_sheet_refuses_bad_input() {
+        let rev = |chain: Vec<Seg2>, sweep: f64| revolve_sheet(&Plane::XY, &[chain], Vec2::new(0.0, 0.0), Vec2::new(0.0, 1.0), 0.0, sweep);
+        let line = |a: (f64, f64), b: (f64, f64)| Seg2::Line { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1) };
+        assert!(rev(vec![line((-1.0, 0.0), (1.0, 1.0))], 1.0).is_err(), "crosses the axis");
+        assert!(rev(vec![line((0.0, 0.0), (0.0, 1.0))], 1.0).is_err(), "on the axis");
+        assert!(rev(vec![line((1.0, 0.0), (1.0, 1.0))], 0.0).is_err(), "zero angle");
+        assert!(rev(vec![line((1.0, 0.0), (1.0, 1.0))], 7.0).is_err(), "more than a turn");
+        assert!(rev(vec![line((1.0, 0.0), (1.0, 1.0))], f64::NAN).is_err());
+        let touching = Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0)]);
+        assert!(rev(touching.segs, 1.0).is_err(), "a closed curve touching the axis");
+        assert!(revolve_sheet(&Plane::XY, &[], Vec2::new(0.0, 0.0), Vec2::new(0.0, 1.0), 0.0, 1.0).is_err());
+        assert!(revolve_sheet(&Plane::XY, &[vec![line((1.0, 0.0), (1.0, 1.0))]], Vec2::new(0.0, 0.0), Vec2::new(0.0, 0.0), 0.0, 1.0).is_err());
     }
 
     #[test]
