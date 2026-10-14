@@ -2022,12 +2022,14 @@ pub fn chamfer(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
     // Each step's result carries its history over `[body]`.
     let counts = record::counts(&[body]);
     // All cutters at once (their union mitres the corners), else one edge at a time.
+    // A hole corner's mitre extension runs into the wall, and the union of those cutters
+    // notches it. Those edges take the local blend below, which is one bevel (#814).
     let tools: Result<Vec<Cutter>> = edges.iter().enumerate().map(|(i, p)| chamfer_tool(body, *p, distance, i)).collect();
-    if let Ok(tools) = tools {
-        // The union so far, with its history over the cutters it joined.
+    let notch = tools.as_ref().ok().is_some_and(|ts| ts.iter().any(|t| t.extension_inside));
+    // The union of the cutters, cut from the body they were built on.
+    let batch = |tools: &[Cutter]| -> Option<Body> {
         let mut acc: Option<(Body, Option<History>)> = None;
-        let mut ok = true;
-        for t in &tools {
+        for t in tools {
             let next = match &acc {
                 None => Some((t.body.clone(), Some(History::identity(&t.body)))),
                 Some((a, h)) => crate::ops::boolean(a, &t.body, crate::BoolOp::Union).ok().flatten().map(|u| {
@@ -2035,24 +2037,25 @@ pub fn chamfer(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
                     (u, h)
                 }),
             };
-            if next.is_none() {
-                ok = false;
-                break;
-            }
+            next.as_ref()?;
             acc = next;
         }
-        if ok
-            && let Some((tool, h)) = acc
-            && let Ok(Some(r)) = crate::ops::boolean(body, &tool, crate::BoolOp::Cut)
-        {
-            let h = cut_history(crate::boolean_record::through(&r, 1, h.as_ref()), body, &tools);
-            return Ok(r.with_checked_history(h, &counts));
-        }
+        let (tool, h) = acc?;
+        let r = crate::ops::boolean(body, &tool, crate::BoolOp::Cut).ok().flatten()?;
+        let h = cut_history(crate::boolean_record::through(&r, 1, h.as_ref()), body, tools);
+        Some(r.with_checked_history(h, &counts))
+    };
+    if !notch
+        && let Ok(tools) = &tools
+        && let Some(r) = batch(tools)
+    {
+        return Ok(r);
     }
     // At a pocket rim the cutters cannot extend beyond the selected edges. Rebuild
     // the corners locally, allowing adjacent chamfers to reach different depths
     // on their common wall seam.
-    if edges.len() > 1
+    if !notch
+        && edges.len() > 1
         && let Ok(result) = crate::blend_corner::chamfer(body, edges, distance)
     {
         return Ok(result);
@@ -2087,13 +2090,45 @@ pub fn chamfer(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
     let start = cur.clone();
     let one_by_one = || -> Result<Body> {
         let mut cur = start.clone();
+        // Set once a step has changed the body, so a later miss cannot restart from the cutters.
+        let mut progressed = false;
+        // A chain running on into curved faces, or an edge ending at one: as for fillets.
+        let blend_or_curved = |cur: &Body, p: &Vec3| -> Result<Body> {
+            blend(cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer")
+                .or_else(|e| blend_with(cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer", true).map_err(|_| e))
+        };
         for p in edges {
-            let step = match chamfer_tool(&cur, *p, distance, 0).and_then(|t| cut_one(&cur, &t)) {
-                Ok(Some(b)) => b,
-                // A chain running on into curved faces, or an edge ending at one: as for fillets.
-                _ => blend(&cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer")
-                    .or_else(|e| blend_with(&cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer", true).map_err(|_| e))?,
+            let tool = chamfer_tool(&cur, *p, distance, 0);
+            // The extension is inside the wall. The local blend is one bevel on a hole corner.
+            // Where that blend cannot build the edge, the cutter is what used to succeed (#814).
+            let inside = tool.as_ref().ok().is_some_and(|t| t.extension_inside);
+            let step = if inside {
+                match blend(&cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer") {
+                    Ok(b) => b,
+                    Err(miss) => match tool.and_then(|t| cut_one(&cur, &t)) {
+                        Ok(Some(b)) => b,
+                        // Healing can leave an edge the blend cannot end, and a cutter rebuilt on
+                        // the healed body cannot cut it. Nothing has been applied yet, so the
+                        // cutters built on the original body are what used to succeed
+                        // (oracle/69-sm-tray). A hole corner does not get here: its bevel builds.
+                        _ if !progressed => {
+                            if let Ok(tools) = &tools
+                                && let Some(r) = batch(tools)
+                            {
+                                return Ok(r);
+                            }
+                            blend_or_curved(&cur, p).map_err(|_| miss)?
+                        }
+                        _ => blend_or_curved(&cur, p).map_err(|_| miss)?,
+                    },
+                }
+            } else {
+                match tool.and_then(|t| cut_one(&cur, &t)) {
+                    Ok(Some(b)) => b,
+                    _ => blend_or_curved(&cur, p)?,
+                }
             };
+            progressed = true;
             cur = record::after(step, &cur, &counts);
         }
         Ok(cur)
@@ -2205,6 +2240,9 @@ pub(crate) struct Cutter {
     body: Body,
     face: Option<usize>,
     edge: usize,
+    /// The mitre extension at mid-edge lies in the body. On a convex edge it stays outside.
+    /// On a hole corner it runs into the walls, and the cutter bites them (#814).
+    extension_inside: bool,
 }
 
 impl Cutter {
@@ -2265,6 +2303,10 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
     let a_ext = a + ab * (s * 0.5 + reach * 0.05);
     let b_ext = b - ab * (s * 0.5 + reach * 0.07);
     let e_far = base + out * reach;
+    // The cross-section sits past the edge ends, so test the offset at mid-edge. The cutter
+    // is still built: a caller that cannot blend the edge keeps it (#814).
+    let mid_edge = (f.p0 + f.p1) * 0.5;
+    let extension_inside = cur.contains(mid_edge + (a_ext - base)) || cur.contains(mid_edge + (b_ext - base));
     // The material beyond both ends must be empty (the cutter runs past them).
     let mid = (a + b + base) / 3.0;
     for probe in [mid + f.d * (ext * 0.5), mid + f.d * (len + ext * 1.5)] {
@@ -2283,7 +2325,7 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
     let region = solidcraft_geom::Region2 { outer: lp, holes: vec![] };
     let body = crate::build::extrude(&plane, &[region], 0.0, len + 2.0 * ext)?.pop().ok_or_else(|| KernelError::Failed("chamfer tool".into()))?;
     let face = body.history().and_then(|h| h.faces.iter().position(|f| f.origins == [FaceOrigin::Profile { segment: chamfer_segment }]));
-    Ok(Cutter { body, face, edge })
+    Ok(Cutter { body, face, edge, extension_inside })
 }
 
 #[cfg(test)]
@@ -2479,6 +2521,28 @@ mod tests {
             let removed = v0 - vol(&out);
             assert!(removed > area * 14.0 && removed < area * 15.2, "{removed}");
         }
+    }
+
+    #[test]
+    fn a_chamfer_of_a_hole_corner_is_one_bevel() {
+        let plate = crate::build::box_solid(Vec3::ZERO, Vec3::new(40.0, 40.0, 10.0)).unwrap();
+        let pocket = crate::build::box_solid(Vec3::new(10.0, 10.0, -1.0), Vec3::new(30.0, 30.0, 12.0)).unwrap();
+        let body = crate::ops::boolean(&plate, &pocket, crate::BoolOp::Cut).unwrap().unwrap();
+        let vol = |b: &Body| b.tessellate(1e-4).unwrap().measure().volume;
+        let v0 = vol(&body);
+        let one = chamfer(&body, &[Vec3::new(10.0, 10.0, 5.0)], 2.0).unwrap();
+        assert!(one.validity().is_empty(), "{:?}", one.validity());
+        assert_eq!(one.unmeshed_faces(), 0);
+        let added = vol(&one) - v0;
+        // The bevel fills the hole corner: a right triangle of legs 2 mm, times the 10 mm edge.
+        assert!(added > 19.0 && added < 21.0, "added {added}, want 20");
+        assert_eq!(one.face_count(), body.face_count() + 1, "one bevel face");
+        let corners = [Vec3::new(10.0, 10.0, 5.0), Vec3::new(30.0, 10.0, 5.0), Vec3::new(30.0, 30.0, 5.0), Vec3::new(10.0, 30.0, 5.0)];
+        let all = chamfer(&body, &corners, 2.0).unwrap();
+        assert!(all.validity().is_empty(), "{:?}", all.validity());
+        let added = vol(&all) - v0;
+        assert!(added > 76.0 && added < 84.0, "added {added}, want 80");
+        assert_eq!(all.face_count(), body.face_count() + 4, "one bevel face per corner");
     }
 
     #[test]
