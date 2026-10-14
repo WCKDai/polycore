@@ -1090,6 +1090,79 @@ impl Body {
         guard("tessellate", || crate::tess::plan(&self.solid, tol, turn).map(|(plan, _)| plan))
     }
 
+    /// Planar faces whose boundary crosses itself: two of its loops crossing each other, or a
+    /// loop crossing itself. Such a face has no inside, and its mesh covers what it shouldn't
+    /// and leaves openings beside it, while the shell is still closed and every face meshes
+    /// (rounds that overlap where a wall is thinner than both, #871). Boundaries that only
+    /// touch (at a vertex they share, or within the size's millionth) don't count.
+    pub fn crossed_face_loops(&self) -> Result<usize> {
+        use mt::{BoundedCurve, ParameterDivision1D};
+        if self.is_mesh() {
+            return Ok(0);
+        }
+        const MAX_SEGMENTS: usize = 20_000;
+        let size = self.size();
+        let tol = (size * 1e-6).max(1e-9);
+        let chord = (size * 1e-3).max(1e-4);
+        let mut crossed = 0;
+        for f in self.solid.face_iter() {
+            let mt::Surface::Plane(pl) = f.oriented_surface() else { continue };
+            let o = from_p3(pl.origin());
+            let (Some(u), Some(n)) = (
+                Vec3::new(pl.u_axis().x, pl.u_axis().y, pl.u_axis().z).normalized(),
+                Vec3::new(pl.normal().x, pl.normal().y, pl.normal().z).normalized(),
+            ) else {
+                continue;
+            };
+            let v = n.cross(u);
+            let flat = |p: mt::Point3| {
+                let d = from_p3(p) - o;
+                (d.dot(u), d.dot(v))
+            };
+            // Each loop's segments, in the face's plane.
+            let mut loops: Vec<Vec<((f64, f64), (f64, f64))>> = Vec::new();
+            let mut total = 0usize;
+            for w in f.boundaries() {
+                let mut segs = Vec::new();
+                for e in w.edge_iter() {
+                    let pts = guard("face loops", || {
+                        Ok(match e.curve() {
+                            mt::Curve::Line(_) => vec![e.front().point(), e.back().point()],
+                            c => c.parameter_division(c.range_tuple(), chord).1,
+                        })
+                    })?;
+                    segs.extend(pts.windows(2).filter_map(|q| Some((flat(*q.first()?), flat(*q.get(1)?)))));
+                }
+                total = total.saturating_add(segs.len());
+                if total > MAX_SEGMENTS {
+                    break;
+                }
+                loops.push(segs);
+            }
+            if total > MAX_SEGMENTS {
+                continue;
+            }
+            // Proper crossings only: each segment's ends strictly on either side of the other.
+            let side = |a: (f64, f64), b: (f64, f64), p: (f64, f64)| {
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let len = (dx * dx + dy * dy).sqrt();
+                if len <= tol { 0.0 } else { (dx * (p.1 - a.1) - dy * (p.0 - a.0)) / len }
+            };
+            let cross = |s: &((f64, f64), (f64, f64)), t: &((f64, f64), (f64, f64))| {
+                let (d1, d2) = (side(s.0, s.1, t.0), side(s.0, s.1, t.1));
+                let (d3, d4) = (side(t.0, t.1, s.0), side(t.0, t.1, s.1));
+                ((d1 > tol && d2 < -tol) || (d1 < -tol && d2 > tol)) && ((d3 > tol && d4 < -tol) || (d3 < -tol && d4 > tol))
+            };
+            let all: Vec<(usize, &((f64, f64), (f64, f64)))> =
+                loops.iter().enumerate().flat_map(|(l, segs)| segs.iter().map(move |s| (l, s))).collect();
+            let bad = all.iter().enumerate().any(|(i, (_, s))| all.iter().skip(i + 1).any(|(_, t)| cross(s, t)));
+            if bad {
+                crossed += 1;
+            }
+        }
+        Ok(crossed)
+    }
+
     /// Faces with no triangles in a coarse tessellation (the mesher failed or gave up).
     pub fn unmeshed_faces(&self) -> usize {
         if self.is_mesh() {

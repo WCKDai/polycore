@@ -1623,23 +1623,39 @@ fn loop_split(cur: &Body, pts: &[Vec3]) -> Result<Option<(Vec<Vec<Vec3>>, Vec<Ve
     Ok((!groups.is_empty()).then_some((groups, rest)))
 }
 
+/// A fillet's result, refused when a face's boundary crosses itself (#871): rounds that
+/// overlap where a wall is thinner than both leave such faces, which the topology checks
+/// don't see but which show as holes in the model. A fillet either closes the solid or is
+/// refused.
+fn closed(b: Body) -> Result<Body> {
+    match b.crossed_face_loops()? {
+        0 => Ok(b),
+        _ => Err(KernelError::Failed(
+            "fillet: the rounds would leave openings in the surface (they overlap where a wall or a face is narrower than both)".into(),
+        )),
+    }
+}
+
 /// Constant-radius fillet of the edges nearest to the given points. A radius too large for the
 /// faces around the edges is refused with [`KernelError::TooLarge`] ([`fillet_max`] finds the
 /// largest that works).
 pub fn fillet(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     body.require_brep("fillet")?;
     // Corners the local blends refuse (an earlier round at an edge's end): radius per edge.
-    blend(body, edges, radius, Shape::Round, "fillet").or_else(|e| {
+    blend(body, edges, radius, Shape::Round, "fillet").and_then(closed).or_else(|e| {
         let sel: Vec<(Vec3, f64)> = edges.iter().map(|p| (*p, radius)).collect();
         // The local blend's refusal, unless only the corner build found the radius too large.
         crate::blend_corner::fillet_radii(body, &sel)
+            .and_then(closed)
             .map_err(|e2| match (&e, e2) {
                 (KernelError::TooLarge(_), _) => e,
                 (_, e2 @ KernelError::TooLarge(_)) => e2,
                 _ => e,
             })
             // Three edges at a vertex of any faces end in a sphere.
-            .or_else(|e| if edges.len() >= 3 { crate::blend_vertex::fillet_ball_vertices(body, edges, radius).map_err(|_| e) } else { Err(e) })
+            .or_else(|e| {
+                if edges.len() >= 3 { crate::blend_vertex::fillet_ball_vertices(body, edges, radius).and_then(closed).map_err(|_| e) } else { Err(e) }
+            })
     })
 }
 
@@ -1726,7 +1742,7 @@ pub fn fillet_each(body: &Body, edges: &[Vec3], radii: &[f64]) -> Result<Body> {
         return fillet(body, edges, *r);
     }
     let sel: Vec<(Vec3, f64)> = edges.iter().copied().zip(radii.iter().copied()).collect();
-    if let Ok(b) = crate::blend_corner::fillet_radii(body, &sel) {
+    if let Ok(b) = crate::blend_corner::fillet_radii(body, &sel).and_then(closed) {
         return Ok(b);
     }
     let mut by_radius: Vec<(f64, Vec<Vec3>)> = Vec::new();
