@@ -24,15 +24,85 @@ const MAX_GRID: usize = 96;
 /// Samples along an edge of a fitted offset.
 const EDGE_SAMPLES: usize = 33;
 
-/// How one face moves.
-enum Moved {
+/// How one face moves along its normals: exactly (a plane, a circular cylinder) or onto
+/// surfaces fitted for the distances it was made for. Shared by Offset Surface and Thicken.
+pub(crate) struct FaceMover {
+    face: mt::Face,
+    how: How,
+}
+
+enum How {
     Exact(Offset),
-    /// The fitted surface (absolute parameters of the face's own surface), and the face's
-    /// outward sign (its orientation).
+    /// Each fitted distance (by its bits) and its surface (absolute parameters of the face's own
+    /// surface); the face's outward sign (its orientation).
     Fitted {
-        surface: mt::BSplineSurface<mt::Point3>,
+        surfaces: Vec<(u64, mt::BSplineSurface<mt::Point3>)>,
         sign: f64,
     },
+}
+
+impl FaceMover {
+    /// A mover for `face` at each of `distances` (along its outward normal), refused where a
+    /// distance would fold it over; fitted faces within `tolerance`.
+    pub(crate) fn new(face: &mt::Face, distances: &[f64], tolerance: f64) -> Result<FaceMover> {
+        let how = match Offset::of(face) {
+            Some(off) => {
+                if let Offset::Cylinder { r, out, .. } = off
+                    && let Some(d) = distances.iter().find(|d| r + out * **d <= tolerance)
+                {
+                    return Err(KernelError::Invalid(format!("{d} mm is as deep as the cylinder's radius ({r:.4} mm): it would fold the face over")));
+                }
+                How::Exact(off)
+            }
+            None => {
+                let mut surfaces = Vec::new();
+                for d in distances.iter().filter(|d| **d != 0.0) {
+                    if !surfaces.iter().any(|(b, _)| *b == d.to_bits()) {
+                        surfaces.push((d.to_bits(), fit(face, *d, tolerance)?));
+                    }
+                }
+                How::Fitted { surfaces, sign: if face.orientation() { 1.0 } else { -1.0 } }
+            }
+        };
+        Ok(FaceMover { face: face.clone(), how })
+    }
+
+    /// Where the point `p` of the face goes at distance `d`.
+    pub(crate) fn point(&self, p: Vec3, d: f64) -> Result<Vec3> {
+        match &self.how {
+            How::Exact(off) => Ok(off.map(p, d)),
+            How::Fitted { .. } if d == 0.0 => Ok(p),
+            How::Fitted { sign, .. } => offset_point(&self.face.surface(), p, sign * d),
+        }
+    }
+
+    /// An edge curve of the face moved by `d` (exact, or a cubic through moved samples).
+    pub(crate) fn curve(&self, c: &mt::Curve, d: f64) -> Result<mt::Curve> {
+        match &self.how {
+            How::Exact(off) => map_curve(off, c, d),
+            How::Fitted { .. } if d == 0.0 => Ok(c.clone()),
+            How::Fitted { .. } => {
+                let (t0, t1) = c.range_tuple();
+                let pts: Vec<Vec3> = (0..EDGE_SAMPLES)
+                    .map(|k| self.point(from_p3(c.subs(t0 + (t1 - t0) * k as f64 / (EDGE_SAMPLES - 1) as f64)), d))
+                    .collect::<Result<_>>()?;
+                Ok(mt::Curve::BSplineCurve(crate::build::interpolate_cubic(&pts).ok_or_else(|| KernelError::Failed("offset edge".into()))?))
+            }
+        }
+    }
+
+    /// The face's surface moved by `d` (absolute: the face's orientation is kept apart).
+    pub(crate) fn surface(&self, d: f64) -> Result<mt::Surface> {
+        match &self.how {
+            How::Exact(off) => map_surface(off, &self.face.surface(), d),
+            How::Fitted { .. } if d == 0.0 => Ok(self.face.surface()),
+            How::Fitted { surfaces, .. } => surfaces
+                .iter()
+                .find(|(b, _)| *b == d.to_bits())
+                .map(|(_, s)| mt::Surface::BSplineSurface(s.clone()))
+                .ok_or_else(|| KernelError::Failed("offset: no surface fitted for that distance".into())),
+        }
+    }
 }
 
 /// The picked faces of `body` (indices in its face order) offset by `distance` along their
@@ -66,22 +136,7 @@ pub fn offset_surface(body: &Body, faces: &[usize], distance: f64, tolerance: f6
         return Ok(crate::record::rebuilt_body(copy, &[&body.solid], &crate::record::Rebuild::default()));
     }
     let size = body.size().max(1e-6);
-    let moves: Vec<Moved> = chosen
-        .iter()
-        .map(|(_, f)| match Offset::of(f) {
-            Some(off) => {
-                if let Offset::Cylinder { r, out, .. } = off
-                    && r + out * distance <= tolerance
-                {
-                    return Err(KernelError::Invalid(format!(
-                        "the offset is as deep as the cylinder's radius ({r:.4} mm): it would fold the face over"
-                    )));
-                }
-                Ok(Moved::Exact(off))
-            }
-            None => fit(f, distance, tolerance),
-        })
-        .collect::<Result<_>>()?;
+    let moves: Vec<FaceMover> = chosen.iter().map(|(_, f)| FaceMover::new(f, &[distance], tolerance)).collect::<Result<_>>()?;
     guard("offset surface", || {
         let near = |a: Vec3, b: Vec3| a.dist(b) <= tolerance.max(size * 1e-7) * 4.0;
         // Moved vertices and edges, shared while every face moves them to the same place.
@@ -90,12 +145,7 @@ pub fn offset_surface(body: &Body, faces: &[usize], distance: f64, tolerance: f6
         let mut out = Vec::with_capacity(chosen.len());
         let mut history = Vec::with_capacity(chosen.len());
         for ((i, f), mv) in chosen.iter().zip(&moves) {
-            let map = |p: Vec3| -> Result<Vec3> {
-                match mv {
-                    Moved::Exact(off) => Ok(off.map(p, distance)),
-                    Moved::Fitted { sign, .. } => offset_point(&f.surface(), p, *sign * distance),
-                }
-            };
+            let map = |p: Vec3| mv.point(p, distance);
             let mut vertex = |v: &mt::Vertex| -> Result<mt::Vertex> {
                 let at = map(from_p3(v.point()))?;
                 let list = verts.entry(v.id()).or_default();
@@ -126,17 +176,7 @@ pub fn offset_surface(body: &Body, faces: &[usize], distance: f64, tolerance: f6
                     let moved = match shared {
                         Some(m) => m.clone(),
                         None => {
-                            let curve = match mv {
-                                Moved::Exact(off) => map_curve(off, &c, distance)?,
-                                Moved::Fitted { .. } => {
-                                    let pts: Vec<Vec3> = (0..EDGE_SAMPLES)
-                                        .map(|k| map(from_p3(c.subs(t0 + (t1 - t0) * k as f64 / (EDGE_SAMPLES - 1) as f64))))
-                                        .collect::<Result<_>>()?;
-                                    mt::Curve::BSplineCurve(
-                                        crate::build::interpolate_cubic(&pts).ok_or_else(|| KernelError::Failed("offset edge".into()))?,
-                                    )
-                                }
-                            };
+                            let curve = mv.curve(&c, distance)?;
                             let m = mt::Edge::new_unchecked(&a, &b, curve);
                             list.push(m.clone());
                             m
@@ -146,10 +186,7 @@ pub fn offset_surface(body: &Body, faces: &[usize], distance: f64, tolerance: f6
                 }
                 wires.push(mt::Wire::from(wire));
             }
-            let surface = match mv {
-                Moved::Exact(off) => map_surface(off, &f.surface(), distance)?,
-                Moved::Fitted { surface, .. } => mt::Surface::BSplineSurface(surface.clone()),
-            };
+            let surface = mv.surface(distance)?;
             let mut nf = mt::Face::new_unchecked(wires, surface);
             if !f.orientation() {
                 nf.invert();
@@ -182,7 +219,7 @@ fn offset_point(s: &mt::Surface, p: Vec3, d: f64) -> Result<Vec3> {
 }
 
 /// The fitted offset of a face that is not a plane or a circular cylinder.
-fn fit(f: &mt::Face, distance: f64, tolerance: f64) -> Result<Moved> {
+fn fit(f: &mt::Face, distance: f64, tolerance: f64) -> Result<mt::BSplineSurface<mt::Point3>> {
     let s = f.surface();
     let sign = if f.orientation() { 1.0 } else { -1.0 };
     let d = sign * distance;
@@ -247,7 +284,7 @@ fn fit(f: &mt::Face, distance: f64, tolerance: f64) -> Result<Moved> {
         if worst <= tolerance {
             // Re-parameterised to the face's own surface span, so boundary points found on the
             // old surface map onto it.
-            return Ok(Moved::Fitted { surface: reparameterised(surface, (u0, u1), (v0, v1)), sign });
+            return Ok(reparameterised(surface, (u0, u1), (v0, v1)));
         }
         if n >= MAX_GRID {
             return Err(KernelError::Invalid(format!(

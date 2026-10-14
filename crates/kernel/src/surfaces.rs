@@ -755,9 +755,14 @@ pub(crate) fn map_surface(off: &Offset, s: &mt::Surface, d: f64) -> Result<mt::S
     })
 }
 
+/// How far Thicken's fitted faces may stray from the true offset (mm).
+const THICKEN_TOLERANCE: f64 = 0.01;
+
 /// A surface body thickened into a solid: offset along the faces' normals by `thickness`
-/// (negative: against them), or by half each way when `symmetric`. Planar faces and faces on
-/// circular cylinders; neighbouring faces must meet smoothly (their offsets agree).
+/// (negative: against them), or by half each way when `symmetric`. Planes and circular
+/// cylinders move exactly, other faces onto fitted surfaces (see `surface_offset`); a thickness
+/// that would fold a face over is refused. Neighbouring faces must meet smoothly (their offsets
+/// agree).
 pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
     body.require_brep("thicken")?;
     if !(thickness.is_finite() && thickness.abs() > 1e-9) {
@@ -772,50 +777,78 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
         if faces.is_empty() {
             return Err(KernelError::Invalid("nothing to thicken".into()));
         }
-        let offs: Vec<Offset> = faces
-            .iter()
-            .map(|f| {
-                Offset::of(f).ok_or_else(|| KernelError::Invalid("not supported yet: thickening faces that are not planar or cylindrical".into()))
-            })
-            .collect::<Result<_>>()?;
-        // Each vertex and edge moved to both sides (once; every face using it must agree).
-        let mut vmoved: HashMap<mt::VertexID, (mt::Vertex, mt::Vertex)> = HashMap::new();
-        let mut emoved: HashMap<mt::EdgeID, (mt::Edge, mt::Edge)> = HashMap::new();
-        let mut uses: HashMap<mt::EdgeID, usize> = HashMap::new();
-        for (f, off) in faces.iter().zip(&offs) {
+        // Planes and circular cylinders move exactly; other faces onto surfaces fitted within the
+        // offset tolerance (Offset Surface's).
+        let offs: Vec<crate::surface_offset::FaceMover> =
+            faces.iter().map(|f| crate::surface_offset::FaceMover::new(f, &[lo, hi], THICKEN_TOLERANCE)).collect::<Result<_>>()?;
+        let near = |a: Vec3, b: Vec3| a.dist(b) <= tol * 1e3;
+        // Each side's copies of every vertex and edge. Faces that move one to the same place share
+        // the copy (they meet smoothly there); across a sharp edge each face has its own.
+        let mut vcopies: [HashMap<mt::VertexID, Vec<mt::Vertex>>; 2] = [HashMap::new(), HashMap::new()];
+        let mut ecopies: [HashMap<mt::EdgeID, Vec<mt::Edge>>; 2] = [HashMap::new(), HashMap::new()];
+        // Each face's copies, by side: (face, vertex) → vertex, (face, edge) → edge.
+        let mut vof: [HashMap<(usize, mt::VertexID), mt::Vertex>; 2] = [HashMap::new(), HashMap::new()];
+        let mut eof: [HashMap<(usize, mt::EdgeID), mt::Edge>; 2] = [HashMap::new(), HashMap::new()];
+        // The faces using each edge, in order.
+        let mut users: HashMap<mt::EdgeID, Vec<usize>> = HashMap::new();
+        let mut abs_edges: HashMap<mt::EdgeID, mt::Edge> = HashMap::new();
+        for (fi, (f, off)) in faces.iter().zip(&offs).enumerate() {
             for e in f.absolute_boundaries().iter().flat_map(|w| w.edge_iter()) {
                 let abs = if e.orientation() { e.clone() } else { e.inverse() };
-                *uses.entry(abs.id()).or_default() += 1;
-                for v in [abs.front(), abs.back()] {
-                    let (a, b) = (map_pt(off, v.point(), lo), map_pt(off, v.point(), hi));
-                    match vmoved.get(&v.id()) {
-                        Some((va, vb)) => {
-                            if va.point().distance(a) > tol * 1e3 || vb.point().distance(b) > tol * 1e3 {
-                                return Err(KernelError::Invalid("not supported yet: thickening across a sharp edge between faces".into()));
-                            }
-                        }
-                        None => {
-                            vmoved.insert(v.id(), (mt::Vertex::new(a), mt::Vertex::new(b)));
-                        }
-                    }
+                let list = users.entry(abs.id()).or_default();
+                if !list.contains(&fi) {
+                    list.push(fi);
                 }
-                if let std::collections::hash_map::Entry::Vacant(slot) = emoved.entry(abs.id()) {
-                    let (Some((a0, a1)), Some((b0, b1))) = (vmoved.get(&abs.front().id()).cloned(), vmoved.get(&abs.back().id()).cloned()) else {
+                abs_edges.entry(abs.id()).or_insert_with(|| abs.clone());
+                for (side, d) in [lo, hi].into_iter().enumerate() {
+                    for v in [abs.front(), abs.back()] {
+                        if vof[side].contains_key(&(fi, v.id())) {
+                            continue;
+                        }
+                        let at = off.point(from_p3(v.point()), d)?;
+                        let list = vcopies[side].entry(v.id()).or_default();
+                        let copy = match list.iter().find(|c| near(from_p3(c.point()), at)) {
+                            Some(c) => c.clone(),
+                            None => {
+                                let c = mt::Vertex::new(p3(at));
+                                list.push(c.clone());
+                                c
+                            }
+                        };
+                        vof[side].insert((fi, v.id()), copy);
+                    }
+                    let (Some(a), Some(b)) = (vof[side].get(&(fi, abs.front().id())).cloned(), vof[side].get(&(fi, abs.back().id())).cloned()) else {
                         continue;
                     };
                     let c = abs.curve();
-                    let lo_e = mt::Edge::new_unchecked(&a0, &b0, map_curve(off, &c, lo)?);
-                    let hi_e = mt::Edge::new_unchecked(&a1, &b1, map_curve(off, &c, hi)?);
-                    slot.insert((lo_e, hi_e));
+                    let (t0, t1) = c.range_tuple();
+                    let mid = off.point(from_p3(c.subs(0.5 * (t0 + t1))), d)?;
+                    let list = ecopies[side].entry(abs.id()).or_default();
+                    let shared = list.iter().find(|m| {
+                        m.front().id() == a.id() && m.back().id() == b.id() && {
+                            let mc = m.curve();
+                            let (s0, s1) = mc.range_tuple();
+                            near(from_p3(mc.subs(0.5 * (s0 + s1))), mid)
+                        }
+                    });
+                    let copy = match shared {
+                        Some(m) => m.clone(),
+                        None => {
+                            let m = mt::Edge::new_unchecked(&a, &b, off.curve(&c, d)?);
+                            list.push(m.clone());
+                            m
+                        }
+                    };
+                    eof[side].insert((fi, abs.id()), copy);
                 }
             }
         }
-        // Lines joining each vertex's two copies.
-        let mut sides: HashMap<mt::VertexID, mt::Edge> = HashMap::new();
-        for (id, (a, b)) in &vmoved {
-            sides.insert(*id, mt::Edge::new_unchecked(a, b, mt::Curve::Line(mt::Line(a.point(), b.point()))));
-        }
-        let moved_face = |f: &mt::Face, off: &Offset, which: usize, d: f64| -> Result<mt::Face> {
+        // Lines joining a vertex's copy on one side to its copy on the other, once each.
+        let mut risers: HashMap<(mt::VertexID, mt::VertexID), mt::Edge> = HashMap::new();
+        let mut riser = |a: &mt::Vertex, b: &mt::Vertex| -> mt::Edge {
+            risers.entry((a.id(), b.id())).or_insert_with(|| mt::Edge::new_unchecked(a, b, mt::Curve::Line(mt::Line(a.point(), b.point())))).clone()
+        };
+        let moved_face = |fi: usize, f: &mt::Face, off: &crate::surface_offset::FaceMover, side: usize, d: f64| -> Result<mt::Face> {
             let wires: Vec<mt::Wire> = f
                 .absolute_boundaries()
                 .iter()
@@ -823,15 +856,14 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
                     w.edge_iter()
                         .filter_map(|e| {
                             let abs_id = if e.orientation() { e.id() } else { e.inverse().id() };
-                            let (a, b) = emoved.get(&abs_id)?;
-                            let m = if which == 0 { a.clone() } else { b.clone() };
+                            let m = eof[side].get(&(fi, abs_id))?.clone();
                             Some(if e.orientation() { m } else { m.inverse() })
                         })
                         .collect::<Vec<_>>()
                         .into()
                 })
                 .collect();
-            let mut nf = mt::Face::new_unchecked(wires, map_surface(off, &f.surface(), d)?);
+            let mut nf = mt::Face::new_unchecked(wires, off.surface(d)?);
             if !f.orientation() {
                 nf.invert();
             }
@@ -839,7 +871,8 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
         };
         let mut out = Vec::new();
         // History (one operand, the surface): a copy at no distance is the face itself, a copy
-        // further out its offset, a wall is made along its free edge.
+        // further out its offset, a wall is made along the edge it stands on, a corner patch from
+        // the sharp edges that meet at its corner.
         let operand = crate::record::Operand::new(body);
         let edge_index = &operand.edges;
         let mut history = Vec::new();
@@ -850,23 +883,27 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
                 crate::record::generated(vec![FaceOrigin::Offset { operand: 0, face: i }])
             }
         };
+        let edge_origin = |id: &mt::EdgeID| -> Result<FaceOrigin> {
+            let edge = edge_index.get(id).copied().ok_or_else(|| KernelError::Failed("thicken: an edge outside the surface".into()))?;
+            Ok(FaceOrigin::Edge { operand: 0, edge })
+        };
         for (i, (f, off)) in faces.iter().zip(&offs).enumerate() {
             // The lower copy faces back, the upper one forward.
-            out.push(moved_face(f, off, 0, lo)?.inverse());
-            out.push(moved_face(f, off, 1, hi)?);
+            out.push(moved_face(i, f, off, 0, lo)?.inverse());
+            out.push(moved_face(i, f, off, 1, hi)?);
             history.extend([copy(i, lo), copy(i, hi)]);
             // Walls along free edges, outward across the edge.
             for w in f.boundaries() {
                 for e in w.edge_iter() {
                     let abs_id = if e.orientation() { e.id() } else { e.inverse().id() };
-                    if uses.get(&abs_id).copied().unwrap_or(0) != 1 {
+                    if users.get(&abs_id).map_or(0, Vec::len) != 1 {
                         continue;
                     }
-                    let Some((le, he)) = emoved.get(&abs_id) else { continue };
+                    let (Some(le), Some(he)) = (eof[0].get(&(i, abs_id)), eof[1].get(&(i, abs_id))) else { continue };
                     let (le, he) = if e.orientation() { (le.clone(), he.clone()) } else { (le.inverse(), he.inverse()) };
-                    let (Some(sa), Some(sb)) = (sides.get(&e.front().id()), sides.get(&e.back().id())) else { continue };
+                    let (sa, sb) = (riser(le.front(), he.front()), riser(le.back(), he.back()));
                     // A → B low, B → B' up, B' → A' high back, A' → A down.
-                    let wire: mt::Wire = vec![le.clone(), sb.clone(), he.inverse(), sa.inverse()].into();
+                    let wire: mt::Wire = vec![le.clone(), sb, he.inverse(), sa.inverse()].into();
                     let ruled = mt::builder::homotopy(&le, &he);
                     let surf = ruled.surface();
                     // The wall's outward normal: across the edge, away from the face.
@@ -887,10 +924,106 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
                         x
                     };
                     out.push(wall);
-                    let edge = edge_index.get(&abs_id).copied().ok_or_else(|| KernelError::Failed("thicken: an edge outside the surface".into()))?;
-                    history.push(crate::record::generated(vec![FaceOrigin::Edge { operand: 0, edge }]));
+                    history.push(crate::record::generated(vec![edge_origin(&abs_id)?]));
                 }
             }
+        }
+        // Sharp edges: where the two faces' copies of an edge part on a side, a wall closes the
+        // gap; where they would cross (an inside corner on that side), refused.
+        let mut sharp_at: HashMap<mt::VertexID, Vec<mt::EdgeID>> = HashMap::new();
+        let mut gaps = Vec::new();
+        for (id, fs) in &users {
+            let [fa, fb] = fs.as_slice() else { continue };
+            let Some(abs) = abs_edges.get(id) else { continue };
+            for (side, d) in [lo, hi].into_iter().enumerate() {
+                let (Some(ea), Some(eb)) = (eof[side].get(&(*fa, *id)), eof[side].get(&(*fb, *id))) else { continue };
+                if ea.id() == eb.id() {
+                    continue;
+                }
+                // Which way the faces bend across the edge: each lies behind the other's normal
+                // (convex toward the normals) or in front of it.
+                let c = abs.curve();
+                let (t0, t1) = c.range_tuple();
+                let p = from_p3(c.subs(0.5 * (t0 + t1)));
+                let normal = |fi: usize| -> Option<Vec3> {
+                    let s = faces.get(fi)?.oriented_surface();
+                    let (u, v) = s.search_nearest_parameter(p3(p), None, 50)?;
+                    Some(from_p3(mt::Point3::new(0.0, 0.0, 0.0) + s.normal(u, v)))
+                };
+                let centre = |fi: usize| -> Option<Vec3> {
+                    let pts: Vec<Vec3> =
+                        faces.get(fi)?.absolute_boundaries().iter().flat_map(|w| w.vertex_iter().map(|v| from_p3(v.point()))).collect();
+                    Some(pts.iter().fold(Vec3::ZERO, |a, q| a + *q) * (1.0 / pts.len().max(1) as f64))
+                };
+                let (Some(na), Some(ca), Some(cb)) = (normal(*fa), centre(*fa), centre(*fb)) else {
+                    return Err(KernelError::Failed("thicken: the faces at a sharp edge".into()));
+                };
+                // Convex toward the normals: the other face falls away behind this one's normal.
+                let convex = na.dot(cb - p) < 0.0 && normal(*fb).is_some_and(|nb| nb.dot(ca - p) < 0.0);
+                if convex != (d > 0.0) {
+                    return Err(KernelError::Invalid(
+                        "not supported yet: thickening into an inside corner across a sharp edge (try the other side, or symmetric off)".into(),
+                    ));
+                }
+                gaps.push((*id, side, ea.clone(), eb.clone()));
+                for v in [abs.front(), abs.back()] {
+                    let list = sharp_at.entry(v.id()).or_default();
+                    if !list.contains(id) {
+                        list.push(*id);
+                    }
+                }
+            }
+        }
+        // Each gap wall runs along one face's copy of the edge and back along the other's, joined
+        // at the ends by lines between the two copies of each end vertex. It is turned so that it
+        // crosses the first face's copy the other way from that face.
+        let mut links: HashMap<(mt::VertexID, mt::VertexID), mt::Edge> = HashMap::new();
+        let mut link = |a: &mt::Vertex, b: &mt::Vertex| -> mt::Edge {
+            if let Some(e) = links.get(&(b.id(), a.id())) {
+                return e.inverse();
+            }
+            links.entry((a.id(), b.id())).or_insert_with(|| mt::Edge::new_unchecked(a, b, mt::Curve::Line(mt::Line(a.point(), b.point())))).clone()
+        };
+        let used_forward = |faces: &[mt::Face], e: &mt::Edge| -> Option<bool> {
+            faces
+                .iter()
+                .flat_map(|f| f.boundaries().into_iter().flat_map(|w| w.edge_iter().cloned().collect::<Vec<_>>()))
+                .find(|x| x.id() == e.id())
+                .map(|x| x.front().id() == e.front().id())
+        };
+        for (id, _side, ea, eb) in gaps {
+            let wire: mt::Wire = vec![ea.clone(), link(ea.back(), eb.back()), eb.inverse(), link(eb.front(), ea.front())].into();
+            let surf = mt::builder::homotopy(&ea, &eb).surface();
+            let wall = mt::Face::new_unchecked(vec![wire], surf);
+            let wall = if used_forward(&out, &ea).unwrap_or(false) { wall.inverse() } else { wall };
+            out.push(wall);
+            history.push(crate::record::generated(vec![edge_origin(&id)?]));
+        }
+        // Corners: whatever is left open is closed by plane patches (where three faces meet at a
+        // sharp corner, a triangle), each from the sharp edges meeting there.
+        let open = mt::Shell::from(out.clone()).extract_boundaries();
+        for w in open {
+            let patch = mt::builder::try_attach_plane(&[w.inverse()])
+                .map_err(|_| KernelError::Invalid("not supported yet: thickening a corner where the gap does not close flat".into()))?;
+            let mut origins = Vec::new();
+            for v in w.vertex_iter() {
+                for (vid, list) in &sharp_at {
+                    let at = vcopies.iter().flat_map(|m| m.get(vid).into_iter().flatten()).any(|c| c.id() == v.id());
+                    if at {
+                        for e in list {
+                            let o = edge_origin(e)?;
+                            if !origins.contains(&o) {
+                                origins.push(o);
+                            }
+                        }
+                    }
+                }
+            }
+            if origins.is_empty() {
+                return Err(KernelError::Failed("the thickened surface does not close".into()));
+            }
+            out.push(patch);
+            history.push(crate::record::generated(origins));
         }
         let shell = mt::Shell::from(out);
         if shell.shell_condition() != mt::ShellCondition::Closed {
@@ -898,12 +1031,15 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
         }
         // The edges copied at no distance are the surface's own edges, rebuilt.
         let mut copies = HashMap::new();
-        for (id, (low, high)) in &emoved {
-            for (copy, d) in [(low, lo), (high, hi)] {
-                if let Some(&edge) = edge_index.get(id)
-                    && d == 0.0
-                {
-                    copies.insert(copy.id(), EdgeOrigin::Edge { operand: 0, edge });
+        for (side, d) in [lo, hi].into_iter().enumerate() {
+            if d != 0.0 {
+                continue;
+            }
+            for (id, list) in &ecopies[side] {
+                if let Some(&edge) = edge_index.get(id) {
+                    for c in list {
+                        copies.insert(c.id(), EdgeOrigin::Edge { operand: 0, edge });
+                    }
                 }
             }
         }
@@ -1257,6 +1393,100 @@ mod tests {
         assert!(remove_faces(&b, &[]).is_err());
     }
 
+    /// Faces that are not planes or cylinders thicken onto fitted surfaces. A sixth of a sphere
+    /// (one of its six patches) thickened out by 1 is a sixth of the shell between radii 10 and
+    /// 11; a torus patch (a symmetric share of the torus, by its area) thickened out by 1 is that
+    /// share of the shell 2π²R((r+1)² − r²); thickened in past the sphere's centre, refused.
+    #[test]
+    fn thicken_curved_faces_onto_fitted_surfaces() {
+        use crate::{sphere, torus};
+        use std::f64::consts::PI;
+        let ball = sphere(Vec3::ZERO, 10.0).unwrap();
+        let patch = copy_faces(&ball, &[Vec3::new(0.0, 0.0, 10.0)]).unwrap();
+        assert!(rel(measure(&patch).unwrap().area, 4.0 * PI * 100.0 / 6.0) < 2e-3, "one sixth");
+        let shell = thicken(&patch, 1.0, false).unwrap();
+        assert!(!shell.is_surface());
+        let want = 4.0 / 3.0 * PI * (1331.0 - 1000.0) / 6.0;
+        let v = measure(&shell).unwrap().volume;
+        assert!(rel(v, want) < 3e-3, "{v} vs {want}"); // (measured on meshes)
+        assert!(thicken(&patch, -10.0, false).is_err());
+        // A torus patch (R 20, r 5): between the tube radii r and r + 1 over its own angles, θ round
+        // the tube and φ round the axis (read off its mesh): the volume is
+        // Δφ·[R((r+1)² − r²)/2·Δθ + ((r+1)³ − r³)/3·(sin θ1 − sin θ0)].
+        let ring = torus(Vec3::ZERO, 20.0, 5.0).unwrap();
+        let face = copy_faces(&ring, &[Vec3::new(25.0, 0.0, 0.0)]).unwrap();
+        let mesh = face.tessellate(0.01).unwrap();
+        let angles: Vec<(f64, f64)> = mesh.positions.iter().map(|p| (p.z.atan2((p.x * p.x + p.y * p.y).sqrt() - 20.0), p.y.atan2(p.x))).collect();
+        let span = |f: &dyn Fn(&(f64, f64)) -> f64| {
+            let (lo, hi) = angles.iter().map(f).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)));
+            (lo, hi)
+        };
+        let ((t0, t1), (p0, p1)) = (span(&|a| a.0), span(&|a| a.1));
+        assert!(t1 - t0 < PI && p1 - p0 < PI, "a patch within half a turn each way: {t0}..{t1}, {p0}..{p1}");
+        let (r, rr, big) = (5.0f64, 6.0f64, 20.0);
+        let want = (p1 - p0) * (big * (rr * rr - r * r) / 2.0 * (t1 - t0) + (rr.powi(3) - r.powi(3)) / 3.0 * (t1.sin() - t0.sin()));
+        let v = measure(&thicken(&face, 1.0, false).unwrap()).unwrap().volume;
+        assert!(rel(v, want) < 3e-3, "{v} vs {want}"); // (measured on meshes)
+    }
+
+    /// Three faces of a box meeting at a corner (sharp edges), thickened out by 1: three slabs,
+    /// a wedge along each sharp edge and a corner tetrahedron, 3·100 + 3·(½·1²·10) + 1/6; a closed
+    /// solid that every check accepts. Thickened into the inside corner, refused.
+    #[test]
+    fn thicken_a_box_corner_across_its_sharp_edges() {
+        let b = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
+        let corner = copy_faces(&b, &[Vec3::new(5.0, 5.0, 10.0), Vec3::new(10.0, 5.0, 5.0), Vec3::new(5.0, 10.0, 5.0)]).unwrap();
+        assert!(corner.is_surface() && corner.face_count() == 3);
+        let t = thicken(&corner, 1.0, false).unwrap();
+        assert!(!t.is_surface());
+        let want = 300.0 + 15.0 + 1.0 / 6.0;
+        let v = measure(&t).unwrap().volume;
+        assert!(rel(v, want) < 1e-9, "{v} vs {want}");
+        assert!(Body::new(t.solid.as_ref().clone()).is_ok());
+        assert!(thicken(&corner, -1.0, false).is_err());
+        assert!(thicken(&corner, 1.0, true).is_err(), "half of it goes into the inside corner");
+    }
+
+    /// A saddle B-spline patch thickened by 1.5 holds the volume its offsets sweep: by Steiner,
+    /// the offset's area is quadratic in the distance, so Simpson's rule over sampled offsets
+    /// (Offset Surface at 0, ¾ and 1.5) is exact.
+    #[test]
+    fn thicken_a_bspline_patch_by_its_sampled_offsets() {
+        let b = box_solid(Vec3::new(-14.0, -14.0, 0.0), Vec3::new(14.0, 14.0, 20.0)).unwrap();
+        let tool = crate::cylinder(Vec3::new(0.0, -60.0, 50.0), Vec3::Y, 40.0, 120.0).unwrap();
+        let cup = crate::boolean(&b, &tool, crate::BoolOp::Cut).unwrap().unwrap();
+        let z = |x: f64| 50.0 - (1600.0 - x * x).sqrt();
+        let rim = [Vec3::new(14.0, 0.0, z(14.0)), Vec3::new(0.0, 14.0, z(0.0)), Vec3::new(-14.0, 0.0, z(-14.0)), Vec3::new(0.0, -14.0, z(0.0))];
+        let cover = patch_edges(&cup, &rim).unwrap();
+        let t = 1.5;
+        let area = |d: f64| measure(&crate::offset_surface(&cover, &[0], d, 0.01).unwrap()).unwrap().area;
+        let want = t / 6.0 * (area(0.0) + 4.0 * area(t / 2.0) + area(t));
+        let v = measure(&thicken(&cover, t, false).unwrap()).unwrap().volume;
+        assert!(rel(v, want) < 2e-3, "{v} vs {want}"); // (measured on meshes)
+    }
+
+    /// A cone frustum's side (radii 10 and 5, 10 high) thickened out by 1: a cone has no Gaussian
+    /// curvature, so its offset's area grows linearly and the volume is t·π·L·(r1 + r2 + t·cos β),
+    /// L the slant length and β the angle between the normal and the radius (cos β = 10/L).
+    #[test]
+    fn thicken_a_cone_frustum_side() {
+        let region = Region2 {
+            outer: Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(5.0, 10.0), Vec2::new(0.0, 10.0)]),
+            holes: vec![],
+        };
+        let xz = Plane { origin: Vec3::ZERO, x: Vec3::X, y: Vec3::Z };
+        let frustum = crate::revolve(&xz, &[region], Vec2::new(0.0, 0.0), Vec2::new(0.0, 1.0), 2.0 * std::f64::consts::PI).unwrap().remove(0);
+        // The side comes in several pieces round the axis: picked all the way round.
+        let round: Vec<Vec3> =
+            (0..8).map(|k| f64::from(k) * std::f64::consts::FRAC_PI_4).map(|a| Vec3::new(7.5 * a.cos(), 7.5 * a.sin(), 5.0)).collect();
+        let side = copy_faces(&frustum, &round).unwrap();
+        let l = 125f64.sqrt();
+        assert!(rel(measure(&side).unwrap().area, std::f64::consts::PI * 15.0 * l) < 2e-3, "the whole side");
+        let v = measure(&thicken(&side, 1.0, false).unwrap()).unwrap().volume;
+        let want = std::f64::consts::PI * l * (15.0 + 10.0 / l);
+        assert!(rel(v, want) < 3e-3, "{v} vs {want}"); // (measured on meshes)
+    }
+
     #[test]
     fn patch_and_thicken_a_square() {
         let r = Region2 {
@@ -1288,10 +1518,12 @@ mod tests {
         let v = measure(&thicken(&side, -1.0, false).unwrap()).unwrap().volume;
         let want = std::f64::consts::PI * (100.0 - 81.0) * 20.0;
         assert!(rel(v, want) < 3e-4, "{v} vs {want}"); // (measured on meshes)
-        // Faces meeting at a sharp edge are refused.
+        // Two faces meeting at a sharp edge: two slabs and the wedge closing the gap between
+        // them, its ends patched: 2·100 + ½·1²·10.
         let b = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
         let two = copy_faces(&b, &[Vec3::new(5.0, 5.0, 10.0), Vec3::new(5.0, 0.0, 5.0)]).unwrap();
-        assert!(thicken(&two, 1.0, false).is_err());
+        let v = measure(&thicken(&two, 1.0, false).unwrap()).unwrap().volume;
+        assert!(rel(v, 205.0) < 1e-9, "{v}");
     }
 
     #[test]
