@@ -536,7 +536,7 @@ pub fn remove_faces(body: &Body, faces: &[usize]) -> Result<Body> {
 }
 
 /// Index of the face nearest a point (over its mesh triangles).
-fn nearest_face(body: &Body, p: Vec3) -> Result<usize> {
+pub(crate) fn nearest_face(body: &Body, p: Vec3) -> Result<usize> {
     let m = body.tessellate(body.size() * 2e-3)?;
     let mut best: Option<(f64, u32)> = None;
     for (t, f) in m.triangles.iter().zip(&m.tri_face) {
@@ -662,19 +662,19 @@ pub fn stitch(bodies: &[&Body], tol: f64) -> Result<Body> {
 
 /// How a face moves along its normal: a plane slides, a circular cylinder changes radius.
 #[derive(Clone, Copy)]
-enum Offset {
+pub(crate) enum Offset {
     Plane { n: Vec3 },
     Cylinder { o: Vec3, axis: Vec3, r: f64, out: f64 },
 }
 
 impl Offset {
-    fn of(f: &mt::Face) -> Option<Offset> {
+    pub(crate) fn of(f: &mt::Face) -> Option<Offset> {
         match crate::splitface::analytic_field(&f.oriented_surface())? {
             crate::splitface::Analytic::Plane { n } => Some(Offset::Plane { n }),
             crate::splitface::Analytic::Cylinder { o, axis, r, out } => Some(Offset::Cylinder { o, axis, r, out }),
         }
     }
-    fn map(&self, p: Vec3, d: f64) -> Vec3 {
+    pub(crate) fn map(&self, p: Vec3, d: f64) -> Vec3 {
         match *self {
             Offset::Plane { n } => p + n * d,
             // Scaled about the axis (control points of a NURBS circle stay exact).
@@ -693,7 +693,7 @@ fn map_pt(off: &Offset, p: mt::Point3, d: f64) -> mt::Point3 {
 
 /// A curve moved by an offset (control points mapped; exact for lines, and for circles square
 /// to a cylinder's axis or in a plane).
-fn map_curve(off: &Offset, c: &mt::Curve, d: f64) -> Result<mt::Curve> {
+pub(crate) fn map_curve(off: &Offset, c: &mt::Curve, d: f64) -> Result<mt::Curve> {
     Ok(match c {
         mt::Curve::Line(l) => mt::Curve::Line(mt::Line(map_pt(off, l.0, d), map_pt(off, l.1, d))),
         mt::Curve::BSplineCurve(b) => {
@@ -723,7 +723,7 @@ fn map_curve(off: &Offset, c: &mt::Curve, d: f64) -> Result<mt::Curve> {
 }
 
 /// A surface moved by an offset (control points mapped; exact for planes and NURBS cylinders).
-fn map_surface(off: &Offset, s: &mt::Surface, d: f64) -> Result<mt::Surface> {
+pub(crate) fn map_surface(off: &Offset, s: &mt::Surface, d: f64) -> Result<mt::Surface> {
     Ok(match s {
         mt::Surface::Plane(pl) => {
             let (o, a, b) = (pl.origin(), pl.u_axis(), pl.v_axis());
