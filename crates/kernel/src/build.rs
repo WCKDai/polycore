@@ -1170,7 +1170,7 @@ pub enum PathSeg {
 
 impl PathSeg {
     /// Unit directions of the path where the segment starts and ends.
-    fn tangents(&self) -> Option<(Vec3, Vec3)> {
+    pub(crate) fn tangents(&self) -> Option<(Vec3, Vec3)> {
         match *self {
             PathSeg::Line { a, b } => {
                 let t = (b - a).normalized()?;
@@ -1185,7 +1185,7 @@ impl PathSeg {
     }
 
     /// Points along the segment (an arc within `tol` of its chords), without its start.
-    fn points_after_start(&self, tol: f64) -> Vec<Vec3> {
+    pub(crate) fn points_after_start(&self, tol: f64) -> Vec<Vec3> {
         match *self {
             PathSeg::Line { b, .. } => vec![b],
             PathSeg::Arc { a, center, axis, angle } => {
@@ -1200,7 +1200,7 @@ impl PathSeg {
 }
 
 /// `p` turned by `angle` about the unit axis `k` through `center` (right hand).
-fn rotate_about(p: Vec3, center: Vec3, k: Vec3, angle: f64) -> Vec3 {
+pub(crate) fn rotate_about(p: Vec3, center: Vec3, k: Vec3, angle: f64) -> Vec3 {
     let v = p - center;
     let (s, c) = angle.sin_cos();
     center + v * c + k.cross(v) * s + k * (k.dot(v) * (1.0 - c))

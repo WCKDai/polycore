@@ -117,7 +117,8 @@ pub use step_in::{ImportedBody, StepImport, StepNode, step_import, step_import_s
 pub use step_out::{ExportBody, ExportProduct, StepHeader, step_export_bodies, step_export_products};
 pub use surface_kind::{FaceSurface, face_surface};
 pub use surfaces::{
-    copy_faces, extend, extrude_sheet, patch_edges, patch_region, remove_faces, reverse_faces, revolve_sheet, stitch, thicken, trim, unstitch,
+    copy_faces, extend, extrude_sheet, patch_edges, patch_region, remove_faces, reverse_faces, revolve_sheet, stitch, sweep_sheet,
+    sweep_sheet_points, thicken, trim, unstitch,
 };
 pub use sweep_path::sweep_path;
 pub use topo::{CylinderFace, cylinder_face_at};
