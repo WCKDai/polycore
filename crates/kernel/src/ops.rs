@@ -432,7 +432,26 @@ fn prism_result(a: &Body, b: &Body, op: BoolOp, size: f64, counts: &[(usize, usi
         })
     })
 }
+/// Walls swept along splines have flat B-spline tops and bottoms. With those made planes the
+/// operands are prisms, and two of them (same height, one direction) are decided in 2D: fast, and
+/// with no intersection of spline surfaces, which is what fails on them. The outlines are fitted
+/// by arcs within a micron (`prism_boolean_free_form`). `None` when the operands have no such
+/// face, are not such prisms, or the answer is implausible: the general boolean then takes over.
+fn swept_prism(a: &Body, b: &Body, op: BoolOp) -> Option<Body> {
+    let (pa, pb) = (crate::planar_faces::planarized(a), crate::planar_faces::planarized(b));
+    if pa.is_none() && pb.is_none() {
+        return None;
+    }
+    let (ra, rb) = (pa.as_ref().unwrap_or(a), pb.as_ref().unwrap_or(b));
+    let Some(Ok(Some(body))) = crate::prism::prism_boolean_free_form(ra, rb, op) else { return None };
+    let (va, vb) = (volume(a), volume(b));
+    plausible(volume(&body), op, va, vb, 2e-3 * (va + vb) + 1e-9).then_some(body)
+}
+
 fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
+    if let Some(body) = swept_prism(a, b, op) {
+        return Ok(Some(body));
+    }
     a.require_brep("a boolean")?;
     b.require_brep("a boolean")?;
     let size = a.size().max(b.size());

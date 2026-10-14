@@ -59,6 +59,9 @@ mod par;
 pub use par::{for_each_on_threads, map_on_threads};
 #[cfg(test)]
 mod pinch_tests;
+mod planar_faces;
+#[cfg(test)]
+mod planar_faces_tests;
 mod plane_fit;
 mod polybool;
 mod polyhedron;

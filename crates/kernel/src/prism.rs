@@ -485,7 +485,11 @@ impl Index {
         for w in f.boundaries() {
             let (mut segs, mut tags) = (Vec::new(), Vec::new());
             for e in w.edge_iter() {
-                let pieces = crate::prism_curve::segment(e, plane, tol, work)?;
+                let pieces = if FREE_FORM.with(|c| c.get()) {
+                    crate::prism_curve::segment_fitted(e, plane, tol, PLANAR_FIT_TOL, work)?
+                } else {
+                    crate::prism_curve::segment(e, plane, tol, work)?
+                };
                 *segments = segments.checked_sub(pieces.len())?;
                 let tag = self.tag(e, cap);
                 tags.extend((0..pieces.len()).map(|k| tag.piece(k, pieces.len())));
@@ -1917,6 +1921,28 @@ fn stack_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2]) -> O
         && a.paint().is_none_or(|p| p.faces.is_empty())
         && b.paint().is_none_or(|p| p.faces.is_empty());
     sew_sections(&plane, d, &levels, &slabs, tol, coalesce, &history).map(|r| r.map(Some))
+}
+
+thread_local! {
+    /// Set while [`prism_boolean_free_form`] runs: spline outlines are read as arcs within
+    /// [`PLANAR_FIT_TOL`] instead of refusing the prism.
+    static FREE_FORM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`prism_boolean`] for prisms whose walls are splines (swept along one): the outlines are
+/// fitted by arcs within [`PLANAR_FIT_TOL`], so the result is exact to that, and the walls it
+/// keeps are those arcs. Only for bodies the caller knows are such sweeps.
+pub(crate) fn prism_boolean_free_form(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
+    /// Clears the flag however the boolean ends, a caught panic included.
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            FREE_FORM.with(|c| c.set(false));
+        }
+    }
+    FREE_FORM.with(|c| c.set(true));
+    let _reset = Reset;
+    prism_boolean(a, b, op)
 }
 
 /// Boolean of prisms along a common direction, in 2D (see the module notes); `None` when it
