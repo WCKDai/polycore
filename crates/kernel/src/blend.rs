@@ -460,7 +460,14 @@ fn blend_geometry(
                 }
             }
             let cap = cap.ok_or_else(|| unsupported("the blend's end on a curved face"))?;
-            ends.push(End { v: v.clone(), g: vec![ga], e1, e2, e3: None, a, b, planes: Vec::new(), ca: None, cb: None, cap: Some(cap), reach: far });
+            // A rail that ends at the far end of its side edge uses that edge up (an earlier round's
+            // end arc, when the new blend meets it exactly where that round meets the next face).
+            let far_end = |e: &mt::Edge, q: Vec3| {
+                let f = if e.front() == v { e.back() } else { e.front() };
+                (vtx(f).dist(q) <= on_tol).then(|| f.clone())
+            };
+            let (ca, cb) = (far_end(&e1, a), far_end(&e2, b));
+            ends.push(End { v: v.clone(), g: vec![ga], e1, e2, e3: None, a, b, planes: Vec::new(), ca, cb, cap: Some(cap), reach: far });
             continue;
         }
         let normal = |g: usize| -> Result<Vec3> {
@@ -579,12 +586,9 @@ fn blend_geometry(
     // A side face whose corner edges are consumed at both ends is used up: its remaining edge,
     // parallel to the old edge at the setback, becomes the rail and the face is removed.
     let used_up = |fi: usize, c0: &Option<mt::Vertex>, c1: &Option<mt::Vertex>| -> Result<Option<mt::Edge>> {
-        let (Some(x0), Some(x1)) = (c0, c1) else {
-            return match (c0, c1) {
-                (None, None) => Ok(None),
-                _ => Err(unsupported("the blend uses up a neighbouring face at one end only")),
-            };
-        };
+        // Used up only where it is consumed at both ends; consumed at one, the face stays and
+        // loses that edge.
+        let (Some(x0), Some(x1)) = (c0, c1) else { return Ok(None) };
         let f = faces.get(fi).ok_or_else(|| KernelError::Failed("face".into()))?;
         if f.boundaries().len() != 1 || f.edge_iter().count() != 4 {
             return Err(unsupported("the blend uses up a neighbouring face with more edges"));
@@ -683,11 +687,11 @@ fn blend_geometry(
         let nf = if i == i1 {
             let mut m = subst.clone();
             m.insert(edge.id(), la.clone());
-            rebuild_face(f, &m, &[])?
+            rebuild_face_dropping(f, &m, &dropped, &[])?
         } else if i == i2 {
             let mut m = subst.clone();
             m.insert(edge.id(), lb.clone());
-            rebuild_face(f, &m, &[])?
+            rebuild_face_dropping(f, &m, &dropped, &[])?
         } else if end0.g.contains(&i) {
             rebuild_face_dropping(f, &subst, &dropped, c0)?
         } else if end1.g.contains(&i) {
@@ -758,7 +762,64 @@ fn blend_geometry(
     Ok((solid, rec))
 }
 
+/// Most edges whose other orders are tried when the order given is refused.
+const MAX_REORDERED: usize = 4;
+
+/// All orders of `items` (the given one first).
+fn orders<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+    if items.len() <= 1 {
+        return vec![items.to_vec()];
+    }
+    let mut out = Vec::new();
+    for i in 0..items.len() {
+        let mut rest = items.to_vec();
+        let head = rest.remove(i);
+        for mut tail in orders(&rest) {
+            tail.insert(0, head.clone());
+            out.push(tail);
+        }
+    }
+    out
+}
+
+/// Blend the edges nearest the points, one at a time in an order that works. A blend ends in an
+/// earlier round where they meet, which not every order allows (a blend over a round that an
+/// edge it runs into left, or past a crease). So when the order given is refused for a reason
+/// that is not the size, the other orders are tried too, and when its result has a face whose
+/// boundary leaves its surface (a blend that ran on past the end of a round's surface, which a
+/// round of a curved edge does not have) another order that has none is preferred.
 fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Result<Body> {
+    let sound = |b: &Body| crate::tess::boundaries_on_surfaces(&b.solid, (b.size() * 1e-4).max(1e-6));
+    let first = blend_in_order(body, edges, r, shape, what);
+    let reorder = (2..=MAX_REORDERED).contains(&edges.len())
+        && match &first {
+            Ok(b) => !sound(b),
+            Err(KernelError::Failed(_)) => true,
+            Err(_) => false,
+        };
+    if !reorder {
+        return first;
+    }
+    let mut fallback: Option<Body> = None;
+    for order in orders(edges).into_iter().skip(1) {
+        if let Ok(done) = blend_in_order(body, &order, r, shape, what) {
+            if sound(&done) {
+                return Ok(done);
+            }
+            fallback.get_or_insert(done);
+        }
+    }
+    match (first, fallback) {
+        (Ok(b), _) => Ok(b),
+        (Err(e), Some(done)) => {
+            let _ = e;
+            Ok(done)
+        }
+        (Err(e), None) => Err(e),
+    }
+}
+
+fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Result<Body> {
     if !(r.is_finite() && r > 1e-6 && r < 1e6) {
         return Err(KernelError::Invalid(format!("{what} size must be positive")));
     }
@@ -801,8 +862,8 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
     {
         let _ = groups;
         let loop_pts: Vec<Vec3> = edges.iter().filter(|p| !rest.iter().any(|q| q.dist(**p) < 1e-12)).copied().collect();
-        cur = record::after(blend(&cur, &rest, r, shape, what)?, &cur, &counts);
-        return Ok(record::after(blend(&cur, &loop_pts, r, shape, what)?, &cur, &counts));
+        cur = record::after(blend_in_order(&cur, &rest, r, shape, what)?, &cur, &counts);
+        return Ok(record::after(blend_in_order(&cur, &loop_pts, r, shape, what)?, &cur, &counts));
     }
     if let Some(groups) = loop_groups(&cur, edges)? {
         for g in groups {
@@ -898,18 +959,28 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
                 && chain.as_ref().is_some_and(|ids| {
                     ids.len() > 1 && Body::unique_edges(&solid).iter().any(|x| ids.contains(&x.id()) && !matches!(x.curve(), mt::Curve::Line(_)))
                 });
+            let local = || guard(what, || blend_one(&solid, &edge, size, r, shape));
             let attempt = match chain.as_deref().filter(|_| runs_on).map(roll) {
                 Some(Ok(o)) => Ok(o),
-                Some(Err(e2)) => guard(what, || blend_one(&solid, &edge, size, r, shape)).map(|o| (o, vec![j])).map_err(|_| e2),
-                None => match guard(what, || blend_one(&solid, &edge, size, r, shape)) {
+                // The chain cannot be rolled: the edge alone, locally or as a ball rolled along it
+                // (ending in the round the chain ran into).
+                Some(Err(e2)) => local()
+                    .map(|o| (o, vec![j]))
+                    .or_else(|_| if chain.as_ref().is_some_and(|c| c.len() > 1) { roll(&[edge.id()]) } else { Err(e2.clone()) })
+                    .map_err(|_| e2),
+                None => match local() {
                     Ok(o) => Ok((o, vec![j])),
                     // A curved edge, or one between curved faces: roll a ball along its smooth chain.
                     Err(e) if !curved_case(&solid, &edge) => Err(e),
                     Err(e) => match chain.as_deref() {
-                        Some(ids) => roll(ids).map_err(|e2| match e2 {
-                            KernelError::TooLarge(m) => KernelError::TooLarge(format!("{m} ({e})")),
-                            e2 => KernelError::Failed(format!("{e2} ({e})")),
-                        }),
+                        // The chain that cannot be rolled (it runs on into the edge an earlier round
+                        // left where it met another face): the edge alone, ending on that round.
+                        Some(ids) => roll(ids)
+                            .or_else(|first| if ids.len() > 1 { roll(&[edge.id()]).map_err(|_| first) } else { Err(first) })
+                            .map_err(|e2| match e2 {
+                                KernelError::TooLarge(m) => KernelError::TooLarge(format!("{m} ({e})")),
+                                e2 => KernelError::Failed(format!("{e2} ({e})")),
+                            }),
                         None => Err(e),
                     },
                 },
@@ -1258,11 +1329,14 @@ pub fn fillet(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     blend(body, edges, radius, Shape::Round, "fillet").or_else(|e| {
         let sel: Vec<(Vec3, f64)> = edges.iter().map(|p| (*p, radius)).collect();
         // The local blend's refusal, unless only the corner build found the radius too large.
-        crate::blend_corner::fillet_radii(body, &sel).map_err(|e2| match (&e, e2) {
-            (KernelError::TooLarge(_), _) => e,
-            (_, e2 @ KernelError::TooLarge(_)) => e2,
-            _ => e,
-        })
+        crate::blend_corner::fillet_radii(body, &sel)
+            .map_err(|e2| match (&e, e2) {
+                (KernelError::TooLarge(_), _) => e,
+                (_, e2 @ KernelError::TooLarge(_)) => e2,
+                _ => e,
+            })
+            // Three edges at a vertex of any faces end in a sphere.
+            .or_else(|e| if edges.len() >= 3 { crate::blend_vertex::fillet_ball_vertices(body, edges, radius).map_err(|_| e) } else { Err(e) })
     })
 }
 

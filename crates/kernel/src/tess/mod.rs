@@ -152,6 +152,33 @@ pub(crate) fn plan(solid: &Solid, tol: f64, turn: Option<size::Turn>) -> Result<
     Ok((plan, stats))
 }
 
+/// Whether every curved face's boundary lies on the face's surface, within `accept`: a point
+/// off the surface's own parameter range is off it. The planner needs this of every face; a
+/// blend that runs on past the end of a neighbouring round's surface does not have it.
+pub(crate) fn boundaries_on_surfaces(solid: &Solid, accept: f64) -> bool {
+    use mt::{BoundedCurve, ParametricCurve};
+    for face in solid.face_iter() {
+        let Some(eval) = surface::eval_surface(&face.surface()) else { continue };
+        if matches!(eval, EvalSurface::Plane { .. }) {
+            continue;
+        }
+        let dom = uv::domain(&eval);
+        let mut prev: Option<[f64; 2]> = None;
+        for e in face.edge_iter() {
+            let c = e.oriented_curve();
+            let (lo, hi) = c.range_tuple();
+            for k in 0..=32 {
+                let p = crate::body::from_p3(c.subs(lo + (hi - lo) * f64::from(k) / 32.0));
+                match uv::project(&eval, &dom, p, prev, accept) {
+                    Some(uv) => prev = Some(uv),
+                    None => return false,
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Bounded work for the facet angle, as the reference mesher bounds it: a face whose boundary
 /// would get more than `MAX_ANGLE_BOUNDARY` segments has its curved edges sampled again at twice
 /// the angle, as often as it takes, down to the tolerance alone (a plate with a thousand small

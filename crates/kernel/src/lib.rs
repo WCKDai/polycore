@@ -15,6 +15,7 @@
 mod blend;
 mod blend_corner;
 mod blend_variable;
+mod blend_vertex;
 mod body;
 mod boolean_diagnostics;
 mod boolean_guard;
@@ -44,6 +45,8 @@ mod issue_616_tests;
 mod issue_674_tests;
 #[cfg(test)]
 mod issue_679_tests;
+#[cfg(test)]
+mod issue_851_tests;
 mod lip;
 mod loopblend;
 mod measure;
