@@ -351,3 +351,37 @@ fn a_refused_edge_is_not_rolled_again_after_blends_far_from_it() {
     // The far edges alone still round.
     assert!(fillet(&body, &ends, 3.0).is_ok());
 }
+
+/// #896: the seams where rounds run into the faces beside them are picked to be rounded again.
+/// The faces meet tangentially there, so there is nothing to round: the refusal says so, rather
+/// than that blending such an edge isn't supported yet.
+#[test]
+fn a_smooth_seam_is_refused_as_having_no_corner() {
+    let b = crate::box_solid(Vec3::ZERO, Vec3::new(150.0, 200.0, 70.0)).unwrap();
+    let mut edges = Vec::new();
+    for (x, y) in [(0.0, 0.0), (150.0, 0.0), (0.0, 200.0), (150.0, 200.0)] {
+        edges.push(Vec3::new(x, y, 35.0));
+    }
+    for (a, z) in [(0.0, 0.0), (150.0, 0.0), (0.0, 70.0), (150.0, 70.0)] {
+        edges.push(Vec3::new(a, 100.0, z));
+    }
+    for (y, z) in [(0.0, 0.0), (200.0, 0.0), (0.0, 70.0), (200.0, 70.0)] {
+        edges.push(Vec3::new(75.0, y, z));
+    }
+    let rounded = fillet(&b, &edges, 10.0).unwrap();
+    // The seam on the top face beside the round of the edge along y at x = 0, and the seam
+    // with the end face x = 0 beside the round of the top edge along y.
+    for seam in [Vec3::new(10.0, 100.0, 70.0), Vec3::new(0.0, 100.0, 60.0)] {
+        for chamfer in [false, true] {
+            let r = if chamfer { crate::chamfer(&rounded, &[seam], 1.0) } else { fillet(&rounded, &[seam], 1.0) };
+            match r {
+                Err(KernelError::Invalid(m)) => assert!(m.contains("smooth") && m.contains("no corner"), "{m}"),
+                other => panic!("{seam:?}: {:?}", other.map(|_| "a body")),
+            }
+        }
+    }
+    // A sharp edge of a box with one round still takes a fillet beside the round's seams.
+    let one = fillet(&crate::box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)).unwrap(), &[Vec3::new(40.0, 30.0, 10.0)], 5.0).unwrap();
+    assert!(fillet(&one, &[Vec3::new(20.0, 0.0, 20.0)], 1.0).is_ok());
+    assert!(matches!(fillet(&one, &[Vec3::new(35.0, 30.0, 10.0)], 1.0), Err(KernelError::Invalid(_))));
+}

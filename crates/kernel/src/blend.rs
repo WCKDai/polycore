@@ -860,6 +860,17 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
                 return Err(KernelError::Invalid(format!("no edge near {:?}", [p.x, p.y, p.z])));
             }
             let edge = Body::unique_edges(&solid).into_iter().nth(idx).ok_or_else(|| KernelError::Invalid("edge index".into()))?;
+            // Faces that meet smoothly (a round's seam with the face it runs into) leave no
+            // corner to blend: say so rather than that blending it isn't supported.
+            if tangent_faces(&solid, &edge) {
+                if first_err.is_none() {
+                    first_err = Some(KernelError::Invalid(format!(
+                        "the edge at [{:.3}, {:.3}, {:.3}] is smooth: the faces on either side meet tangentially there, so there is no corner to {what}; pick the sharp edges",
+                        p.x, p.y, p.z
+                    )));
+                }
+                continue;
+            }
             // Roll a ball along the edge's smooth chain (the points of `todo` on it go with it).
             let roll = |ids: &[mt::EdgeID]| {
                 let on_chain: Vec<usize> = todo
@@ -1062,6 +1073,26 @@ fn curved_case(solid: &Solid, edge: &mt::Edge) -> bool {
         return true;
     }
     solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).any(|f| !matches!(f.oriented_surface(), mt::Surface::Plane(_)))
+}
+
+/// Whether the two faces of `edge` meet tangentially along it (sampled at a quarter, the
+/// middle and three quarters of the edge): a seam, not a corner.
+fn tangent_faces(solid: &Solid, edge: &mt::Edge) -> bool {
+    use mt::{BoundedCurve, ParametricCurve, ParametricSurface3D, SearchParameter};
+    let faces: Vec<&mt::Face> = solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).take(3).collect();
+    let [f1, f2] = faces[..] else { return false };
+    let c = edge.curve();
+    let (t0, t1) = c.range_tuple();
+    let normal = |f: &mt::Face, q: mt::Point3| -> Option<Vec3> {
+        let s = f.oriented_surface();
+        let (u, v) = s.search_parameter(q, None, 100)?;
+        let n = s.normal(u, v);
+        Vec3::new(n.x, n.y, n.z).normalized()
+    };
+    [0.25, 0.5, 0.75].iter().all(|k| {
+        let q = c.subs(t0 + (t1 - t0) * k);
+        matches!((normal(f1, q), normal(f2, q)), (Some(a), Some(b)) if a.dot(b) > 1.0 - 1e-6)
+    })
 }
 
 /// The chain of edges continuing `edge` smoothly at its ends (its ids): closed, or open where
