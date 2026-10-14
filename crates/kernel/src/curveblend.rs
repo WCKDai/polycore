@@ -1187,15 +1187,16 @@ fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, 
             if consumed.contains_key(&id) {
                 continue;
             }
-            // At a slanted end the blend may stop past the seam's old end: the seam then runs
-            // on along its line or circle, within its planar face.
+            // At an end of an open chain the blend may stop past the seam's old end (a slanted end
+            // face, or one turning back past the side, as a box side beside a boss joined to it):
+            // the seam then runs on along its line or circle, within its planar face.
             let one_end = match (&a, &b) {
                 (Some(nv), None) => Some((seam.front().clone(), nv.clone())),
                 (None, Some(nv)) => Some((seam.back().clone(), nv.clone())),
                 _ => None,
             };
             if let Some((old, nv)) = one_end
-                && slanted.iter().any(|(k, ..)| verts.get(*k) == Some(&old))
+                && end_faces.iter().any(|(k, _)| verts.get(*k) == Some(&old))
             {
                 let on_tol = (size * 1e-5).max(1e-6);
                 let q = from_p3(nv.point());
