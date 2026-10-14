@@ -1332,10 +1332,34 @@ fn cubic_basis(knots: &[f64], n_ctrl: usize, u: f64) -> Vec<f64> {
 /// Cubic B-spline through points at uniform parameters (clamped, knots by averaging).
 pub(crate) fn interpolate_cubic(pts: &[Vec3]) -> Option<mt::BSplineCurve<mt::Point3>> {
     let m = pts.len();
-    if m < 4 {
+    let u: Vec<f64> = (0..m).map(|i| i as f64 / (m.max(2) - 1) as f64).collect();
+    interpolate_cubic_at(pts, &u)
+}
+
+/// [`interpolate_cubic`] by chord length: the parameters (0 to 1) in proportion to the distance
+/// along the points. Points closer together toward an end (where a curve leaves another
+/// tangentially) then don't slow the curve to a stop there, where a uniform parameter lets it
+/// double back on itself.
+pub(crate) fn interpolate_cubic_chordal(pts: &[Vec3]) -> Option<(mt::BSplineCurve<mt::Point3>, Vec<f64>)> {
+    let mut u = vec![0.0];
+    for w in pts.windows(2) {
+        let (Some(a), Some(b)) = (w.first(), w.get(1)) else { return None };
+        u.push(u.last().copied().unwrap_or(0.0) + a.dist(*b));
+    }
+    let total = u.last().copied().filter(|t| t.is_finite() && *t > 0.0)?;
+    let u: Vec<f64> = u.iter().map(|x| x / total).collect();
+    if u.windows(2).any(|w| w.first() >= w.get(1)) {
         return None;
     }
-    let u: Vec<f64> = (0..m).map(|i| i as f64 / (m - 1) as f64).collect();
+    interpolate_cubic_at(pts, &u).map(|c| (c, u))
+}
+
+/// The cubic B-spline through `pts` at parameters `u` (rising from 0 to 1), its knots averaged.
+fn interpolate_cubic_at(pts: &[Vec3], u: &[f64]) -> Option<mt::BSplineCurve<mt::Point3>> {
+    let m = pts.len();
+    if m < 4 || u.len() != m {
+        return None;
+    }
     let mut knots = vec![0.0; 4];
     for j in 1..(m - 3) {
         knots.push((j..j + 3).filter_map(|i| u.get(i)).sum::<f64>() / 3.0);
