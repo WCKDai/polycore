@@ -248,6 +248,9 @@ struct Reader<'a> {
     /// Items the file converts exactly once (see `index`): keeping their solids would hold a
     /// second copy of the whole import for nothing.
     once: HashSet<u64>,
+    /// An item placed more than once: its first instance's display, shared by the later ones
+    /// (with the placement that first instance had), so the part is meshed once.
+    shown: HashMap<u64, (Arc<crate::body::SharedDisplay>, mt::Matrix4)>,
     used_items: HashSet<u64>,
     /// Items already instanced for the product being read.
     node_items: HashSet<u64>,
@@ -280,6 +283,7 @@ impl<'a> Reader<'a> {
             opacity: HashMap::new(),
             solids: HashMap::new(),
             once: HashSet::new(),
+            shown: HashMap::new(),
             used_items: HashSet::new(),
             node_items: HashSet::new(),
             visits: 0,
@@ -680,6 +684,16 @@ impl<'a> Reader<'a> {
                                     .map(|face| Some(crate::FaceSource::Imported { item, face: *face, payload_sha256: None, producer: None }))
                                     .collect();
                                 let body = body.with_face_sources(Some(std::sync::Arc::new(identities)));
+                                // A later instance of an item shows its first instance's mesh, placed.
+                                let body = match self.shown.get(&item) {
+                                    Some((shared, first)) => body.with_display_of(shared.clone(), to_array(&mat_mul(m, &rigid_inverse(first)))),
+                                    None => {
+                                        if !self.once.contains(&item) {
+                                            self.shown.insert(item, (Arc::new(crate::body::SharedDisplay::new(body.clone())), *m));
+                                        }
+                                        body
+                                    }
+                                };
                                 self.bodies.push(ImportedBody {
                                     name,
                                     body,

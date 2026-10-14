@@ -41,6 +41,7 @@ fn surface_of(shell: mt::Shell) -> Body {
         splits: None,
         face_sources: None,
         history: None,
+        display_of: None,
         regularization_protected: false,
     }
 }

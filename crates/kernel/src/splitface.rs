@@ -558,6 +558,7 @@ pub(crate) fn split_edges_at(body: &Body, points: &[Vec3]) -> Result<Body> {
             splits: body.splits.clone(),
             face_sources: None,
             history: None,
+            display_of: None,
             regularization_protected: true,
         };
         Ok(crate::record::rebuilt_body(split, &[&body.solid], &rec))
@@ -1053,6 +1054,7 @@ pub(crate) fn split_any(body: &Body, faces: &[usize], tool: &SplitTool) -> Resul
             splits: body.splits.clone(),
             face_sources: None,
             history: None,
+            display_of: None,
             regularization_protected: true,
         };
         Ok((crate::record::rebuilt_body(split, &[&body.solid], &imp.rec), imp))

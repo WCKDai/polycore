@@ -523,6 +523,31 @@ fn hand_written_assembly() {
     assert!((root.children[1].transform[3][0] - 100.0).abs() < 1e-9);
 }
 
+/// A part an assembly places twice is meshed once: the second instance shows the first one's
+/// display mesh, placed (the same triangles and faces, at its own place), and keeps its own
+/// placed geometry for everything else.
+#[test]
+fn later_instances_show_the_first_instances_mesh_placed() {
+    let imp = step_import(&two_instance_assembly()).unwrap();
+    let (first, second) = (&imp.bodies[0].body, &imp.bodies[1].body);
+    assert!(first.display_of.is_none() && second.display_of.is_some());
+    let a = first.reference_display_mesh_angular(0.01, crate::DISPLAY_ANGLE).unwrap();
+    let b = second.reference_display_mesh_angular(0.01, crate::DISPLAY_ANGLE).unwrap();
+    assert_eq!(a.triangles, b.triangles);
+    assert_eq!(a.tri_face, b.tri_face);
+    assert_eq!(a.edges.len(), b.edges.len());
+    // Turned 90 degrees about Z and moved 100 mm along X.
+    for (p, q) in a.positions.iter().zip(&b.positions) {
+        assert!(q.dist(Vec3::new(100.0 - p.y, p.x, p.z)) < 1e-9, "{p:?} -> {q:?}");
+    }
+    let own = measure(second).unwrap().bbox;
+    let shown = b.bounds();
+    assert!(shown.min.dist(own.min) < 1e-6 && shown.max.dist(own.max) < 1e-6, "{shown:?} vs {own:?}");
+    // Anything that changes what the body shows drops the shared mesh.
+    let split = second.clone().with_split_lines(Some(std::sync::Arc::new(vec![vec![Vec3::new(91.0, 0.0, 5.0), Vec3::new(91.0, 10.0, 5.0)]])));
+    assert!(split.display_of.is_none());
+}
+
 /// The import keeps a conversion only where the file can ask for the item again. A flat file of
 /// separate solids converts each item exactly once (no second copy of the whole import is held);
 /// an assembly that instances one item keeps it, and each instance still gets geometry of its
