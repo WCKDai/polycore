@@ -12,8 +12,8 @@ use solidcraft_geom::{Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
-use crate::history::{Change, EdgeOrigin, FaceOrigin};
-use crate::record::{Rebuild, rebuilt_body};
+use crate::history::{Change, EdgeOrigin, FaceOrigin, FaceProv};
+use crate::record::{self, Rebuild, Side, rebuilt_body};
 use crate::{KernelError, Result, guard};
 
 impl Body {
@@ -64,6 +64,33 @@ pub fn patch_region(plane: &Plane, region: &Region2) -> Result<Body> {
     Ok(rebuilt_body(surface_body(vec![f]), &[], &rec))
 }
 
+/// A chain's edge seeds numbered across all the chains: the segment at `i` of the chain that
+/// starts at segment `offset` is segment `offset + i`.
+fn numbered(seeds: &[(mt::EdgeID, usize)], offset: usize) -> Vec<(mt::EdgeID, Vec<usize>)> {
+    seeds.iter().map(|(id, i)| (*id, vec![offset + i])).collect()
+}
+
+/// The faces truck swept from the edges `seeds`, each with the segments under the edge whose
+/// column it lies in (none where the faces don't follow the pattern; see [`record::follow`]).
+fn swept_sides(shell: &mt::Shell, seeds: &[(mt::EdgeID, Vec<usize>)], fixed: &[mt::VertexID]) -> Vec<Side> {
+    let provs = record::columns(shell.face_iter(), seeds, None, record::Column::ToEnd, fixed);
+    shell.face_iter().enumerate().map(|(k, f)| (f.clone(), provs.as_ref().and_then(|p| p.get(k).cloned().flatten()))).collect()
+}
+
+/// A body of a sheet builder's faces: a surface, or a solid where they close; with the history
+/// of a body built from the chains' segments (none unless every face's is known).
+fn sheet_body(sides: Vec<Side>) -> Result<Body> {
+    let history: Option<Vec<FaceProv>> = sides.iter().map(|(_, p)| p.clone()).collect();
+    let shell = mt::Shell::from(sides.into_iter().map(|(f, _)| f).collect::<Vec<_>>());
+    if shell.shell_condition() == mt::ShellCondition::Closed {
+        return match crate::body::Solid::try_new(vec![shell.clone()]) {
+            Ok(solid) => record::attach(Body::new(solid)?, &[], history, Default::default()),
+            Err(_) => crate::record::rebuilt(mt::Solid::new_unchecked(vec![shell]), &[], &Rebuild::default()),
+        };
+    }
+    record::attach(surface_of(shell), &[], history, Default::default())
+}
+
 /// Most curve chains one surface extrude takes.
 const MAX_CHAINS: usize = 10_000;
 
@@ -87,17 +114,15 @@ pub fn extrude_sheet(plane: &Plane, chains: &[Vec<Seg2>], start: f64, end: f64) 
     }
     let base = plane.offset(lo);
     let along = crate::body::v3(plane.normal() * (hi - lo));
-    let mut rec = Rebuild::default();
-    let mut faces = Vec::new();
+    let mut sides = Vec::new();
+    let mut offset = 0;
     for chain in chains {
-        let wire = crate::build::chain_wire(&base, chain)?;
+        let (wire, seeds) = crate::build::chain_wire_seeds(&base, chain)?;
         let walls: mt::Shell = guard("surface extrude", || Ok(mt::builder::tsweep(&wire, along)))?;
-        for f in walls.face_iter() {
-            rec.made(f, Vec::new());
-            faces.push(f.clone());
-        }
+        sides.extend(swept_sides(&walls, &numbered(&seeds, offset), &[]));
+        offset += chain.len();
     }
-    Ok(rebuilt_body(surface_body(faces), &[], &rec))
+    sheet_body(sides)
 }
 
 /// A surface revolved from chains of sketch segments on `plane` about the sketch line through
@@ -125,8 +150,8 @@ pub fn revolve_sheet(plane: &Plane, chains: &[Vec<Seg2>], axis_origin: Vec2, axi
     let on_axis = |p: Vec2| side(p).abs() < 1e-7;
     let (origin, n) = (plane.to_world(axis_origin), plane.normal());
     let axis = plane.dir_to_world(d).normalized().ok_or_else(|| KernelError::Invalid("revolve frame has no axis".into()))?;
-    let mut rec = Rebuild::default();
-    let mut faces = Vec::new();
+    let mut sides = Vec::new();
+    let mut offset = 0;
     for chain in chains {
         // On one side of the axis; the point farthest from it fixes the turning sense.
         let pts: Vec<Vec2> = chain.iter().flat_map(|s| s.polyline(1e-3)).collect();
@@ -145,21 +170,26 @@ pub fn revolve_sheet(plane: &Plane, chains: &[Vec<Seg2>], axis_origin: Vec2, axi
         if closed && pts.iter().any(|p| on_axis(*p)) {
             return Err(KernelError::Invalid("not supported yet: a closed curve touching the revolve axis".into()));
         }
-        let wire = crate::build::chain_wire(plane, chain)?;
+        // The chain starts `start` round: its sketch frame turned there, so the wire's own edges
+        // are the ones swept (and its faces can be followed back to them).
+        let turn = |v: Vec3| crate::build::rotate_about(v, Vec3::ZERO, a, start);
+        let turned = Plane { origin: crate::build::rotate_about(plane.origin, origin, a, start), x: turn(plane.x), y: turn(plane.y) };
+        let (wire, seeds) = crate::build::chain_wire_seeds(&turned, chain)?;
+        let fixed: Vec<mt::VertexID> = [(on_axis(first), wire.front_vertex()), (on_axis(last), wire.back_vertex())]
+            .into_iter()
+            .filter_map(|(apex, v)| v.filter(|_| apex).map(|v| v.id()))
+            .collect();
         let walls: mt::Shell = guard("surface revolve", || {
-            let wire = mt::builder::rotated(&wire, p3(origin), crate::body::v3(a), mt::Rad(start));
             Ok(match (on_axis(first), on_axis(last)) {
                 (true, _) => mt::builder::cone(&wire, crate::body::v3(a), mt::Rad(sweep)),
                 (false, true) => mt::builder::cone(&wire.inverse(), crate::body::v3(a), mt::Rad(sweep)),
                 (false, false) => mt::builder::rsweep(&wire, p3(origin), crate::body::v3(a), mt::Rad(sweep)),
             })
         })?;
-        for f in walls.face_iter() {
-            rec.made(f, Vec::new());
-            faces.push(f.clone());
-        }
+        sides.extend(swept_sides(&walls, &numbered(&seeds, offset), &fixed));
+        offset += chain.len();
     }
-    body_of(faces, &[], &rec)
+    sheet_body(sides)
 }
 
 /// A surface swept from chains of sketch segments on `plane` along a path that starts near
@@ -191,10 +221,13 @@ pub fn sweep_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[crate::PathSeg])
         }
         return sweep_sheet_points(plane, chains, &pts);
     }
-    let mut rec = Rebuild::default();
-    let mut faces = Vec::new();
+    let mut sides = Vec::new();
+    let mut offset = 0;
     for chain in chains {
-        let mut cur = crate::build::chain_wire(plane, chain)?;
+        let (mut cur, seeds) = crate::build::chain_wire_seeds(plane, chain)?;
+        // Each edge's segments: the next stretch of the path starts from the edges the last one
+        // carried them onto, in the same order.
+        let mut seeds = numbered(&seeds, offset);
         for seg in path {
             let (part, map): (mt::Shell, Box<dyn Fn(Vec3) -> Vec3>) = match *seg {
                 PathSeg::Line { a, b } => {
@@ -207,14 +240,13 @@ pub fn sweep_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[crate::PathSeg])
                 }
             };
             let next = far_wire(&part, &cur, map.as_ref())?;
-            for f in part.face_iter() {
-                rec.made(f, Vec::new());
-                faces.push(f.clone());
-            }
+            sides.extend(swept_sides(&part, &seeds, &[]));
+            seeds = next.edge_iter().map(|e| e.id()).zip(seeds.into_iter().map(|(_, n)| n)).collect();
             cur = next;
         }
+        offset += chain.len();
     }
-    body_of(faces, &[], &rec)
+    sheet_body(sides)
 }
 
 /// A surface swept from chains of sketch segments on `plane` along a 3D polyline path: one smooth
@@ -227,18 +259,11 @@ pub fn sweep_sheet_points(plane: &Plane, chains: &[Vec<Seg2>], path: &[Vec3]) ->
     if chains.is_empty() || chains.len() > MAX_CHAINS {
         return Err(KernelError::Invalid("pick the curves or profiles to sweep".into()));
     }
-    let sheet = |faces: Vec<mt::Face>| {
-        let mut rec = Rebuild::default();
-        for f in &faces {
-            rec.made(f, Vec::new());
-        }
-        body_of(faces, &[], &rec)
-    };
-    let ruled = sheet(crate::sweep_path::ruled_sheet(plane, chains, path)?)?;
+    let ruled = sheet_body(crate::sweep_path::ruled_sheet(plane, chains, path)?)?;
     // Smooth walls where the path has no corners, kept when their area agrees with the ruled
     // walls' (a fit that went wrong falls back to those).
-    if let Ok(Some(faces)) = crate::sweep_path::smooth_sheet(plane, chains, path)
-        && let Ok(smooth) = sheet(faces)
+    if let Ok(Some(sides)) = crate::sweep_path::smooth_sheet(plane, chains, path)
+        && let Ok(smooth) = sheet_body(sides)
         && let (Ok(a), Ok(b)) = (crate::measure(&smooth), crate::measure(&ruled))
         && (a.area - b.area).abs() <= 0.02 * b.area.abs()
     {
@@ -310,25 +335,33 @@ pub fn loft_sheet(sections: &[(Plane, Vec<Seg2>)]) -> Result<Body> {
     } else {
         let n = sections.iter().map(|(_, c)| c.len()).max().unwrap_or(0);
         let mut wires = Vec::with_capacity(sections.len());
+        let mut sources = Vec::with_capacity(sections.len());
         let mut prev: Option<(Vec3, Vec3)> = None;
+        // Segments are numbered through the sections in the order given.
+        let mut offset = 0;
         for (plane, chain) in sections {
-            let mut segs = chain.clone();
+            // Each piece with the segment it is (part of).
+            let mut segs: Vec<(Seg2, usize)> = chain.iter().enumerate().map(|(i, s)| (*s, offset + i)).collect();
+            offset += chain.len();
             // Split the longest segment in half until the counts match.
             while segs.len() < n {
-                let Some(i) = segs.iter().enumerate().max_by(|a, b| a.1.length().total_cmp(&b.1.length())).map(|(i, _)| i) else { break };
-                let (a, b) = segs[i].split_half();
-                segs.splice(i..=i, [a, b]);
+                let Some(i) = segs.iter().enumerate().max_by(|a, b| a.1.0.length().total_cmp(&b.1.0.length())).map(|(i, _)| i) else { break };
+                let (s, k) = segs[i];
+                let (a, b) = s.split_half();
+                segs.splice(i..=i, [(a, k), (b, k)]);
             }
-            let ends = |c: &[Seg2]| c.first().zip(c.last()).map(|(f, l)| (plane.to_world(f.start()), plane.to_world(l.end())));
+            let ends = |c: &[(Seg2, usize)]| c.first().zip(c.last()).map(|(f, l)| (plane.to_world(f.0.start()), plane.to_world(l.0.end())));
             if let (Some((ps, pe)), Some((s, e))) = (prev, ends(&segs))
                 && s.dist(ps) + e.dist(pe) > s.dist(pe) + e.dist(ps)
             {
-                segs = segs.iter().rev().map(Seg2::reversed).collect();
+                segs = segs.iter().rev().map(|(s, k)| (s.reversed(), *k)).collect();
             }
             prev = ends(&segs);
-            wires.push(crate::build::uniform_chain_wire(plane, &segs, false)?);
+            let pieces: Vec<Seg2> = segs.iter().map(|(s, _)| *s).collect();
+            wires.push(crate::build::uniform_chain_wire(plane, &pieces, false)?);
+            sources.push(segs.iter().map(|(_, k)| vec![*k]).collect::<Vec<_>>());
         }
-        (wires, Vec::new())
+        (wires, sources)
     };
     let faces = guard("surface loft", || {
         let smooth = if wires.len() >= 3 { crate::build::smooth_loft_faces(&wires, &sources, all_closed).ok() } else { None };
@@ -337,12 +370,7 @@ pub fn loft_sheet(sections: &[(Plane, Vec<Seg2>)]) -> Result<Body> {
             None => crate::build::ruled_loft_faces(&wires, &sources),
         }
     })?;
-    let mut rec = Rebuild::default();
-    let faces: Vec<mt::Face> = faces.into_iter().map(|(f, _)| f).collect();
-    for f in &faces {
-        rec.made(f, Vec::new());
-    }
-    body_of(faces, &[], &rec)
+    sheet_body(faces)
 }
 
 /// The edge of a body nearest a point (by samples along each edge).

@@ -37,6 +37,12 @@ fn wire_sources(plane: &Plane, lp: &Loop2) -> Result<(mt::Wire, Vec<(mt::Edge, S
 /// An open wire in 3D through a chain of sketch segments, each starting where the one before
 /// ends (a closed chain makes a closed wire).
 pub(crate) fn chain_wire(plane: &Plane, segs: &[Seg2]) -> Result<mt::Wire> {
+    chain_wire_seeds(plane, segs).map(|(wire, _)| wire)
+}
+
+/// [`chain_wire`], with each edge's id and the position in the chain of the segment it was
+/// built from (a big arc makes two edges), in wire order.
+pub(crate) fn chain_wire_seeds(plane: &Plane, segs: &[Seg2]) -> Result<(mt::Wire, Vec<(mt::EdgeID, usize)>)> {
     let n = segs.len();
     if n == 0 || n > MAX_SEGS {
         return Err(KernelError::Invalid(format!("curve chain with {n} segments")));
@@ -50,7 +56,8 @@ pub(crate) fn chain_wire(plane: &Plane, segs: &[Seg2]) -> Result<mt::Wire> {
         }
     }
     let closed = segs.first().zip(segs.last()).is_some_and(|(f, l)| l.end().dist(f.start()) <= 1e-6);
-    chain_sources(plane, segs, closed).map(|(wire, _)| wire)
+    let (wire, sources) = chain_sources(plane, segs, closed)?;
+    Ok((wire, sources.into_iter().map(|(e, _, i)| (e.id(), i)).collect()))
 }
 
 /// The edges of a chain of segments (closed: the last one ends on the first's start vertex),

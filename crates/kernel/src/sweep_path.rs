@@ -208,27 +208,37 @@ fn ruled_stations(pts: &[Vec3]) -> Result<(Vec<Vec3>, Vec<Station>)> {
 /// Walls of chains of sketch segments on `plane` (open, or closed) carried along a 3D polyline
 /// path that starts near them: ruled between stations at the path's points, mitred at corners,
 /// with no caps. Neighbouring walls share their edges.
-pub(crate) fn ruled_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[Vec3]) -> Result<Vec<mt::Face>> {
+pub(crate) fn ruled_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[Vec3]) -> Result<Vec<Side>> {
     let (pts, st) = ruled_stations(&clean(path)?)?;
     let edges: usize = chains.iter().map(Vec::len).sum();
     if st.len().saturating_mul(edges) > 400_000 {
         return Err(KernelError::Invalid("the sweep is too detailed (curves × path points)".into()));
     }
     let s0 = pts.first().copied().unwrap_or_default();
-    let wires: Vec<Vec<mt::Wire>> = st
-        .iter()
-        .map(|s| {
-            let pl = station_plane(plane, s0, s);
-            chains.iter().map(|c| crate::build::chain_wire(&pl, c)).collect::<Result<Vec<_>>>()
-        })
-        .collect::<Result<_>>()?;
+    // Each chain's segments are numbered on from the last chain's; every station's wire of a
+    // chain has the same edges, each over the same segment.
+    let offsets: Vec<usize> = chains.iter().scan(0, |o, c| Some(std::mem::replace(o, *o + c.len()))).collect();
+    let mut wires: Vec<Vec<mt::Wire>> = Vec::with_capacity(st.len());
+    let mut numbers: Vec<Vec<Vec<usize>>> = Vec::new();
+    for s in &st {
+        let pl = station_plane(plane, s0, s);
+        let mut at = Vec::with_capacity(chains.len());
+        for (c, offset) in chains.iter().zip(&offsets) {
+            let (wire, seeds) = crate::build::chain_wire_seeds(&pl, c)?;
+            if numbers.len() < chains.len() {
+                numbers.push(seeds.iter().map(|(_, i)| vec![offset + i]).collect());
+            }
+            at.push(wire);
+        }
+        wires.push(at);
+    }
     guard("path sweep", || {
-        let mut faces = Vec::new();
+        let mut faces: Vec<Side> = Vec::new();
         for w in wires.windows(2) {
             let (Some(w0), Some(w1)) = (w.first(), w.get(1)) else { continue };
-            for (a, b) in w0.iter().zip(w1) {
+            for ((a, b), n) in w0.iter().zip(w1).zip(&numbers) {
                 let sides: mt::Shell = builder::try_wire_homotopy(a, b).map_err(|e| KernelError::Failed(format!("path sweep: {e}")))?;
-                faces.extend(sides.face_iter().cloned());
+                faces.extend(record::ruled(&sides, a, b, n, n));
             }
         }
         Ok(faces)
@@ -239,7 +249,7 @@ pub(crate) fn ruled_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[Vec3]) ->
 /// turn sharper than [`CORNER`]): one B-spline wall per segment through evenly spaced,
 /// rotation-minimising stations, neighbouring walls sharing their seam edges; no caps. `None`
 /// for a path with corners (see [`ruled_sheet`]).
-pub(crate) fn smooth_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[Vec3]) -> Result<Option<Vec<mt::Face>>> {
+pub(crate) fn smooth_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[Vec3]) -> Result<Option<Vec<Side>>> {
     let pts = clean(path)?;
     if pts.windows(3).any(|w| turn(w[1] - w[0], w[2] - w[1]) > CORNER) {
         return Ok(None);
@@ -255,7 +265,8 @@ pub(crate) fn smooth_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[Vec3]) -
     let s0 = st.first().map(|s| s.at).unwrap_or_default();
     let at = |i: usize, q: Vec2| st.get(i).map(|s| s.at + s.apply(plane.to_world(q) - s0)).unwrap_or_default();
     let n = st.len() - 1;
-    let mut faces = Vec::new();
+    let mut faces: Vec<Side> = Vec::new();
+    let mut offset = 0;
     for chain in chains {
         let closed = chain.first().zip(chain.last()).is_some_and(|(f, l)| l.end().dist(f.start()) <= 1e-6);
         // Each segment: its curve at the first and last station, the columns through its start
@@ -320,7 +331,9 @@ pub(crate) fn smooth_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[Vec3]) -
             }
             Ok(walls)
         })?;
-        faces.extend(walls);
+        // Wall j comes from segment j of the chain.
+        faces.extend(walls.into_iter().enumerate().map(|(j, w)| (w, Some(record::profile(&[offset + j])))));
+        offset += chain.len();
     }
     Ok(Some(faces))
 }
