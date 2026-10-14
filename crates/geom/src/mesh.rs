@@ -90,14 +90,32 @@ const MAX_CELLS_PER_TRIANGLE: usize = 64;
 /// `gap` of each other (each such pair once), until it returns true, and says whether it did.
 /// The cost follows the number of close pairs, not `a.len() * b.len()`: `b` is filed in a sparse
 /// grid of cells about its typical triangle's size, and each triangle of `a` meets only those in
-/// its cells. Every call of `test` takes one from `budget`; `None` when the budget runs out.
+/// its cells. The work counts against `budget`, one unit each: a grid cell a triangle of `b` is
+/// filed under, a cell a triangle of `a` visits, and a call of `test`. `None` when the budget runs out.
 pub fn find_close_pair(
     a: &[BoxedTriangle],
     b: &[BoxedTriangle],
     gap: f64,
     budget: &mut usize,
+    test: impl FnMut(&BoxedTriangle, &BoxedTriangle) -> bool,
+) -> Option<bool> {
+    let work = std::cell::Cell::new(*budget);
+    let found = find_close_pair_within(a, b, gap, &work, test);
+    *budget = work.get();
+    found
+}
+
+fn find_close_pair_within(
+    a: &[BoxedTriangle],
+    b: &[BoxedTriangle],
+    gap: f64,
+    work: &std::cell::Cell<usize>,
     mut test: impl FnMut(&BoxedTriangle, &BoxedTriangle) -> bool,
 ) -> Option<bool> {
+    let spend = |n: usize| -> Option<()> {
+        work.set(work.get().checked_sub(n)?);
+        Some(())
+    };
     let gap = if gap.is_finite() { gap.max(0.0) } else { 0.0 };
     let close = |x: &Aabb3, y: &Aabb3| {
         x.min.x <= y.max.x + gap
@@ -108,7 +126,7 @@ pub fn find_close_pair(
             && y.min.z <= x.max.z + gap
     };
     let mut call = |t: &BoxedTriangle, u: &BoxedTriangle| -> Option<bool> {
-        *budget = budget.checked_sub(1)?;
+        spend(1)?;
         Some(test(t, u))
     };
     let (Some(first), true) = (b.first(), !a.is_empty()) else { return Some(false) };
@@ -146,6 +164,7 @@ pub fn find_close_pair(
                 for ix in x.0..=x.1 {
                     for iy in y.0..=y.1 {
                         for iz in z.0..=z.1 {
+                            spend(1)?;
                             cells.entry((ix, iy, iz)).or_default().push(j as u32);
                         }
                     }
@@ -177,6 +196,7 @@ pub fn find_close_pair(
         for ix in x.0..=x.1 {
             for iy in y.0..=y.1 {
                 for iz in z.0..=z.1 {
+                    spend(1)?;
                     for &j in cells.get(&(ix, iy, iz)).into_iter().flatten() {
                         let (Some(mark), Some(u)) = (seen.get_mut(j as usize), b.get(j as usize)) else { continue };
                         if *mark == i + 1 {
