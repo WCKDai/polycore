@@ -116,3 +116,9 @@ SolidCraft changes:
 - `src/setup.rs`: the default device requests `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` when
   the adapter has it, so 2x and 8x work where the adapter supports them (WebGPU only
   guarantees 1x and 4x).
+- `src/setup.rs`: the default device asks for the adapter's largest 2D texture (at least 8192)
+  instead of exactly 8192.
+- `src/lib.rs`, `src/winit.rs`: a window larger than the device's largest texture gets a surface
+  clamped to it (`clamp_surface_extent`, aspect ratio kept) and egui is drawn at the matching
+  smaller scale, instead of a `Surface::configure` validation panic (#869). The resize path and
+  an unsupported surface no longer unwrap.
