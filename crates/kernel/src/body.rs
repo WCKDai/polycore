@@ -173,7 +173,7 @@ const MIN_DISPLAY_ANGLE: f64 = std::f64::consts::PI / 180.0;
 /// non-manifold shells an import can produce). Boundaries that lie on their surface only within
 /// tolerance (imports, boolean results) are projected onto it.
 fn mesh_shells(solid: &Solid, tol: f64) -> Vec<MeshedShell> {
-    mesh_shells_within(solid, Deflection::chord(tol))
+    mesh_shells_within(solid, Deflection { rulings: true, ..Deflection::chord(tol) })
 }
 
 /// [`mesh_shells`] divided by a chord tolerance and, when it has one, a bound on the angle a
@@ -986,9 +986,9 @@ impl Body {
             return Ok(m.to_mesh());
         }
         let deflection = if angle.is_finite() && angle > 0.0 {
-            Deflection { chord: tol, angle: angle.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR }
+            Deflection { chord: tol, angle: angle.max(MIN_DISPLAY_ANGLE), floor: tol * DISPLAY_ANGLE_FLOOR, rulings: true }
         } else {
-            Deflection::chord(tol)
+            Deflection { rulings: true, ..Deflection::chord(tol) }
         };
         guard("tessellate", || {
             let meshed = mesh_shells_within(&self.solid, deflection);

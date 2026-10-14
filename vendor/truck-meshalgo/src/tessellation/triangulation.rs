@@ -789,8 +789,8 @@ fn insert_surface(
         let (u, v) = bounded_surface_division(&surface, range, tol, cap);
         let (u_ruled, v_ruled) = (u.len() <= 3, v.len() <= 3);
         let (u, v) = balanced_grid(&surface, u, v, cap);
-        let v = with_ruling_vertices(v, polyline, 1, v_ruled, u.len(), cap);
-        let u = with_ruling_vertices(u, polyline, 0, u_ruled, v.len(), cap);
+        let v = with_ruling_vertices(v, polyline, 1, tol.rulings && v_ruled, u.len(), cap);
+        let u = with_ruling_vertices(u, polyline, 0, tol.rulings && u_ruled, v.len(), cap);
         (u, v)
     };
     let insert_res: Vec<Vec<Option<_>>> = udiv
