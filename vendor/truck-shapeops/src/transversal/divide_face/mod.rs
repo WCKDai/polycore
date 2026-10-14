@@ -71,6 +71,18 @@ where
         vec.append(&mut add?);
         Some(vec)
     })?;
+    // SolidCraft: a lenient boundary whose points jump half the parameter range or more has been
+    // found across a periodic surface's seam by the whole-surface search (on a cylinder the
+    // points of one edge landed at both ends of its angle): it would divide the face wrongly, so
+    // the face is left undivided as before.
+    if lenient {
+        let (u, v) = surface.try_range_tuple();
+        let half = |r: Option<(f64, f64)>| r.map_or(f64::INFINITY, |(a, b)| (b - a).abs() / 2.0);
+        let (hu, hv) = (half(u), half(v));
+        if vec.windows(2).any(|w| (w[1].x - w[0].x).abs() >= hu || (w[1].y - w[0].y).abs() >= hv) {
+            return None;
+        }
+    }
     Some(PolylineCurve(vec))
 }
 
