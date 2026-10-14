@@ -300,7 +300,21 @@ thread_local! {
 /// The result carries its exact history ([`Body::history`]) over the operands `[a, b]`,
 /// whichever way it was made, or none where a step it took does not report one.
 pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
-    let (mut r, mut diagnostics) = capture_boolean_diagnostics(|| boolean_whole(a, b, op));
+    let r = boolean_via(a, b, op, &boolean_whole);
+    if r.is_ok() || !crate::tangent_cylinders::needed(a, b) {
+        return r;
+    }
+    // Equal cylinders crossing each other touch at two points the boolean cannot take in the
+    // middle of a face (#788): once more with the faces split along them.
+    let split = |a: &Body, b: &Body, op| {
+        crate::tangent_cylinders::boolean(a, b, op, &boolean_whole).unwrap_or_else(|| Err(KernelError::Failed("no split of faces helps".into())))
+    };
+    boolean_via(a, b, op, &split).or(r)
+}
+
+/// [`boolean`], the boolean of the whole bodies taken by `whole`.
+fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, BoolOp) -> Result<Option<Body>>) -> Result<Option<Body>> {
+    let (mut r, mut diagnostics) = capture_boolean_diagnostics(|| whole(a, b, op));
     // Bodies in several pieces: when the whole failed (or came out empty), a piece at a time.
     let retry = match &r {
         Err(_) => true,

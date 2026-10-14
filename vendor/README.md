@@ -17,6 +17,15 @@ Changes:
 - `transversal/integrate/mod.rs`: the result's shells and faces keep the order of the shell
   they come from (truck's connected components followed hash order of face addresses, so a
   boolean's faces came out in a different order on every run).
+- `transversal/loops_store/mod.rs`: an intersection edge added to a face at a vertex that more
+  than one wire visits (several curves end on it: the touching point of two equal cylinders) goes
+  into the corner that holds its direction, swept counterclockwise about the face's normal from
+  the wire's outgoing edge to the way back along its incoming one (`add_edge_by_angle`, told on
+  the polygon loops and followed by the geometry loops). Taking the first visit of each end
+  joined wires that are different regions of a face and left a wire visiting a vertex twice.
+  With no direction to go by, the edge goes where both of its ends are in one wire.
+- `transversal/divide_face/mod.rs`: a face piece whose wire is not simple makes the operation
+  give up (`Face::try_new`) instead of panicking.
 - `lib.rs`: `tr!` reports where an operation gives up when `SHAPEOPS_TRACE` is set; compiler
   warnings no longer fail the build.
 - Face and edge history (`transversal/history.rs`, new): `and_with_history` / `or_with_history`

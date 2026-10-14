@@ -19,7 +19,7 @@ use crate::{BoolOp, KernelError, Result};
 const MAX_SAMPLES: usize = 20_000;
 
 /// Distance from `p` to the triangle `abc`.
-fn point_triangle_dist(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f64 {
+pub(crate) fn point_triangle_dist(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> f64 {
     let n = (b - a).cross(c - a);
     let Some(nn) = n.normalized() else {
         return [(a, b), (b, c), (c, a)].iter().map(|(u, v)| p.dist_to_segment(*u, *v)).fold(f64::INFINITY, f64::min);
