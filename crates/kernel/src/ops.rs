@@ -101,7 +101,12 @@ fn overlap(
         let bx = inner.bounds();
         let s = bx.size();
         let (mut n, mut hit) = (0usize, 0usize);
-        for i in 1..=2000 {
+        // A slender body lying across its box (a long hole tool drilled at an angle) fills
+        // little of it: the samples go on past the first 2000 until enough land inside.
+        for i in 1..=64_000 {
+            if i > 2000 && n >= 50 {
+                break;
+            }
             let p = bx.min + Vec3::new(s.x * halton(i, 2), s.y * halton(i, 3), s.z * halton(i, 5));
             if !inner_i.contains(p) {
                 continue;
@@ -648,6 +653,61 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     let mut empty_votes = 0;
     let mut empty_diagnostics = crate::BooleanDiagnostics::default();
     let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
+    // The tolerances below follow the larger body. Where the bodies meet in a region much
+    // smaller than that (a hole a few millimetres across drilled through a long part, whose tool
+    // is longer still), they are as coarse as the tool itself: its intersection curves are
+    // traced at a step wider than the hole, and the cut comes out empty or fails. When those
+    // tries fail, the same boolean is asked again at tolerances (and shifts) scaled to where the
+    // bodies meet. Its result is checked as the others are, and held to the retry guard.
+    // Bodies in several shells are retried a piece at a time (see [`boolean`]), where each
+    // piece gets this pass of its own.
+    let fine_tols: Vec<f64> = match &meshes {
+        (Some(ma), Some(mb)) if a.solid.boundaries().len() == 1 && b.solid.boundaries().len() == 1 => {
+            let (ba, bb) = (ma.bounds(), mb.bounds());
+            let s = solidcraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) }.size();
+            // The thinner operand's thickness (twice its volume over its area: a plate's
+            // thickness, a rod's radius) bounds what the tolerance must resolve as well.
+            let thickness = |m: &solidcraft_geom::Mesh| {
+                let x = m.measure();
+                if x.area > 0.0 { 2.0 * x.volume.abs() / x.area } else { f64::INFINITY }
+            };
+            let feature = s.x.min(s.y).min(s.z).min(thickness(ma)).min(thickness(mb)).max(size * 1e-4);
+            if feature > 0.0 && feature * 2e-3 < size * 2.5e-4 { vec![(feature * 2e-3).max(1e-6), (feature * 5e-4).max(1e-6)] } else { Vec::new() }
+        }
+        _ => Vec::new(),
+    };
+    let fine = |last: &mut String| -> Option<Body> {
+        let feature = fine_tols.first().map(|t| t / 2e-3)?;
+        // Unshifted, then once shifted: each try at these tolerances costs many coarser ones.
+        for (attempt, j) in JITTER.iter().enumerate().take(2) {
+            let shift = mt::Vector3::new(j[0], j[1], j[2]) * (feature * 0.01);
+            for &tol in &fine_tols {
+                match truck_boolean(a, b, op, if attempt > 0 { Some(shift) } else { None }, tol) {
+                    Ok((s, _)) if s.boundaries().is_empty() || s.face_iter().next().is_none() => *last = "empty result".into(),
+                    Ok((s, h)) => match guard("boolean result", || recorded::truck_result(s, h, size, &keep, &counts)) {
+                        Ok(body) => {
+                            let (ok, v) = check(&body);
+                            if ok {
+                                let mut event = BooleanFallback::new(if attempt > 0 {
+                                    BooleanStrategy::ShiftedOperands
+                                } else {
+                                    BooleanStrategy::RefinedTolerance
+                                });
+                                event.translation_mm = Vec3::new(j[0], j[1], j[2]).len() * (feature * 0.01);
+                                event.tolerance_mm = tol;
+                                record(event);
+                                return Some(body);
+                            }
+                            *last = format!("implausible result volume {v:.4}");
+                        }
+                        Err(e) => *last = e.to_string(),
+                    },
+                    Err(e) => *last = e.to_string(),
+                }
+            }
+        }
+        None
+    };
     for (attempt, j) in JITTER.iter().enumerate() {
         let shift = mt::Vector3::new(j[0], j[1], j[2]) * (size * 0.01);
         for k in [2e-3, 5e-4] {
@@ -693,6 +753,9 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             }
         }
         if empty_votes >= 2 && op != BoolOp::Union {
+            if let Some(body) = fine(&mut last) {
+                return Ok(Some(body));
+            }
             merge(empty_diagnostics);
             return Ok(None);
         }
@@ -749,6 +812,11 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             }
             Err(e) => last = format!("{last}; nudged: {e}"),
         }
+    }
+    // The tries at the meeting region's scale come last, after every strategy that answered
+    // before them, so a result any of those gave is kept as it was.
+    if let Some(body) = fine(&mut last) {
+        return Ok(Some(body));
     }
     match doubted {
         Some(r) => {
