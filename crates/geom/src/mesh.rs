@@ -252,6 +252,72 @@ pub struct MeshMeasure {
     pub centroid: Vec3,
 }
 
+/// Volume, centroid and inertia tensor of a closed mesh at unit density: the inertia is about
+/// the centroid, in the mesh's axes (times a density, mass and inertia in that density's units).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MassProperties {
+    pub volume: f64,
+    pub centroid: Vec3,
+    pub inertia: [[f64; 3]; 3],
+}
+
+impl Mesh {
+    /// [`MassProperties`] of a closed mesh, by the divergence theorem over the tetrahedra its
+    /// triangles make with the origin. `None` unless every edge (by vertex index: weld first) is
+    /// shared by exactly two triangles that cross it in opposite directions (closed, consistently
+    /// oriented), or for a mesh without volume or with non-finite values.
+    pub fn mass_properties(&self) -> Option<MassProperties> {
+        // Closed and consistently oriented: each edge is crossed once in each direction.
+        let mut edges: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
+        for t in &self.triangles {
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                *edges.entry((a, b)).or_insert(0) += 1;
+            }
+        }
+        if edges.is_empty() || edges.iter().any(|(&(a, b), n)| *n != 1 || edges.get(&(b, a)) != Some(&1)) {
+            return None;
+        }
+        let xyz = |v: Vec3| [v.x, v.y, v.z];
+        let (mut v6, mut first, mut second) = (0.0, Vec3::ZERO, [[0.0f64; 3]; 3]);
+        for t in &self.triangles {
+            let [a, b, c] = self.tri(t)?;
+            let det = a.dot(b.cross(c));
+            v6 += det;
+            first += (a + b + c) * det;
+            // ∫ x xᵀ over the tetrahedron (0, a, b, c) = det/120 · (Σ p pᵀ + s sᵀ), s = a + b + c.
+            let (p, s) = ([xyz(a), xyz(b), xyz(c)], xyz(a + b + c));
+            for (i, row) in second.iter_mut().enumerate() {
+                for (j, cell) in row.iter_mut().enumerate() {
+                    *cell += det / 120.0 * (p.iter().map(|q| q[i] * q[j]).sum::<f64>() + s[i] * s[j]);
+                }
+            }
+        }
+        if !(v6.abs() / 6.0 > 1e-12) {
+            return None;
+        }
+        // Inward-facing: every sum changes sign together.
+        let sign = v6.signum();
+        let volume = v6.abs() / 6.0;
+        let centroid = first / (4.0 * v6);
+        let c = xyz(centroid);
+        let mut about = [[0.0f64; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                about[i][j] = sign * second[i][j] - volume * c[i] * c[j];
+            }
+        }
+        let trace = about[0][0] + about[1][1] + about[2][2];
+        let mut inertia = [[0.0f64; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                inertia[i][j] = if i == j { trace } else { 0.0 } - about[i][j];
+            }
+        }
+        let finite = volume.is_finite() && c.iter().all(|x| x.is_finite()) && inertia.iter().flatten().all(|x| x.is_finite());
+        finite.then_some(MassProperties { volume, centroid, inertia })
+    }
+}
+
 impl Mesh {
     /// Visibility in shaded edge presentation, independent of selection/topology.
     pub fn shaded_edge_visible(&self, index: usize) -> bool {

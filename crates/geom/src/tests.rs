@@ -320,6 +320,102 @@ fn meshes_cross_only_where_their_surfaces_pass_through_each_other() {
     assert!(!a.crosses(&cube(9.85, 3.0, 1), f64::NAN));
 }
 
+/// A closed box mesh `[x0, x0+a] x [y0, y0+b] x [z0, z0+c]`, outward-facing.
+fn offset_box(o: Vec3, a: f64, b: f64, c: f64) -> Mesh {
+    let p = |x: f64, y: f64, z: f64| o + Vec3::new(x * a, y * b, z * c);
+    let positions = vec![p(0., 0., 0.), p(1., 0., 0.), p(1., 1., 0.), p(0., 1., 0.), p(0., 0., 1.), p(1., 0., 1.), p(1., 1., 1.), p(0., 1., 1.)];
+    let triangles =
+        vec![[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+    Mesh { positions, triangles, ..Default::default() }
+}
+
+fn close(a: f64, b: f64, rel: f64) -> bool {
+    (a - b).abs() <= rel * b.abs().max(1e-12)
+}
+
+#[test]
+fn mass_properties_of_a_box_match_the_closed_form() {
+    let (a, b, c) = (20.0, 30.0, 40.0);
+    let m = offset_box(Vec3::ZERO, a, b, c).mass_properties().expect("a closed box has mass properties");
+    let v = a * b * c;
+    assert!(close(m.volume, v, 1e-12), "{m:?}");
+    assert!((m.centroid - Vec3::new(10.0, 15.0, 20.0)).len() < 1e-9, "{m:?}");
+    let i = m.inertia;
+    assert!(close(i[0][0], v * (b * b + c * c) / 12.0, 1e-9), "{i:?}");
+    assert!(close(i[1][1], v * (a * a + c * c) / 12.0, 1e-9), "{i:?}");
+    assert!(close(i[2][2], v * (a * a + b * b) / 12.0, 1e-9), "{i:?}");
+    for (r, cc) in [(0, 1), (0, 2), (1, 2)] {
+        assert!(i[r][cc].abs() < 1e-6 && i[cc][r].abs() < 1e-6, "{i:?}");
+    }
+}
+
+#[test]
+fn mass_properties_of_a_cylinder_are_close() {
+    // A cylinder of radius 10 and height 30 along z, 256 sides, capped by fans.
+    let (r, h, n) = (10.0, 30.0, 256usize);
+    let mut positions = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, h)];
+    for k in 0..n {
+        let t = std::f64::consts::TAU * k as f64 / n as f64;
+        positions.push(Vec3::new(r * t.cos(), r * t.sin(), 0.0));
+        positions.push(Vec3::new(r * t.cos(), r * t.sin(), h));
+    }
+    let mut triangles = Vec::new();
+    for k in 0..n as u32 {
+        let (b0, t0) = (2 + 2 * k, 3 + 2 * k);
+        let (b1, t1) = (2 + 2 * ((k + 1) % n as u32), 3 + 2 * ((k + 1) % n as u32));
+        triangles.push([0, b1, b0]);
+        triangles.push([1, t0, t1]);
+        triangles.push([b0, b1, t1]);
+        triangles.push([b0, t1, t0]);
+    }
+    let m = Mesh { positions, triangles, ..Default::default() }.mass_properties().expect("closed");
+    let v = std::f64::consts::PI * r * r * h;
+    assert!(close(m.volume, v, 1e-3), "{m:?}");
+    assert!(close(m.inertia[2][2], m.volume * r * r / 2.0, 1e-3), "{m:?}");
+    assert!(close(m.inertia[0][0], m.volume * (3.0 * r * r + h * h) / 12.0, 1e-3), "{m:?}");
+}
+
+#[test]
+fn mass_properties_are_translation_invariant_about_the_centroid() {
+    let at_origin = offset_box(Vec3::ZERO, 20.0, 30.0, 40.0).mass_properties().unwrap();
+    let moved = offset_box(Vec3::new(100.0, -50.0, 7.0), 20.0, 30.0, 40.0).mass_properties().unwrap();
+    assert!((moved.centroid - Vec3::new(110.0, -35.0, 27.0)).len() < 1e-9, "{moved:?}");
+    for r in 0..3 {
+        for c in 0..3 {
+            assert!((moved.inertia[r][c] - at_origin.inertia[r][c]).abs() <= 1e-9 * at_origin.inertia[0][0], "{r}{c}");
+        }
+    }
+}
+
+#[test]
+fn mass_properties_of_an_inward_facing_box_are_positive() {
+    let mut m = offset_box(Vec3::ZERO, 2.0, 3.0, 4.0);
+    for t in &mut m.triangles {
+        t.swap(1, 2);
+    }
+    let p = m.mass_properties().unwrap();
+    assert!(close(p.volume, 24.0, 1e-12) && p.inertia[0][0] > 0.0, "{p:?}");
+}
+
+#[test]
+fn mass_properties_of_an_open_or_empty_mesh_are_none() {
+    let mut open = offset_box(Vec3::ZERO, 20.0, 30.0, 40.0);
+    open.triangles.truncate(10);
+    assert!(open.mass_properties().is_none(), "a box missing a face has no mass");
+    assert!(Mesh::default().mass_properties().is_none());
+}
+
+#[test]
+fn mass_properties_need_consistently_oriented_faces() {
+    // Every edge still has two triangles, but one face of the box points inwards: its signed
+    // volume would cancel part of the rest.
+    let mut m = offset_box(Vec3::ZERO, 20.0, 30.0, 40.0);
+    for t in m.triangles.iter_mut().take(2) {
+        t.swap(1, 2);
+    }
+    assert!(m.mass_properties().is_none());
+}
+
 mod close_pairs {
     use super::*;
 
