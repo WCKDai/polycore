@@ -2326,3 +2326,62 @@ fn retained_bytes_matches_the_iterator_counts() {
         assert_eq!(body.retained_bytes(), walked);
     }
 }
+
+/// #881: a pleated band lofted to a nearly flat one, both 18 vertices from (-26, 3), counter-
+/// clockwise and mirror-symmetric about x = 0. The zig-zag's centroid sits well above its first
+/// vertex, so that vertex pointed nowhere near the lead's: the loft started three vertices round,
+/// twisted (14 820 mm³, centre of mass at x = 5.3). Vertex to vertex, it is a prismoid.
+#[test]
+fn loft_pairs_the_vertices_of_matching_non_convex_sections() {
+    let bottom = [
+        (-26.0, 3.0),
+        (-24.76384, 3.0),
+        (-16.0568, 14.97217),
+        (-8.0, 4.90117),
+        (0.0, 14.90117),
+        (8.0, 4.90117),
+        (16.0568, 14.97217),
+        (24.76384, 3.0),
+        (26.0, 3.0),
+        (26.0, 0.0),
+        (23.23616, 0.0),
+        (15.9432, 10.02783),
+        (8.0, 0.09883),
+        (0.0, 10.09883),
+        (-8.0, 0.09883),
+        (-15.9432, 10.02783),
+        (-23.23616, 0.0),
+        (-26.0, 0.0),
+    ];
+    let top = [
+        (-26.0, 3.0),
+        (-24.02812, 3.0),
+        (-16.0, 3.30105),
+        (-8.0, 3.00105),
+        (0.0, 3.30105),
+        (8.0, 3.00105),
+        (16.0, 3.30105),
+        (24.02812, 3.0),
+        (26.0, 3.0),
+        (26.0, 0.0),
+        (23.97188, 0.0),
+        (16.0, 0.29895),
+        (8.0, -0.00105),
+        (0.0, 0.29895),
+        (-8.0, -0.00105),
+        (-16.0, 0.29895),
+        (-23.97188, 0.0),
+        (-26.0, 0.0),
+    ];
+    let v = |p: &[(f64, f64)]| p.iter().map(|&(x, y)| Vec2::new(x, y)).collect::<Vec<_>>();
+    let mid: Vec<Vec2> = v(&bottom).into_iter().zip(v(&top)).map(|(a, b)| (a + b) * 0.5).collect();
+    // Prismoid: h/6 · (A0 + 4 Amid + A1) = 17 914.43.
+    let area = |p: &[Vec2]| Loop2::polygon(p).signed_area().abs();
+    let want = 90.0 / 6.0 * (area(&v(&bottom)) + 4.0 * area(&mid) + area(&v(&top)));
+    let secs = [(Plane::XY, Loop2::polygon(&v(&bottom))), (Plane::XY.offset(90.0), Loop2::polygon(&v(&top)))];
+    let m = measure(&loft(&secs).unwrap()).unwrap();
+    // Twisted ruled faces measure a little under the prismoid (17 884; a square lofted to a
+    // skewed quad, one twisted face, 0.3 % under), so the bounds leave room for that.
+    assert!(rel(m.volume, want) < 5e-3, "{} vs {want}", m.volume);
+    assert!(m.centroid.x.abs() < 0.05, "centre of mass x {}", m.centroid.x);
+}

@@ -1075,17 +1075,17 @@ pub(crate) fn loft_wires(sections: &[(Plane, Loop2)]) -> Result<(Vec<mt::Wire>, 
         // Break angles: the lead section's vertex directions seen in this plane.
         let angles: Vec<f64> = lead_dirs.iter().map(|d| Vec2::new(d.dot(p.x), d.dot(p.y)).angle()).collect();
         let mut r = l.resample(n, &angles);
-        // Start at the vertex closest in direction to the lead's first vertex.
-        if let Some(d0) = lead_dirs.first() {
-            let target = Vec2::new(d0.dot(p.x), d0.dot(p.y)).angle();
-            let ang = |s: &Seg2| {
-                let d = ((s.start() - c).angle() - target).rem_euclid(std::f64::consts::TAU);
-                d.min(std::f64::consts::TAU - d)
-            };
-            let best = r.lp.segs.iter().enumerate().min_by(|a, b| ang(a.1).total_cmp(&ang(b.1))).map(|(k, _)| k);
-            if let Some(k) = best {
-                r.rotate_left(k);
-            }
+        // Start where every vertex lines up best with the lead's vertex of the same number (the
+        // largest sum of dot products of their directions from the centroids). The one vertex
+        // closest in direction to the lead's first vertex twisted non-convex sections (#881): a
+        // zig-zag's centroid sits off its outline, so its first vertex can point away from the
+        // lead's.
+        let dirs: Vec<Vec2> = lead_dirs.iter().map(|d| Vec2::new(d.dot(p.x), d.dot(p.y))).collect();
+        let m = r.lp.segs.len();
+        let fit =
+            |k: usize| -> f64 { dirs.iter().enumerate().filter_map(|(i, d)| r.lp.segs.get((i + k) % m).map(|s| (s.start() - c).dot(*d))).sum() };
+        if let Some(k) = (0..m).min_by(|a, b| fit(*b).total_cmp(&fit(*a))) {
+            r.rotate_left(k);
         }
         wires.push(uniform_wire(p, &r.lp)?);
         edge_sources.push(r.from);
