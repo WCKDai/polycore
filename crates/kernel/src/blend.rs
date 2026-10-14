@@ -21,6 +21,7 @@ use crate::{KernelError, Result, guard};
 enum Shape {
     Round,
     Flat,
+    Curvature,
 }
 
 pub(crate) fn unsupported(msg: &str) -> KernelError {
@@ -186,7 +187,7 @@ fn blend_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, shape: Shape) ->
 /// Distance along each face from the edge to the blend boundary.
 fn setback(r: f64, phi: f64, shape: Shape) -> f64 {
     match shape {
-        Shape::Round => r / (phi / 2.0).tan(),
+        Shape::Round | Shape::Curvature => r / (phi / 2.0).tan(),
         Shape::Flat => r,
     }
 }
@@ -462,6 +463,11 @@ fn blend_geometry(
             [x, y] if shared(i1, y).is_some() && shared(i2, x).is_some() => (y, x),
             _ => return Err(unsupported("each end of the edge must touch exactly one more face")),
         };
+        if shape == Shape::Curvature
+            && (others.len() != 1 || faces.get(ga).and_then(|f| plane_normal(f)).is_none_or(|n| n.dot(d).abs() < 1.0 - 1e-12))
+        {
+            return Err(unsupported("G2 fillets require one planar end face perpendicular to the edge at each end"));
+        }
         // An end face that is not a plane, or meets the side faces in curves: the rails end where
         // they reach its surface, and the blend's end is where its surface meets the end face
         // (the cross-section through `p` slid along d onto it, point by point).
@@ -485,6 +491,9 @@ fn blend_geometry(
             && let (Some(e1), Some(e2)) = (shared(i1, ga), shared(i2, gb))
             && (multi || faces.get(ga).and_then(|f| plane_normal(f)).is_none() || !is_line(&e1) || !is_line(&e2))
         {
+            if shape == Shape::Curvature {
+                return Err(unsupported("G2 fillets require straight edges around each planar end face"));
+            }
             let g = faces.get(ga).ok_or_else(|| KernelError::Failed("face".into()))?;
             let surf = g.surface();
             let surf_b = faces.get(gb).ok_or_else(|| KernelError::Failed("face".into()))?.surface();
@@ -496,7 +505,8 @@ fn blend_geometry(
             let profile = |f: f64| -> Vec3 {
                 match shape {
                     Shape::Flat => sa + (sb - sa) * f,
-                    Shape::Round => c0 + ((sa - c0) * ((1.0 - f) * theta).sin() + (sb - c0) * (f * theta).sin()) / theta.sin(),
+                    // G2 rejects curved end faces before entering this branch.
+                    Shape::Round | Shape::Curvature => c0 + ((sa - c0) * ((1.0 - f) * theta).sin() + (sb - c0) * (f * theta).sin()) / theta.sin(),
                 }
             };
             // A rail's end: on the side edge, else on its continuation within the side face.
@@ -523,7 +533,7 @@ fn blend_geometry(
                 let x = perp(x);
                 match shape {
                     Shape::Flat => (x - sa).dot(sb - sa) / (sb - sa).len2().max(1e-300),
-                    Shape::Round => {
+                    Shape::Round | Shape::Curvature => {
                         let (u, w) = (sa - c0, x - c0);
                         let ang = (u.dot(w) / (u.len() * w.len()).max(1e-300)).clamp(-1.0, 1.0).acos();
                         ang / theta_ab.max(1e-300)
@@ -537,7 +547,7 @@ fn blend_geometry(
             if multi {
                 let gap = |x: Vec3| -> f64 {
                     match shape {
-                        Shape::Round => (perp(x) - c0).len() - r,
+                        Shape::Round | Shape::Curvature => (perp(x) - c0).len() - r,
                         Shape::Flat => (sb - sa).cross(d).normalized().map_or(f64::NAN, |m| (x - sa).dot(m)),
                     }
                 };
@@ -663,7 +673,7 @@ fn blend_geometry(
                         let q = from_p3(bs.subs((i as f64 + 0.5) / n as f64));
                         let on_g = surf.search_nearest_parameter(p3(q), None, 100).is_some_and(|(u, v)| from_p3(surf.subs(u, v)).dist(q) <= on_tol);
                         let on_blend = match shape {
-                            Shape::Round => {
+                            Shape::Round | Shape::Curvature => {
                                 let w = q - c0;
                                 ((w - d * w.dot(d)).len() - r).abs() <= on_tol
                             }
@@ -859,6 +869,10 @@ fn blend_geometry(
         if shape == Shape::Flat {
             return Ok(builder::line(va, vb));
         }
+        if shape == Shape::Curvature {
+            let controls = g2_controls(p, t1, t2, s);
+            return Ok(builder::bezier(va, vb, controls.into_iter().skip(1).take(4).map(p3).collect()));
+        }
         let c = centre(p);
         let mid = c + ((from - c) + (to - c)).normalized().unwrap_or(-n1) * r;
         let (o, n) = plane;
@@ -996,6 +1010,19 @@ fn blend_geometry(
     let wire: mt::Wire = edges_out.into();
     let blend_face = match shape {
         Shape::Flat => builder::try_attach_plane(&[wire]).map_err(|e| KernelError::Failed(format!("chamfer face: {e}")))?,
+        Shape::Curvature => {
+            let controls = g2_controls(p0, t1, t2, s);
+            let ctrl = controls.into_iter().map(|p| vec![p3(p), p3(p + p1 - p0)]).collect();
+            let bsp = mt::BSplineSurface::new((mt::KnotVec::bezier_knot(5), mt::KnotVec::bezier_knot(1)), ctrl);
+            let mut surf = mt::Surface::BSplineSurface(bsp);
+            use mt::ParametricSurface3D;
+            let nn = surf.normal(0.5, 0.5);
+            let outward = (t1 + t2) * side;
+            if Vec3::new(nn.x, nn.y, nn.z).dot(outward) < 0.0 {
+                surf = mt::Invertible::inverse(&surf);
+            }
+            mt::Face::try_new(vec![wire], surf).map_err(|e| KernelError::Failed(format!("G2 fillet face: {e}")))?
+        }
         Shape::Round => {
             // The cylinder, from a cross-section before the first end to one past the second, so
             // it holds the end sections wherever the end planes slide them.
@@ -1034,6 +1061,50 @@ fn blend_geometry(
     }
     let solid = Solid::try_new(shells).map_err(|e| KernelError::Failed(format!("blend produced an invalid solid: {e}")))?;
     Ok((solid, rec))
+}
+
+/// Quintic Bezier cross-section. The first/last three controls are collinear and
+/// equally spaced, so both endpoint second derivatives vanish. Sweeping along a
+/// straight edge therefore gives zero normal curvature at both planar side faces.
+fn g2_controls(p: Vec3, t1: Vec3, t2: Vec3, setback: f64) -> [Vec3; 6] {
+    [
+        p + t1 * setback,
+        p + t1 * (setback * 2.0 / 3.0),
+        p + t1 * (setback / 3.0),
+        p + t2 * (setback / 3.0),
+        p + t2 * (setback * 2.0 / 3.0),
+        p + t2 * setback,
+    ]
+}
+
+/// Curvature-continuous (G2) fillets between planar faces along straight edges.
+/// `radius` sets the same setback as a circular fillet; the profile is not circular.
+/// Each end must meet one planar face perpendicular to the edge. Unsupported
+/// configurations are refused, never replaced with a G1 circular fillet.
+pub fn fillet_g2(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
+    body.require_brep("G2 fillet")?;
+    if !(radius.is_finite() && radius > 1e-6 && radius < 1e6) {
+        return Err(KernelError::Invalid("G2 fillet size must be positive and finite".into()));
+    }
+    if edges.is_empty() || edges.len() > 1000 || edges.iter().any(|p| ![p.x, p.y, p.z].into_iter().all(f64::is_finite)) {
+        return Err(KernelError::Invalid("G2 fillet needs 1 to 1000 finite edge points".into()));
+    }
+    let counts = record::counts(&[body]);
+    let mut cur = crate::boolean_record::healed(body)?;
+    for p in edges {
+        let size = cur.size();
+        let Some((idx, dist)) = cur.nearest_edge(*p, (size * 2e-3).max(1e-3))? else {
+            return Err(KernelError::Invalid("the body has no edges".into()));
+        };
+        if dist > size * 0.05 + 1e-3 {
+            return Err(KernelError::Invalid("no edge near the G2 fillet pick".into()));
+        }
+        let solid = cur.deep_copy();
+        let edge = Body::unique_edges(&solid).into_iter().nth(idx).ok_or_else(|| KernelError::Invalid("edge index".into()))?;
+        let (made, rec) = guard("G2 fillet", || blend_one(&solid, &edge, size, radius, Shape::Curvature))?;
+        cur = record::after(record::rebuilt(made, &[&solid], &rec)?, &cur, &counts);
+    }
+    closed(cur)
 }
 
 /// Most edges whose other orders are tried when the order given is refused.
@@ -2078,6 +2149,138 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
 mod tests {
     use super::*;
     use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+
+    #[test]
+    fn g2_fillet_has_zero_curvature_at_both_planar_rails() {
+        use mt::{InnerSpace, ParametricCurve, ParametricSurface};
+        let body = crate::build::box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
+        let out = fillet_g2(&body, &[Vec3::new(20.0, 0.0, 10.0)], 2.0).unwrap();
+        assert!(out.validity().is_empty(), "{:?}", out.validity());
+        assert_eq!(out.face_count(), body.face_count() + 1);
+        let solid = out.deep_copy();
+        let face = solid.boundaries().iter().flat_map(|s| s.face_iter()).find(|f| matches!(f.surface(), mt::Surface::BSplineSurface(_))).unwrap();
+        let surf = face.surface();
+        // Inversion may swap the surface parameters. At each rail, curvature
+        // must vanish in *every* direction, while the two tangent vectors stay regular.
+        let mut rails = 0;
+        for (u, v) in [(0.0, 0.5), (1.0, 0.5), (0.5, 0.0), (0.5, 1.0)] {
+            let p = from_p3(surf.subs(u, v));
+            if (p.x - 20.0).abs() > 1e-8 && p.y.abs() > 1e-8 {
+                continue;
+            }
+            let (du, dv) = (surf.uder(u, v), surf.vder(u, v));
+            let n = du.cross(dv);
+            assert!(n.magnitude2() > 1e-8);
+            let expected = if p.y.abs() < 1e-8 { mt::Vector3::unit_y() } else { mt::Vector3::unit_x() };
+            assert!(n.cross(expected).magnitude2() < 1e-12);
+            for second in [surf.uuder(u, v), surf.uvder(u, v), surf.vvder(u, v)] {
+                assert!(second.dot(n).abs() < 1e-8);
+            }
+            rails += 1;
+        }
+        assert_eq!(rails, 2);
+        // End sections are exact quintics, with regular tangents and zero endpoint curvature.
+        let mut sections = 0;
+        for edge in face.edge_iter() {
+            if let mt::Curve::BSplineCurve(c) = edge.curve() {
+                for t in [0.0, 1.0] {
+                    let d = c.der(t);
+                    assert!(d.magnitude2() > 1e-8);
+                    assert!(d.cross(c.der2(t)).magnitude2() < 1e-12);
+                }
+                sections += 1;
+            }
+        }
+        assert_eq!(sections, 2);
+        // Independent analytic area: integrating x(t) y'(t) for the quintic
+        // gives 113/756 times setback² for a right-angle corner.
+        let volume = out.tessellate(0.0001).unwrap().measure().volume;
+        let expected = 8000.0 - (113.0 / 756.0) * 4.0 * 20.0;
+        assert!((volume - expected).abs() < 0.02, "{volume} vs {expected}");
+    }
+
+    #[test]
+    fn g2_fillet_handles_concave_edges_and_separate_edges() {
+        let lp = Loop2::polygon(&[
+            Vec2::new(0.0, 0.0),
+            Vec2::new(20.0, 0.0),
+            Vec2::new(20.0, 10.0),
+            Vec2::new(10.0, 10.0),
+            Vec2::new(10.0, 20.0),
+            Vec2::new(0.0, 20.0),
+        ]);
+        let body = crate::build::extrude(&Plane::XY, &[Region2 { outer: lp, holes: vec![] }], 0.0, 20.0).unwrap().remove(0);
+        let out = fillet_g2(&body, &[Vec3::new(10.0, 10.0, 10.0)], 2.0).unwrap();
+        assert!(out.validity().is_empty(), "{:?}", out.validity());
+        let volume = out.tessellate(0.0001).unwrap().measure().volume;
+        let expected = 6000.0 + (113.0 / 756.0) * 4.0 * 20.0;
+        assert!((volume - expected).abs() < 0.02, "{volume} vs {expected}");
+        let body = crate::build::box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
+        let out = fillet_g2(&body, &[Vec3::new(20.0, 0.0, 10.0), Vec3::new(0.0, 20.0, 10.0)], 2.0).unwrap();
+        assert!(out.validity().is_empty(), "{:?}", out.validity());
+        assert_eq!(out.face_count(), body.face_count() + 2);
+    }
+
+    #[test]
+    fn g2_fillet_refuses_sections_crossing_a_cap_hole() {
+        // The hole lies inside the setback without touching either side face.
+        // The larger quintic crosses its loop on both perpendicular end faces,
+        // even though the rebuilt shell is closed according to topology alone.
+        let region = Region2 {
+            outer: Loop2::polygon(&[Vec2::ZERO, Vec2::new(20.0, 0.0), Vec2::new(20.0, 20.0), Vec2::new(0.0, 20.0)]),
+            holes: vec![Loop2::circle(Vec2::new(0.5, 0.5), 0.15)],
+        };
+        for plane in [Plane::XY, Plane::XZ] {
+            let body = crate::extrude(&plane, std::slice::from_ref(&region), 0.0, 20.0).unwrap().remove(0);
+            let pick = plane.to_world(Vec2::ZERO) + plane.normal() * 10.0;
+            assert_eq!(body.crossed_face_loops().unwrap(), 0);
+            let out = fillet_g2(&body, &[pick], 0.5).unwrap();
+            assert!(out.validity().is_empty(), "{:?}", out.validity());
+            assert_eq!(out.crossed_face_loops().unwrap(), 0);
+            assert_eq!(out.face_count(), body.face_count() + 1);
+            let result = fillet_g2(&body, &[pick], 2.0);
+            if let Ok(out) = &result {
+                eprintln!("accepted G2 result: validity={:?}, crossed_faces={}", out.validity(), out.crossed_face_loops().unwrap());
+            }
+            assert!(matches!(
+                result,
+                Err(KernelError::Failed(message)) if message.contains("rounds would leave openings")
+            ));
+        }
+    }
+
+    #[test]
+    fn g2_fillet_refuses_invalid_and_unsupported_geometry() {
+        let body = crate::build::box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
+        let edge = [Vec3::new(20.0, 0.0, 10.0)];
+        for radius in [0.0, -1.0, f64::NAN, f64::INFINITY, 1e7] {
+            assert!(fillet_g2(&body, &edge, radius).is_err());
+        }
+        assert!(fillet_g2(&body, &[], 2.0).is_err());
+        assert!(fillet_g2(&body, &[Vec3::new(f64::NAN, 0.0, 0.0)], 2.0).is_err());
+        assert!(fillet_g2(&body, &[Vec3::new(1000.0, 0.0, 0.0)], 2.0).is_err());
+        assert!(fillet_g2(&body, &edge, 25.0).is_err());
+        let rounded = fillet(&body, &edge, 2.0).unwrap();
+        assert!(fillet_g2(&rounded, &[Vec3::new(20.0, 2.0, 10.0)], 1.0).is_err());
+        let boss = box_and_boss();
+        assert!(fillet_g2(&boss, &[Vec3::new(40.0, 4.0, 0.0)], 0.5).is_err());
+        // The ordinary blend supports the boss's pieced end wall; G2 must still refuse it.
+        assert!(matches!(
+            fillet_g2(&boss, &[Vec3::new(40.0, 4.0, 20.0)], 0.8),
+            Err(KernelError::Failed(message)) if message.contains("G2 fillets require one planar end face")
+        ));
+        for slope in [-0.5, 0.5] {
+            let region = Region2 {
+                outer: Loop2::polygon(&[Vec2::ZERO, Vec2::new(40.0, 0.0), Vec2::new(40.0 - slope * 20.0, 20.0), Vec2::new(slope * 20.0, 20.0)]),
+                holes: vec![],
+            };
+            let sloped = crate::extrude(&Plane::XY, &[region], 0.0, 20.0).unwrap().pop().unwrap();
+            assert!(matches!(
+                fillet_g2(&sloped, &[Vec3::new(20.0, 0.0, 20.0)], 2.0),
+                Err(KernelError::Failed(message)) if message.contains("G2 fillets require one planar end face")
+            ));
+        }
+    }
 
     #[test]
     fn chamfer_extension_cannot_cross_a_hole_and_reenter_the_face() {
