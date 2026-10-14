@@ -755,7 +755,11 @@ fn insert_surface(
         (division(range.0), division(range.1))
     } else {
         let (u, v) = bounded_surface_division(&surface, range, tol, cap);
-        balanced_grid(&surface, u, v, cap)
+        let (u_ruled, v_ruled) = (u.len() <= 3, v.len() <= 3);
+        let (u, v) = balanced_grid(&surface, u, v, cap);
+        let v = with_ruling_vertices(v, polyline, 1, v_ruled, u.len(), cap);
+        let u = with_ruling_vertices(u, polyline, 0, u_ruled, v.len(), cap);
+        (u, v)
     };
     let insert_res: Vec<Vec<Option<_>>> = udiv
         .into_iter()
@@ -968,6 +972,55 @@ fn balanced_grid(surface: &impl PreMeshableSurface, udiv: Vec<f64>, vdiv: Vec<f6
         (0..n).map(|i| d[i * (d.len() - 1) / (n - 1)]).collect()
     };
     (thin(u2), thin(v2))
+}
+
+/// SolidCraft: most grid lines added for vertices on a ruling edge.
+const MAX_RULING_LINES: usize = 64;
+
+/// SolidCraft: `div` (the grid along coordinate `axis`, 0 for u and 1 for v) with a line through
+/// every vertex that splits a boundary segment running along a ruling (a straight edge of a
+/// cylinder or cone split by a boolean). Without one, the triangulation fans out from such a
+/// vertex to the far ends of the face, and its triangles cut through the surface (the outer
+/// wall of a shelled cylinder came out cut off). Only a direction that needs no division of
+/// its own (`ruled`) gets them, while the grid stays within `cap`.
+fn with_ruling_vertices(div: Vec<f64>, polyline: &PolyBoundary, axis: usize, ruled: bool, other: usize, cap: usize) -> Vec<f64> {
+    let (Some(&first), Some(&last)) = (div.first(), div.last()) else { return div };
+    let span = last - first;
+    if !ruled || !(span.is_finite() && span > 0.0) {
+        return div;
+    }
+    let across = 1 - axis;
+    // The extent of the face across the rulings, to tell a segment along one.
+    let (lo, hi) = polyline.0.iter().flatten().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[across]), hi.max(p[across])));
+    let width = hi - lo;
+    if !(width.is_finite() && width > 0.0) {
+        return div;
+    }
+    let (same, apart) = (width * 1e-9, span * 1e-6);
+    let mut extra: Vec<f64> = Vec::new();
+    for w in &polyline.0 {
+        for (a, b) in w.iter().circular_tuple_windows() {
+            if (a[across] - b[across]).abs() > same {
+                continue;
+            }
+            for t in [a[axis], b[axis]] {
+                let inside = t > first + apart && t < last - apart;
+                if inside && t.is_finite() && div.iter().chain(&extra).all(|d| (d - t).abs() > apart) {
+                    extra.push(t);
+                }
+            }
+            if extra.len() > MAX_RULING_LINES {
+                return div;
+            }
+        }
+    }
+    if extra.is_empty() || (div.len() + extra.len()).saturating_mul(other) > cap {
+        return div;
+    }
+    let mut out = div;
+    out.extend(extra);
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    out
 }
 
 /// Converts triangulation into `PolygonMesh`.
