@@ -65,6 +65,9 @@ mod native;
 mod numbered;
 mod offset;
 mod ops;
+mod outline;
+#[cfg(test)]
+mod outline_tests;
 mod par;
 pub use par::{for_each_on_threads, map_on_threads};
 #[cfg(test)]

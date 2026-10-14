@@ -529,7 +529,7 @@ fn backed(a: &Body, b: &Body, m: Vec3, d: f64, depth: f64) -> bool {
 }
 
 /// The faces of `body` lying in the plane (n, d), facing along n.
-fn faces_in(body: &Body, n: Vec3, d: f64, tol: f64) -> Vec<usize> {
+pub(crate) fn faces_in(body: &Body, n: Vec3, d: f64, tol: f64) -> Vec<usize> {
     planes(body).into_iter().filter(|(_, p)| p.n.dot(n) > 1.0 - 1e-9 && (p.d - d).abs() < tol).map(|(i, _)| i).collect()
 }
 

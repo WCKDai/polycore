@@ -662,6 +662,11 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // to the retry guard's checks all the same).
     if op == BoolOp::Union && crate::coplanar::faces_touch(a, b) {
         let accept = |body: &Body| check(body).0 && !unfused(body) && crate::boolean_guard::check_retry(a, b, op, Some(body)).is_ok();
+        // Imprinted along the contact's own outline (faces there bounded by lines and arcs), then
+        // along the sides' surfaces.
+        if let Some(body) = crate::outline::outline_union(a, b, &accept) {
+            return Ok(Some(body));
+        }
         if let Some(body) = crate::coplanar::imprint_union(a, b, &accept) {
             return Ok(Some(body));
         }

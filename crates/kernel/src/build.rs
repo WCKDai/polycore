@@ -1836,6 +1836,16 @@ pub fn sweep(plane: &Plane, region: &Region2, path: &[PathSeg]) -> Result<Body> 
             }
             ends.push(cur);
         }
+        // A straight profile edge square to an arc's axis turns in its own plane: that face is
+        // given a plane, so that it is found lying on a planar face of another body.
+        let mut bounds = solidcraft_geom::Aabb3::EMPTY;
+        shell.vertex_iter().for_each(|v| bounds.add(from_p3(v.point())));
+        let size = bounds.size().len();
+        if size.is_finite()
+            && let Some(flat) = crate::heal::planar_surfaces(&shell, (size * 1e-7).max(1e-9))
+        {
+            shell = flat;
+        }
         // truck sweeps the faces: each profile edge's run along the whole path, path segment
         // after segment.
         let sides: Vec<Side> = match record::columns(shell.face_iter(), &seeds(&profile), None, record::Column::ToEnd, &[]) {
