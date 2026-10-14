@@ -362,7 +362,7 @@ fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, Bool
         && let Ok(result) = &r
         && let Err(e) = crate::boolean_guard::check_retry(a, b, op, result.as_ref())
     {
-        let tried = diagnostics.warning().unwrap_or_default();
+        let tried = diagnostics.summary().unwrap_or_default();
         r = Err(match e {
             KernelError::Failed(m) => KernelError::Failed(format!("{m} ({})", tried.trim_start_matches("Boolean retry: "))),
             other => other,
@@ -593,6 +593,18 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             return Ok(Some(body));
         }
     }
+    // Bores on a common cylinder (a pad's bore around the hole it is joined over, a disc filling
+    // a hole). Asked before faces are pushed apart: that doesn't part walls on one cylinder, and
+    // its tries at the general boolean, all failing on those walls, cost seconds.
+    if op == BoolOp::Union && !BORES.with(|c| c.get()) && crate::coplanar::has_coincident_cylinders(a, b) {
+        BORES.with(|c| c.set(true));
+        let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::bore_union(a, b, &|body| check(body).0));
+        BORES.with(|c| c.set(false));
+        if let Some(body) = r {
+            merge(diagnostics);
+            return Ok(Some(body));
+        }
+    }
     // Coincident planar faces: push them apart (exactly). Tried once, before the general
     // boolean; why it failed is reported if everything else fails too.
     let mut apart_failed = String::new();
@@ -645,16 +657,6 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         && check(&body).0
     {
         return Ok(Some(body));
-    }
-    // Bores on a common cylinder (a pad's bore around the hole it is joined over).
-    if op == BoolOp::Union && !BORES.with(|c| c.get()) && crate::coplanar::has_coincident_cylinders(a, b) {
-        BORES.with(|c| c.set(true));
-        let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::bore_union(a, b, &|body| check(body).0));
-        BORES.with(|c| c.set(false));
-        if let Some(body) = r {
-            merge(diagnostics);
-            return Ok(Some(body));
-        }
     }
     // Faces back to back over part of their area: imprinted on each other and glued (exact; held
     // to the retry guard's checks all the same).
