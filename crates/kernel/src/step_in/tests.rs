@@ -970,6 +970,48 @@ fn rounded_slot_exports_cylinders() {
     assert!(rel(measure(&imp.bodies[0].body).unwrap().volume, want) < 1e-3);
 }
 
+/// A slot plate rounded along its top and bottom outlines, with a ramp cut across one end
+/// (issue #1198). The other end's half turn is still written as a cylinder (its corners alone
+/// point both ways: the seam comes from points along its edges). The faces the ramp crosses keep
+/// their B-spline sheets, cut down to the faces: the rounds' sheets reached 35 mm past both ends,
+/// and readers bounding the part by its surfaces saw a 60 mm part as 130 mm long.
+#[test]
+fn ramp_cut_slot_exports_sheets_bounded_by_their_faces() {
+    use solidcraft_geom::Seg2;
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let outer = Loop2 {
+        segs: vec![
+            Seg2::Line { a: Vec2::new(10.0, -10.0), b: Vec2::new(50.0, -10.0) },
+            Seg2::Arc { center: Vec2::new(50.0, 0.0), radius: 10.0, start: -FRAC_PI_2, sweep: PI },
+            Seg2::Line { a: Vec2::new(50.0, 10.0), b: Vec2::new(10.0, 10.0) },
+            Seg2::Arc { center: Vec2::new(10.0, 0.0), radius: 10.0, start: FRAC_PI_2, sweep: PI },
+        ],
+    };
+    let plate = extrude(&Plane::XY, &[Region2 { outer, holes: vec![] }], 0.0, 4.0).unwrap().pop().unwrap();
+    let outline = |z: f64| [Vec3::new(30.0, -10.0, z), Vec3::new(30.0, 10.0, z), Vec3::new(0.0, 0.0, z), Vec3::new(60.0, 0.0, z)];
+    let rounded = fillet(&fillet(&plate, &outline(4.0), 1.0).unwrap(), &outline(0.0), 1.0).unwrap();
+    // The ramp: from the top at x = 40 down to z = 2 past the end, across the whole width.
+    let side = Plane::new(Vec3::new(0.0, -6.0, 0.0), Vec3::X, Vec3::Z).unwrap();
+    let ramp =
+        Region2 { outer: Loop2::polygon(&[Vec2::new(40.0, 4.0), Vec2::new(62.0, 2.0), Vec2::new(62.0, 6.0), Vec2::new(40.0, 6.0)]), holes: vec![] };
+    let tool = extrude(&side, &[ramp], -12.0, 0.0).unwrap().pop().unwrap();
+    let b = boolean(&rounded, &tool, BoolOp::Cut).unwrap().unwrap();
+    let text = step_export(&[&b], "t").unwrap();
+    // Both ends' walls and the three rounds along the sides it leaves whole; the two the ramp
+    // crosses stay sheets.
+    assert_eq!(text.matches("CYLINDRICAL_SURFACE(").count(), 5, "{text}");
+    assert_eq!(text.matches("B_SPLINE_SURFACE(").count(), 2, "{text}");
+    // No point of the file (control points and placements included) lies past the part's ends.
+    for line in text.lines().filter(|l| l.contains("CARTESIAN_POINT")) {
+        let Some(xyz) = line.split("((").nth(1).and_then(|r| r.split("))").next()) else { continue };
+        let x: f64 = xyz.split(',').next().unwrap().trim().parse().unwrap();
+        assert!((-1e-6..=60.0 + 1e-6).contains(&x), "{line}");
+    }
+    let imp = round_trip(&b);
+    assert_eq!(imp.bodies.len(), 1);
+    assert!(rel(measure(&imp.bodies[0].body).unwrap().volume, measure(&b).unwrap().volume) < 1e-4);
+}
+
 /// A countersink cut into a plate (issue #612): the cone is a tapered extrusion of a disc, a
 /// B-spline sheet per half, written as one CONICAL_SURFACE face (the sheets reached below the
 /// plate).
