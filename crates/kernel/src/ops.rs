@@ -733,6 +733,19 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         None
     };
     for (attempt, j) in JITTER.iter().enumerate() {
+        // The operands as they lie failed. A planar tool beside the target's curved faces (a tooth
+        // or a pocket cut next to a round edge) is decided exactly in the slab it lies in, where
+        // the target is planar too, before the shifted tries: that is where they end anyway, as a
+        // retry, after costing several times as much (on every copy of a pattern, #1197).
+        if attempt == 1 && matches!(op, BoolOp::Cut | BoolOp::Intersect) {
+            let (sliced, diagnostics) = capture_boolean_diagnostics(|| crate::polybool::sliced_planar_boolean(a, b, op));
+            if let Some(Ok(Some(body))) = sliced
+                && check(&body).0
+            {
+                merge(diagnostics);
+                return Ok(Some(body));
+            }
+        }
         let shift = mt::Vector3::new(j[0], j[1], j[2]) * (size * 0.01);
         for k in [2e-3, 5e-4] {
             let tol = (size * k).max(1e-5);
