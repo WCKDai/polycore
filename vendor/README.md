@@ -17,6 +17,10 @@ Changes:
 - `transversal/integrate/mod.rs`: the result's shells and faces keep the order of the shell
   they come from (truck's connected components followed hash order of face addresses, so a
   boolean's faces came out in a different order on every run).
+- `transversal/loops_store/mod.rs`: a point at an end of a boundary curve (within the point
+  tolerance) is that end, whatever its parameter: a polyline's parameter counts segments, so
+  an intersection curve ending 2e-7 mm from another's end could read as inside it, cut it
+  into a sliver with a vertex of its own, and leave the result's shell open (#391).
 - `transversal/loops_store/mod.rs`: an intersection edge added to a face at a vertex that more
   than one wire visits (several curves end on it: the touching point of two equal cylinders) goes
   into the corner that holds its direction, swept counterclockwise about the face's normal from
