@@ -24,6 +24,7 @@ pub(crate) mod edges;
 pub(crate) mod grid;
 pub(crate) mod motorcycle;
 pub(crate) mod pieces;
+pub(crate) mod seam;
 pub(crate) mod size;
 pub(crate) mod ssi;
 pub(crate) mod surface;
@@ -237,10 +238,8 @@ fn plan_face(
     let dom = uv::domain(s);
     let accept = (tol * 10.0).max(1e-6);
     let fail = |why: &str| unsupported(format!("face {fi}: {why}"));
-    // Project every loop, unwrapping periodic parameters along it and splitting poles.
-    let mut fixed: Vec<Vec3> = Vec::new();
-    let mut uvs: Vec<[f64; 2]> = Vec::new();
-    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    // Project every loop, unwrapping periodic parameters along it.
+    let mut projected: Vec<seam::Loop> = Vec::with_capacity(loops3.len());
     for (li, pts) in loops3.iter().enumerate() {
         let mut luv: Vec<[f64; 2]> = Vec::with_capacity(pts.len());
         let mut prev: Option<[f64; 2]> = None;
@@ -260,16 +259,28 @@ fn plan_face(
             luv.push(q);
             prev = Some(q);
         }
-        // A loop that winds once around a periodic direction does not close in (u, v).
-        if let (Some(first), Some(last)) = (luv.first(), luv.last()) {
-            for d in 0..2 {
-                if let Some(per) = dom.period[d]
-                    && (uv::unwrap(first[d], last[d], Some(per)) - first[d]).abs() > per * 0.25
-                {
-                    return Err(fail("boundary winds around the surface"));
-                }
-            }
+        projected.push(seam::Loop { uv: luv, pts: pts.clone() });
+    }
+    // A loop that winds around a periodic direction does not close in (u, v): the face is cut
+    // along a parameter line into one period (a seamless cylinder face, a helical trim).
+    let wound: Vec<usize> = (0..2).filter(|&d| dom.period[d].is_some_and(|per| seam::winds(&projected, d, per))).collect();
+    // A face cut along a seam is a long winding strip whose sides are the cut lines and the
+    // boundary in turn: Delaunay with sag refinement meshes it (the patch layouts below assume
+    // boundary all round, and leave fans across the strip's corners off the surface).
+    let seamed = !wound.is_empty();
+    match wound.as_slice() {
+        [] => {}
+        [d] => {
+            let per = dom.period[*d].unwrap_or(std::f64::consts::TAU);
+            projected = seam::cut(s, &projected, *d, per, rules, h).ok_or_else(|| fail("boundary winds around the surface"))?;
         }
+        _ => return Err(fail("boundary winds around the surface both ways")),
+    }
+    // Split poles.
+    let mut fixed: Vec<Vec3> = Vec::new();
+    let mut uvs: Vec<[f64; 2]> = Vec::new();
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    for seam::Loop { uv: luv, pts } in &projected {
         let start = uvs.len();
         let n = luv.len();
         for (k, (q, p)) in luv.iter().zip(pts).enumerate() {
@@ -325,7 +336,7 @@ fn plan_face(
         let mut us = uv::divide(s, 0, bbox[0], bbox[1], rules, h, MAX_LINES);
         let mut vs = uv::divide(s, 1, bbox[1], bbox[0], rules, h, MAX_LINES);
         thin(&mut us, &mut vs, grid::MAX_FACE_GRID);
-        let structured = match (ranges.len(), grid::quad(&uvs)) {
+        let structured = match (ranges.len(), if seamed { None } else { grid::quad(&uvs) }) {
             (1, Some(q)) => {
                 // Interior lines: the boundary's own where opposite sides agree (refined where the
                 // surface turns more between them inside the face), else the division.
@@ -350,7 +361,7 @@ fn plan_face(
             _ => None,
         };
         let structured = match structured {
-            None if ranges.len() == 1 => {
+            None if ranges.len() == 1 && !seamed => {
                 let fine = |a: [f64; 2], b: [f64; 2]| uv::fine_between(s, rules, h, a, b);
                 coons::coons(&uvs, &fixed, speed, grid::MAX_FACE_GRID, h, Some(&fine))
             }
@@ -371,7 +382,9 @@ fn plan_face(
                 // else Delaunay. A plane: the butterfly of a round face, else Delaunay (a plane
                 // is shaded the same by any triangles, and its Delaunay needs no refinement).
                 let face = Region { s, uvs: &uvs, fixed: &fixed, ranges: &ranges, rules, h, speed, us: &us, vs: &vs };
-                let trimmed = if planar {
+                let trimmed = if seamed {
+                    None
+                } else if planar {
                     if ranges.len() == 1 { plan_pieces(&face) } else { None }
                 } else {
                     plan_pieces(&face).or_else(|| {

@@ -102,7 +102,14 @@ pub(crate) fn triangulate(boundary: &[[f64; 2]], loops: &[std::ops::Range<usize>
                 .exclude_outer_faces(true)
                 .with_angle_limit(AngleLimit::from_deg(MIN_ANGLE_DEG))
                 .with_max_additional_vertices(budget.saturating_sub(added));
+            let before = cdt.num_vertices();
             cdt.refine(params);
+            let shaped = cdt.num_vertices().saturating_sub(before);
+            // Shaping flips sides and adds points of its own; the triangles it leaves may
+            // sag again (a long strip round a cylinder), so the sag is checked once more.
+            if shaped > 0 {
+                refine_sag(&mut cdt, sag, budget.saturating_sub(added + shaped), &from);
+            }
         }
         // A split constraint would put a point on the boundary the neighbour does not have.
         if cdt.num_constraints() != constraints {

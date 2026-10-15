@@ -103,6 +103,8 @@ mod sweep_path;
 mod tangent_cylinders;
 mod tess;
 #[cfg(test)]
+mod thread_display_tests;
+#[cfg(test)]
 mod thread_tests;
 mod topo;
 mod tspline;
