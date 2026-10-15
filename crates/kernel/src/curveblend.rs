@@ -31,8 +31,13 @@ const EXTENSION: usize = 8;
 const KNIFE: f64 = 1e-4;
 /// An end face this close to square-on-to-its-sides' normal counts as tangent to a side.
 const TANGENT_END: f64 = 1e-6;
-/// Times the run past a tangent end is halved when the ball does not fit along it.
+/// Times the run past a tangent end is halved when the ball does not fit along it (and the run
+/// past a curved end is shortened when its sections wrap round).
 const TANGENT_RETRIES: usize = 8;
+/// The longest step between the centres of neighbouring sections past an open chain's end, as a
+/// multiple of the step along the end tangent: longer, and the sections have wrapped round a
+/// curved edge's ring of centres.
+const MAX_STEP_STRETCH: f64 = 3.0;
 /// Slides of the ball's centre along a knife edge's faces, each 1.6 times the last.
 const KNIFE_STEPS: usize = 40;
 
@@ -1170,20 +1175,44 @@ fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, 
         // the ball no longer fits, the run is shortened (it only gives the fit its context).
         let mut list = Vec::with_capacity(EXTENSION);
         let mut reach = reach;
-        for attempt in 0..(if tangent.is_some() { TANGENT_RETRIES } else { 1 }) {
+        // Past the end of a curved edge the planes square to its end tangent cut the ring of
+        // centres further and further round it, until a step jumps across the ring (#1255: a
+        // knuckle's cap circle with a round as wide as 0.7 of its radius). The run is shortened
+        // then, as long as one of its sections still lies wholly past the end face.
+        let ng_out = if ng.dot(out) < 0.0 { -ng } else { ng };
+        let past = |sec: &Section| [sec.c, sec.q1, sec.q2].iter().all(|x| (*x - *p).dot(ng_out) > tol);
+        let mut fallback: Option<Vec<Section>> = None;
+        for attempt in 0..TANGENT_RETRIES {
             list.clear();
+            let step = reach / EXTENSION as f64;
             let sections = (1..=EXTENSION).map(|j| {
-                let anchor = *p + out * (reach * j as f64 / EXTENSION as f64);
+                let anchor = *p + out * (step * j as f64);
                 solve(&e1, &e2, anchor, *t, r, sigma, cusp, None, tol * 100.0)
             });
-            if let Some(all) = sections.collect::<Option<Vec<_>>>() {
-                list = all;
-                break;
+            match sections.collect::<Option<Vec<_>>>() {
+                Some(all) => {
+                    let smooth = tangent.is_some()
+                        || std::iter::once(at.c).chain(all.iter().map(|s| s.c)).collect::<Vec<_>>().windows(2).all(|w| match w {
+                            [a, b] => a.dist(*b) <= MAX_STEP_STRETCH * step,
+                            _ => true,
+                        });
+                    if smooth {
+                        // A shortened run must still cross the end face; else the first,
+                        // full-length run stands.
+                        if fallback.is_none() || all.iter().any(past) {
+                            list = all;
+                        }
+                        break;
+                    }
+                    fallback.get_or_insert(all);
+                }
+                None if tangent.is_none() || fallback.is_some() || attempt + 1 == TANGENT_RETRIES => break,
+                None => {}
             }
-            if attempt + 1 == TANGENT_RETRIES || tangent.is_none() {
-                return Err(unsupported("the ball doesn't fit past the end of the edge"));
-            }
-            reach *= 0.5;
+            reach *= if tangent.is_some() { 0.5 } else { 0.75 };
+        }
+        if list.is_empty() {
+            list = fallback.ok_or_else(|| unsupported("the ball doesn't fit past the end of the edge"))?;
         }
         if *k == 0 {
             list.reverse();
