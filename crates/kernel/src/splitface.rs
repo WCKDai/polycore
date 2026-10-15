@@ -903,9 +903,25 @@ pub(crate) fn analytic_field(s: &mt::Surface) -> Option<Analytic> {
 
 /// Which side of a tool a point is on.
 pub(crate) fn side_of_point(tool: &SplitTool, p: Vec3) -> Result<f64> {
-    let f = fields(tool)?;
-    let [g] = f.as_slice() else { return Err(KernelError::Invalid("one tool at a time".into())) };
-    Ok(g.eval(p))
+    Ok(ToolSide::of(tool)?.at(p))
+}
+
+/// Which side of a tool points are on, the tool's field built once for many points.
+pub(crate) struct ToolSide(Field);
+
+impl ToolSide {
+    pub(crate) fn of(tool: &SplitTool) -> Result<ToolSide> {
+        let mut f = fields(tool)?;
+        match (f.pop(), f.is_empty()) {
+            (Some(g), true) => Ok(ToolSide(g)),
+            _ => Err(KernelError::Invalid("one tool at a time".into())),
+        }
+    }
+
+    /// The side of `p`: its sign says which, zero on the tool (NaN where it can't be told).
+    pub(crate) fn at(&self, p: Vec3) -> f64 {
+        self.0.eval(p)
+    }
 }
 
 /// Which side of a tool a face lies on (its field well inside it).
