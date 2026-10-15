@@ -11,7 +11,7 @@ mod brep;
 pub(crate) mod geom;
 pub(crate) mod p21;
 mod parallel;
-mod split;
+pub(crate) mod split;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
