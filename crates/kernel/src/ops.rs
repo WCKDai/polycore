@@ -500,15 +500,11 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         // A tool that misses its target, or covers it whole, leaves it as it is, and the
         // sampled shortcut below answers that by reusing the operand itself: the very same body.
         // The 2D route rebuilds it instead - the same shape on new faces - which would turn an
-        // untouched body in a timeline into a different solid. Those pairs go back to the path
-        // below, which decides them, and the identity they keep, exactly as it always has.
-        let unchanged = 1e-4 * (va0 + vb0);
-        let rebuilt_from_an_operand = match op {
-            BoolOp::Cut => v0 >= va0 - unchanged,
-            BoolOp::Intersect => (v0 - va0).abs() <= unchanged || (v0 - vb0).abs() <= unchanged,
-            BoolOp::Union => false,
-        };
-        if !rebuilt_from_an_operand && plausible(v0, op, va0, vb0, slack0) {
+        // untouched body in a timeline into a different solid. The route declines those pairs
+        // itself, from its exact sections (a volume measured off meshes could not tell an
+        // engraving of thin strokes from no change), and they take the path below, which
+        // decides them, and the identity they keep, exactly as it always has.
+        if plausible(v0, op, va0, vb0, slack0) {
             return Ok(Some(body.clone()));
         }
     }
