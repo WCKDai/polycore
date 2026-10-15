@@ -231,6 +231,33 @@ fn arc_top_edge_sizes_never_panic() {
     }
 }
 
+/// At the full wall height the fitted contact coincides with the bottom arc: retaining that
+/// wall produces a zero-area face, not a successful blend (#1113). Just below the limit the
+/// wall still has area and must remain supported. Face order and mirrored edge directions
+/// do not change either outcome.
+#[test]
+fn arc_top_blend_refuses_a_collapsed_wall() {
+    for body in [part(), part_other_order(), part_cut_from_a_box()] {
+        for z in [1.0, -1.0] {
+            let matrix = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, z, 0.0], [0.0, 0.0, 0.0, 1.0]];
+            let body = transform_matrix(&body, matrix).unwrap();
+            let at = arc_top();
+            let pick = [Vec3::new(at.x, at.y, at.z * z)];
+            for round in [true, false] {
+                let blend = |r| if round { fillet(&body, &pick, r) } else { chamfer(&body, &pick, r) };
+                let error = blend(HEIGHT).unwrap_err();
+                assert!(matches!(error, KernelError::TooLarge(_)), "round={round}, mirror={z}: {error}");
+                let made = blend(HEIGHT - 0.5).unwrap();
+                assert!(made.validity().is_empty(), "round={round}, mirror={z}: {:?}", made.validity());
+                let before = planned_volume(&body);
+                let removed = before - planned_volume(&made);
+                let expected = arc_top_removed(HEIGHT - 0.5, round);
+                assert!((removed - expected).abs() < 0.01 * expected + 0.01, "round={round}, mirror={z}: removed {removed}, expected {expected}");
+            }
+        }
+    }
+}
+
 fn tf() -> Vec3 {
     Vec3::new(20.0, -R_WALL, HEIGHT)
 }

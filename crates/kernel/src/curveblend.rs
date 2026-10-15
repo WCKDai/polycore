@@ -768,6 +768,23 @@ fn straight(e: &mt::Edge, tol: f64) -> bool {
     a.dist(b) > tol && (0..=16).all(|i| from_p3(c.subs(t0 + (t1 - t0) * i as f64 / 16.0)).dist_to_segment(a, b) <= tol)
 }
 
+/// Consuming both seams of a side can leave its old boundary and a fitted contact on the
+/// same curve (#1113). They are distinct topological edges but enclose no usable face. Keep
+/// genuine two-edge faces (a lens or lune); refuse only coincident traces, in both directions
+/// since the curves need not have the same parameterisation.
+fn collapsed_boundary(edges: &[mt::Edge], tolerance: f64) -> bool {
+    use mt::{BoundedCurve, ParametricCurve};
+    let [a, b] = edges else { return false };
+    [(a, b), (b, a)].into_iter().all(|(edge, other)| {
+        let curve = edge.curve();
+        let (lo, hi) = curve.range_tuple();
+        (0..=16).all(|k| {
+            let p = from_p3(curve.subs(lo + (hi - lo) * f64::from(k) / 16.0));
+            crate::blend::on_edge(other, p, tolerance).is_some()
+        })
+    })
+}
+
 /// A curved seam (an arc of an end face) shortened to the blend's contacts: the part of its
 /// curve between the new ends `a` and `b` (`None` keeps that end), which must lie on it, in
 /// order, short of each other.
@@ -1658,6 +1675,9 @@ fn curve_blend_with_limit(solid: &Solid, ids: &[mt::EdgeID], size: f64, r: f64, 
                         e.clone()
                     };
                     es.push(ne);
+                }
+                if collapsed_boundary(&es, fit_tolerance) {
+                    return Err(too_large("the blend would consume a neighbouring face"));
                 }
                 wires.push(mt::Wire::from(es));
             }
