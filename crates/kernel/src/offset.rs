@@ -1120,9 +1120,10 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
 
 /// Draft walls parallel to `pull` (planes, and cylinders about axes along `pull`) by `angle`
 /// about their line on the neutral plane: at height h along `pull` a wall moves along its
-/// outward normal by −h·tan(angle), so planes tilt and cylinders become cones. The other
-/// faces must be caps square to `pull`; the topology is kept, and the result's history is over
-/// `[b]` (each face and edge the one it was moved from).
+/// outward normal by −h·tan(angle), so planes tilt and cylinders become cones. The faces that
+/// share a corner with a drafted wall must be caps square to `pull` or walls; the rest of the
+/// body (a rounded edge elsewhere, say) is left as it is. The topology is kept, and the
+/// result's history is over `[b]` (each face and edge the one it was moved from).
 pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solidcraft_geom::Plane, pull: Vec3, angle: f64) -> Result<Body> {
     let faces: Vec<mt::Face> = b.solid.face_iter().cloned().collect();
     let size = b.size();
@@ -1134,37 +1135,6 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solidcraft_geom:
     }
     let height = |p: Vec3| (p - neutral.origin).dot(nn) / den;
     let tan = angle.tan();
-    let mut old = Vec::with_capacity(faces.len());
-    for (i, f) in faces.iter().enumerate() {
-        let sf = surf_of(f, tol * 100.0).ok_or_else(|| fail("draft: only bodies with planar and cylindrical faces"))?;
-        let wall = match sf {
-            Surf::Plane { n, .. } => n.dot(pull).abs() < 1e-9,
-            Surf::Cylinder { a, .. } => a.dot(pull).abs() > 1.0 - 1e-9,
-            Surf::Sphere { .. } | Surf::Cone { .. } | Surf::Torus { .. } => false,
-        };
-        let cap = matches!(sf, Surf::Plane { n, .. } if n.dot(pull).abs() > 1.0 - 1e-9);
-        if chosen.contains(&i) && !wall {
-            return Err(fail("draft: a chosen face isn't parallel to the pull direction"));
-        }
-        if !chosen.contains(&i) && !cap && !wall {
-            return Err(fail("draft: faces next to the drafted walls must be square to the pull direction"));
-        }
-        old.push(sf);
-    }
-    // Shifts and moved surfaces at a height.
-    let at = |ids: &[usize], h: f64| -> Option<(Vec<Surf>, Vec<f64>, Vec<Surf>)> {
-        let mut o = Vec::new();
-        let mut s = Vec::new();
-        let mut n = Vec::new();
-        for i in ids {
-            let sf = *old.get(*i)?;
-            let sh = if chosen.contains(i) { -h * tan } else { 0.0 };
-            o.push(sf);
-            s.push(sh);
-            n.push(sf.moved(sh)?);
-        }
-        Some((o, s, n))
-    };
     let mut vfaces: HashMap<mt::VertexID, Vec<usize>> = HashMap::new();
     let mut efaces: HashMap<mt::EdgeID, Vec<usize>> = HashMap::new();
     for (i, f) in faces.iter().enumerate() {
@@ -1181,9 +1151,53 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solidcraft_geom:
             }
         }
     }
+    // A corner moves when one of its faces is drafted; the faces round a moving corner must be
+    // walls or caps for the corner to follow them. Faces away from the drafted walls may be
+    // anything: they keep their surface and their edges.
+    let moves = |vid: &mt::VertexID| vfaces.get(vid).is_some_and(|fs| fs.iter().any(|i| chosen.contains(i)));
+    let touched: Vec<bool> = faces.iter().enumerate().map(|(i, f)| chosen.contains(&i) || f.vertex_iter().any(|v| moves(&v.id()))).collect();
+    let mut old: Vec<Option<Surf>> = Vec::with_capacity(faces.len());
+    for (i, f) in faces.iter().enumerate() {
+        if !touched.get(i).copied().unwrap_or(false) {
+            old.push(None);
+            continue;
+        }
+        let sf = surf_of(f, tol * 100.0).ok_or_else(|| fail("draft: the faces next to the drafted walls must be planes or cylinders"))?;
+        let wall = match sf {
+            Surf::Plane { n, .. } => n.dot(pull).abs() < 1e-9,
+            Surf::Cylinder { a, .. } => a.dot(pull).abs() > 1.0 - 1e-9,
+            Surf::Sphere { .. } | Surf::Cone { .. } | Surf::Torus { .. } => false,
+        };
+        let cap = matches!(sf, Surf::Plane { n, .. } if n.dot(pull).abs() > 1.0 - 1e-9);
+        if chosen.contains(&i) && !wall {
+            return Err(fail("draft: a chosen face isn't parallel to the pull direction"));
+        }
+        if !chosen.contains(&i) && !cap && !wall {
+            return Err(fail("draft: faces next to the drafted walls must be square to the pull direction"));
+        }
+        old.push(Some(sf));
+    }
+    // Shifts and moved surfaces at a height.
+    let at = |ids: &[usize], h: f64| -> Option<(Vec<Surf>, Vec<f64>, Vec<Surf>)> {
+        let mut o = Vec::new();
+        let mut s = Vec::new();
+        let mut n = Vec::new();
+        for i in ids {
+            let sf = (*old.get(*i)?)?;
+            let sh = if chosen.contains(i) { -h * tan } else { 0.0 };
+            o.push(sf);
+            s.push(sh);
+            n.push(sf.moved(sh)?);
+        }
+        Some((o, s, n))
+    };
     let mut newpos: HashMap<mt::VertexID, Vec3> = HashMap::new();
     for v in b.solid.vertex_iter() {
         let p = from_p3(v.point());
+        if !moves(&v.id()) {
+            newpos.insert(v.id(), p);
+            continue;
+        }
         let fs = vfaces.get(&v.id()).ok_or_else(|| fail("vertex"))?;
         let (o, s, n) = at(fs, height(p)).ok_or_else(|| fail("draft: a wall shrinks to nothing"))?;
         let q = move_point(p, &o, &s, &n, size * 1e-6).ok_or_else(|| fail("draft: a corner whose faces don't meet the same way after the draft"))?;
@@ -1192,10 +1206,8 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solidcraft_geom:
     // New surfaces for the drafted walls: planes through their hinge line, cylinders → cones.
     let mut surfaces: Vec<Option<mt::Surface>> = vec![None; faces.len()];
     for (i, sf) in old.iter().enumerate() {
-        if !chosen.contains(&i) {
-            continue;
-        }
-        let surface = match *sf {
+        let (true, Some(sf)) = (chosen.contains(&i), *sf) else { continue };
+        let surface = match sf {
             Surf::Plane { n, d } => {
                 let n2 = (n * angle.cos() + pull * angle.sin()).normalized().ok_or_else(|| fail("draft"))?;
                 // A point of the old plane on the neutral plane: the hinge.
@@ -1248,7 +1260,14 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solidcraft_geom:
                 continue;
             }
             let (Some(a), Some(c)) = (verts.get(&e.absolute_front().id()), verts.get(&e.absolute_back().id())) else { return Err(fail("edge")) };
-            let kind = arc_mid(&e, size * 1e-6).ok_or_else(|| fail("draft: edges must be lines or arcs"))?;
+            // An edge whose ends stay keeps its curve (it may be anything: a blend's spline).
+            if !moves(&e.absolute_front().id()) && !moves(&e.absolute_back().id()) {
+                let ne = mt::Edge::try_new(a, c, e.curve().clone()).map_err(|e| fail(&e.to_string()))?;
+                rec.piece(&ne, &e);
+                edges.insert(e.id(), ne);
+                continue;
+            }
+            let kind = arc_mid(&e, size * 1e-6).ok_or_else(|| fail("draft: edges next to the drafted walls must be lines or arcs"))?;
             let ne = match kind {
                 None => builder::line(a, c),
                 Some(m) => {
@@ -1277,7 +1296,7 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solidcraft_geom:
                 Some(mut surface) => {
                     // Outward like the old face (checked at a boundary point).
                     let probe = f.boundaries().first().and_then(|w| w.vertex_iter().next()).map(|v| from_p3(v.point()));
-                    let want = probe.and_then(|p| old.get(i).and_then(|s| s.normal(p)));
+                    let want = probe.and_then(|p| old.get(i).copied().flatten().and_then(|s| s.normal(p)));
                     if let (Some(p), Some(want)) = (probe, want) {
                         use mt::{ParametricSurface3D, SearchNearestParameter};
                         if let Some((u, v)) = surface.search_nearest_parameter(p3(p), None, 100) {
