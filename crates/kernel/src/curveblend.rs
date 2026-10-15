@@ -455,7 +455,7 @@ pub(crate) fn project(f: &mt::Face, p: Vec3, hint: Option<(f64, f64)>) -> Option
 }
 
 /// Whether `uv` lies within the parameters of the face's surface (unbounded directions pass).
-fn in_range(f: &mt::Face, uv: (f64, f64)) -> bool {
+pub(crate) fn in_range(f: &mt::Face, uv: (f64, f64)) -> bool {
     use mt::ParametricSurface;
     use std::ops::Bound;
     let inside = |range: (Bound<f64>, Bound<f64>), x: f64| {

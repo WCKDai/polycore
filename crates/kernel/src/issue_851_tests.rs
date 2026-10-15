@@ -393,6 +393,19 @@ fn fillet_the_three_edges_at_the_arcs_front_corner() {
     }
 }
 
+/// #1263: check the unfilleted input separately from the three-edge result.
+/// The circular wall's tessellation differs from its analytic volume by at most
+/// its arc length times the chord tolerance times the height.
+#[test]
+fn unfilleted_knife_edge_input_has_a_closed_display_plan() {
+    let want = HEIGHT * ((TIP_X - R_WALL) * R_WALL + R_WALL * R_WALL * (1.0 - PI / 4.0));
+    for (name, body) in [("plate first", part()), ("corner first", part_other_order()), ("cut from a box", part_cut_from_a_box())] {
+        let volume = planned_volume(&body);
+        let tolerance = 0.5 * PI * R_WALL * 2e-4 * HEIGHT;
+        assert!((volume - want).abs() < tolerance, "{name}: volume {volume}, expected {want}");
+    }
+}
+
 /// The construction does not depend on the faces being curved: at a box's corner it gives the
 /// body the planar corner builder does (a sphere's octant where the three rounds meet).
 #[test]
