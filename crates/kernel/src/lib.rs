@@ -54,6 +54,8 @@ mod issue_788_tests;
 mod issue_851_tests;
 #[cfg(test)]
 mod issue_871_tests;
+#[cfg(test)]
+mod join_between_caps_tests;
 mod lip;
 mod loopblend;
 mod measure;

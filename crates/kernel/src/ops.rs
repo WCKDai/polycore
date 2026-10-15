@@ -425,10 +425,13 @@ fn plausible(v: f64, op: BoolOp, va: f64, vb: f64, slack: f64) -> bool {
         }
 }
 
-/// The prism route's result: `Some` when both operands are prisms along one direction (see
-/// [`crate::prism::prism_boolean`]), with a union's slab seams healed as the general B-rep
-/// boolean does.
-fn prism_result(a: &Body, b: &Body, op: BoolOp, size: f64, counts: &[(usize, usize)]) -> Option<Result<Option<Body>>> {
+/// A boolean in 2D of prisms along one direction (see [`prism_result`]).
+type Route = fn(&Body, &Body, BoolOp) -> Option<Result<Option<Body>>>;
+
+/// A prism route's result (`route`: [`crate::prism::prism_boolean`] or
+/// [`crate::prism::prism_union_between_caps`]): `Some` when both operands are prisms along one
+/// direction, with a union's slab seams healed as the general B-rep boolean does.
+fn prism_result(a: &Body, b: &Body, op: BoolOp, size: f64, counts: &[(usize, usize)], route: Route) -> Option<Result<Option<Body>>> {
     // Slab-by-slab prism booleans sew a closed solid, but leave cap and wall pieces along slab
     // boundaries: a cut along Z through a box whose side wall already has a port in it splits
     // that wall into strips at the port's top and bottom, though the cut never touches it. Merge
@@ -437,7 +440,7 @@ fn prism_result(a: &Body, b: &Body, op: BoolOp, size: f64, counts: &[(usize, usi
     // protection) keep their pieces.
     let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
     let authored = |x: &Body| x.regularization_protected || x.paint().is_some_and(|p| !p.faces.is_empty());
-    crate::prism::prism_boolean(a, b, op).map(|result| {
+    route(a, b, op).map(|result| {
         result.map(|body| {
             body.map(|body| {
                 if op == BoolOp::Union {
@@ -490,7 +493,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // join the sampled shortcut does. A pair the route cannot answer still takes the path below,
     // unchanged.
     let early_prism = matches!(op, BoolOp::Cut | BoolOp::Intersect);
-    let prism = early_prism.then(|| prism_result(a, b, op, size, &counts)).flatten();
+    let prism = early_prism.then(|| prism_result(a, b, op, size, &counts, crate::prism::prism_boolean)).flatten();
     if let Some(Ok(Some(body))) = &prism {
         let (va0, vb0) = (volume(a), volume(b));
         let (v0, slack0) = (volume(body), 2e-3 * (va0 + vb0) + 1e-9);
@@ -563,7 +566,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Prisms along one direction (plates with holes): exact, in 2D (so only the volume bounds
     // are checked). For a cut or an intersection this already ran above; the other operations
     // ask here, after the sampled shortcut, which is where that shortcut is cheapest.
-    let prism = prism.or_else(|| (!early_prism).then(|| prism_result(a, b, op, size, &counts)).flatten());
+    let prism = prism.or_else(|| (!early_prism).then(|| prism_result(a, b, op, size, &counts, crate::prism::prism_boolean)).flatten());
     if let Some(result) = prism {
         match result {
             Ok(Some(body)) => {
@@ -798,6 +801,17 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             return Ok(None);
         }
         Err(e) => last = format!("{last}; {e}"),
+    }
+    // Prisms along one direction that end at different levels (a barrel joined between two
+    // faces of a wider part, its ends flush with them) were left to the B-rep boolean, which
+    // the coincident ends defeat, with no room to push them apart (the part goes on past
+    // them). In 2D they join exactly: asked before the tool is moved.
+    if let Some(Ok(Some(body))) = prism_result(a, b, op, size, &counts, crate::prism::prism_union_between_caps) {
+        let (ok, v) = check(&body);
+        if ok {
+            return Ok(Some(body));
+        }
+        last = format!("{last}; the prisms joined in 2D gave an implausible volume {v:.4}");
     }
     // Last resort: nudge the tool by a micron-scale screw motion (turned 2e-6 rad about a
     // skew axis and moved 2e-6 of the size), which breaks tangencies and seams lying exactly on
