@@ -48,8 +48,12 @@ pub struct ImportedBody {
     pub body: Body,
     /// Surface colour (linear-ish RGB 0..1) from the file's presentation styles.
     pub color: Option<[f32; 3]>,
-    /// Product names from the root to the part that holds the body.
+    /// Product names from the root to the part that holds the body (the last is the part's own
+    /// name; empty for a solid outside any product).
     pub path: Vec<String>,
+    /// The name of the assembly occurrence (instance) that holds the body: the usage's name in
+    /// the file, else its id. `None` for a body of a root product or outside any product.
+    pub instance: Option<String>,
     /// The body is a closed solid (false: faces were left out, or the file had a surface model).
     pub closed: bool,
     /// Faces read from the file. The body can have more: a face that wraps all the way around
@@ -599,7 +603,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Bodies of a representation's items (following mapped items), placed by `m`.
-    fn rep_bodies(&mut self, rep: u64, m: &mt::Matrix4, path: &[String], product: &str, out: &mut Vec<usize>, depth: usize) {
+    fn rep_bodies(&mut self, rep: u64, m: &mt::Matrix4, path: &[String], product: &str, instance: Option<&str>, out: &mut Vec<usize>, depth: usize) {
         if depth > MAX_ASSEMBLY_DEPTH {
             self.warn("mapped items nested too deeply");
             return;
@@ -699,6 +703,7 @@ impl<'a> Reader<'a> {
                                     body,
                                     color,
                                     path: path.to_vec(),
+                                    instance: instance.map(str::to_string),
                                     closed,
                                     file_faces,
                                     source_item: item,
@@ -726,7 +731,7 @@ impl<'a> Reader<'a> {
                         (Ok(t), Ok(o)) => {
                             let mm = mat_mul(m, &mat_mul(&t, &rigid_inverse(&o)));
                             for r in self.rep_closure(&[mapped]) {
-                                self.rep_bodies(r, &mm, path, product, out, depth + 1);
+                                self.rep_bodies(r, &mm, path, product, instance, out, depth + 1);
                             }
                         }
                         (Err(e), _) | (_, Err(e)) => self.warn(format!("mapped item #{item}: {e}")),
@@ -735,6 +740,13 @@ impl<'a> Reader<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// The name of an assembly occurrence: the usage's name, else its id.
+    fn occurrence_name(&self, nauo: u64) -> Option<String> {
+        let p = self.ex.get(nauo)?.params();
+        let name = p.get(1).and_then(Param::as_str).filter(|s| !s.trim().is_empty()).or_else(|| p.first().and_then(Param::as_str))?;
+        Some(name.trim().to_string()).filter(|n| !n.is_empty())
     }
 
     fn product_name(&self, pd: u64) -> String {
@@ -787,7 +799,16 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn node(&mut self, pd: u64, local: mt::Matrix4, world: mt::Matrix4, path: &[String], depth: usize, stack: &mut Vec<u64>) -> StepNode {
+    fn node(
+        &mut self,
+        pd: u64,
+        local: mt::Matrix4,
+        world: mt::Matrix4,
+        path: &[String],
+        instance: Option<&str>,
+        depth: usize,
+        stack: &mut Vec<u64>,
+    ) -> StepNode {
         let name = self.product_name(pd);
         let mut node = StepNode { name: name.clone(), transform: to_array(&local), bodies: Vec::new(), children: Vec::new() };
         if self.stop() {
@@ -810,7 +831,7 @@ impl<'a> Reader<'a> {
         let mut bodies = Vec::new();
         self.node_items.clear();
         for r in &reps {
-            self.rep_bodies(*r, &world, &path, &name, &mut bodies, 0);
+            self.rep_bodies(*r, &world, &path, &name, instance, &mut bodies, 0);
         }
         node.bodies = bodies;
         for nauo in self.children.get(&pd).cloned().unwrap_or_default() {
@@ -819,7 +840,8 @@ impl<'a> Reader<'a> {
             let child_reps = self.rep_closure(&child_own);
             let m = self.occurrence_matrix(nauo, &child_reps);
             let w = mat_mul(&world, &m);
-            let c = self.node(child, m, w, &path, depth + 1, stack);
+            let instance = self.occurrence_name(nauo);
+            let c = self.node(child, m, w, &path, instance.as_deref(), depth + 1, stack);
             node.children.push(c);
         }
         stack.pop();
@@ -1054,7 +1076,7 @@ fn step_import_with_workers(text: &str, workers: usize) -> Result<StepImport> {
     let identity = mt::Matrix4::from_scale(1.0);
     let mut tree = Vec::new();
     for pd in roots {
-        let n = rd.node(pd, identity, identity, &[], 0, &mut Vec::new());
+        let n = rd.node(pd, identity, identity, &[], None, 0, &mut Vec::new());
         if !n.bodies.is_empty() || !n.children.is_empty() {
             tree.push(n);
         }
@@ -1077,7 +1099,7 @@ fn step_import_with_workers(text: &str, workers: usize) -> Result<StepImport> {
         rd.node_items = rd.used_items.clone();
         rd.visits = 0;
         for r in loose {
-            rd.rep_bodies(r, &identity, &[], "Import", &mut bodies, 0);
+            rd.rep_bodies(r, &identity, &[], "Import", None, &mut bodies, 0);
         }
         if !bodies.is_empty() {
             tree.push(StepNode { name: "Import".into(), transform: to_array(&identity), bodies, children: Vec::new() });

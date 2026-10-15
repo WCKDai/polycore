@@ -184,7 +184,7 @@ fn parallel_import_does_not_prepare_past_body_budget_with_duplicates_or_mapped_i
         reader.bodies = vec![seed.clone(); MAX_BODIES - 2];
         reader.node_items.insert(2000);
         let mut out = Vec::new();
-        reader.rep_bodies(60, &mt::Matrix4::from_scale(1.0), &[], "Budget", &mut out, 0);
+        reader.rep_bodies(60, &mt::Matrix4::from_scale(1.0), &[], "Budget", None, &mut out, 0);
         assert_eq!(reader.bodies.len(), MAX_BODIES);
         assert_eq!(out, vec![MAX_BODIES - 2, MAX_BODIES - 1]);
         assert_eq!(reader.bodies.last().unwrap().name, "Second");
@@ -453,6 +453,7 @@ fn hand_written_part_in_inches_with_colour() {
     let b = &imp.bodies[0];
     assert_eq!(b.name, "Cube");
     assert_eq!(b.path, vec!["Widget".to_string()]);
+    assert_eq!(b.instance, None, "a root part is no occurrence");
     assert_eq!(b.color, Some([1.0, 0.5, 0.0]));
     let m = measure(&b.body).unwrap();
     assert!(rel(m.volume, 25.4f64.powi(3)) < 1e-9, "{}", m.volume);
@@ -520,6 +521,7 @@ fn hand_written_assembly() {
     assert_eq!(root.children.len(), 2);
     assert!(root.children.iter().all(|c| c.name == "Block" && c.bodies.len() == 1));
     assert_eq!(imp.bodies[1].path, vec!["Assembly".to_string(), "Block".to_string()]);
+    assert_eq!([imp.bodies[0].instance.as_deref(), imp.bodies[1].instance.as_deref()], [Some("Block:0"), Some("Block:1")]);
     assert!((root.children[1].transform[3][0] - 100.0).abs() < 1e-9);
 }
 
@@ -546,6 +548,45 @@ fn later_instances_show_the_first_instances_mesh_placed() {
     // Anything that changes what the body shows drops the shared mesh.
     let split = second.clone().with_split_lines(Some(std::sync::Arc::new(vec![vec![Vec3::new(91.0, 0.0, 5.0), Vec3::new(91.0, 10.0, 5.0)]])));
     assert!(split.display_of.is_none());
+}
+
+/// A body knows the product that holds it and the assembly occurrence it is, next to the name of
+/// its solid: a caller can name bodies after the part or the instance when the solids carry the
+/// name of the last feature that made them (`Cut-Extrude3`), which says nothing about the part.
+#[test]
+fn bodies_know_their_product_and_instance() {
+    use crate::step_out::{ExportBody, ExportProduct, StepHeader, step_export_products};
+    let plate = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 2.0)).unwrap();
+    let post = box_solid(Vec3::ZERO, Vec3::new(2.0, 2.0, 8.0)).unwrap();
+    let at = |x: f64| [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [x, 0.0, 0.0, 1.0]];
+    let part = |name: &str, label: &str, body| ExportProduct {
+        name: name.into(),
+        bodies: vec![ExportBody { name: label.into(), body, color: None }],
+        children: Vec::new(),
+    };
+    let products = vec![
+        ExportProduct {
+            name: "Frame".into(),
+            bodies: Vec::new(),
+            children: vec![(1, at(0.0), "Plate-1".into()), (2, at(20.0), "Post-1".into()), (2, at(30.0), "Post-2".into())],
+        },
+        part("Plate", "Cut-Extrude3", &plate),
+        part("Post", "Boss-Extrude1", &post),
+    ];
+    let text = step_export_products(&products, 0, &StepHeader::default()).unwrap();
+    let imp = step_import(&text).unwrap();
+    let seen: Vec<(&str, Vec<&str>, Option<&str>)> =
+        imp.bodies.iter().map(|b| (b.name.as_str(), b.path.iter().map(String::as_str).collect(), b.instance.as_deref())).collect();
+    assert_eq!(
+        seen,
+        [
+            ("Cut-Extrude3", vec!["Frame", "Plate"], Some("Plate-1")),
+            ("Boss-Extrude1", vec!["Frame", "Post"], Some("Post-1")),
+            ("Boss-Extrude1", vec!["Frame", "Post"], Some("Post-2")),
+        ]
+    );
+    // The same product's two placements are two occurrences, told apart by their names.
+    assert_eq!(imp.tree[0].children.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Plate", "Post", "Post"]);
 }
 
 /// The import keeps a conversion only where the file can ask for the item again. A flat file of
