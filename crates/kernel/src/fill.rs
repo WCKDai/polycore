@@ -16,6 +16,13 @@ use crate::{KernelError, Result};
 /// every edge. Its history is over `[body]`: the face is new, its edges the body's own. Call it
 /// under [`crate::guard`].
 pub(crate) fn fill_loop(body: &Body, chain: &[mt::Edge]) -> Result<Body> {
+    fill_loop_crowned(body, chain, 0.0)
+}
+
+/// [`fill_loop`] with a crown: positive makes the fitted patch's middle fuller, negative flatter,
+/// by `crown` times the loop's size (see `solidcraft_geom::fill::fill_loop`). The bump vanishes on
+/// the loop, so the face still meets the body's own edges exactly as the plain fill does.
+pub(crate) fn fill_loop_crowned(body: &Body, chain: &[mt::Edge], crown: f64) -> Result<Body> {
     let tol = face_tolerance(body);
     let mut sides: Vec<(EdgeSampler, Vec3)> = Vec::with_capacity(chain.len());
     for e in chain {
@@ -27,7 +34,7 @@ pub(crate) fn fill_loop(body: &Body, chain: &[mt::Edge]) -> Result<Body> {
         // The loop's corners are its vertices (an imported edge's curve may end a little off).
         if t <= 0.0 { Some(*start) } else { sampler.at(t) }
     };
-    let fill = solidcraft_geom::fill::fill_loop(chain.len(), &mut point, tol).map_err(|e| match e {
+    let fill = solidcraft_geom::fill::fill_loop(chain.len(), &mut point, tol, crown).map_err(|e| match e {
         SplineError::Unsupported(m) => KernelError::Invalid(format!("not supported yet: {m}")),
         other => KernelError::Invalid(format!("cannot fill the loop: {other}")),
     })?;
@@ -38,6 +45,37 @@ pub(crate) fn fill_loop(body: &Body, chain: &[mt::Edge]) -> Result<Body> {
     let mut rec = Rebuild::default();
     rec.made(&face, Vec::new());
     Ok(rebuilt_body(crate::surfaces::surface_body(vec![face]), &[&body.solid], &rec))
+}
+
+/// [`crate::patch_edges`] with a crown on the fitted face: positive makes the patch's middle
+/// fuller, negative flatter, by `crown` times the loop's size (its projected box's diagonal), the
+/// bump vanishing along the loop, so the face still meets the body's own edges. `crown` 0 is
+/// exactly [`crate::patch_edges`], and a loop that is certainly planar ([`crate::plane_fit`])
+/// makes the same exact planar face whatever the crown. Its history is over `[body]`: the face is
+/// new, its edges the body's own.
+pub fn patch_edges_crowned(body: &Body, at: &[Vec3], crown: f64) -> Result<Body> {
+    if crown == 0.0 {
+        return crate::surfaces::patch_edges(body, at);
+    }
+    body.require_brep("patch")?;
+    if at.is_empty() || at.len() > 10_000 {
+        return Err(KernelError::Invalid("pick the edges of a closed loop".into()));
+    }
+    // A range test also throws out NaN.
+    if !(solidcraft_geom::fill::MIN_CROWN..=solidcraft_geom::fill::MAX_CROWN).contains(&crown) {
+        return Err(KernelError::Invalid("a patch's crown must be between -0.9 and 3".into()));
+    }
+    crate::guard("patch", || {
+        let chain = crate::surfaces::picked_loop(body, at)?;
+        let Some(face) = crate::plane_fit::planar_face(&chain, planarity_tolerance(body))? else {
+            // Not certainly planar: a fitted surface, crowned.
+            return fill_loop_crowned(body, &chain, crown);
+        };
+        // A new face on the body's own edges (a plane has no middle to fill).
+        let mut rec = Rebuild::default();
+        rec.made(&face, Vec::new());
+        Ok(rebuilt_body(crate::surfaces::surface_body(vec![face]), &[&body.solid], &rec))
+    })
 }
 
 /// How far a loop's edges may be from a plane for its patch to be that plane: `10⁻⁷` of the
@@ -71,7 +109,7 @@ mod tests {
     use crate::body::{Body, from_p3, p3};
     use crate::boolean_record::tests::{Reach, checked};
     use crate::history::{Change, EdgeOrigin};
-    use crate::{BoolOp, boolean, copy_faces, cylinder, extrude, measure, patch_edges, stitch};
+    use crate::{BoolOp, boolean, copy_faces, cylinder, extrude, measure, patch_edges, patch_edges_crowned, stitch};
 
     /// The cutting cylinder: axis along y at x = 0, z = 50, radius 40, so the top of a prism
     /// within 20 of the axis and 20 high is cut away everywhere (to between 10 and 15.4 mm).
@@ -523,5 +561,53 @@ mod tests {
         assert!(patch_edges(&open, &[Vec3::new(f64::NAN, 0.0, 0.0)]).is_err());
         assert!(patch_edges(&open, &[Vec3::new(1e300, 0.0, 0.0)]).is_err());
         assert!(patch_edges(&open, &vec![rim[0]; 20_000]).is_err());
+    }
+
+    /// A crowned patch: the middle is fuller by `crown` times the loop's size, the loop's own
+    /// edges stay exactly where they were (the face still meets them within [`face_tolerance`]),
+    /// and a planar loop is the same exact plane whatever the crown.
+    #[test]
+    fn a_crowned_patch_fills_its_middle_and_keeps_its_edges() {
+        let (_, open, rim) = cup(&regular(5, 0.3), Vec2::ZERO);
+        let plain = patch_edges(&open, &rim).unwrap();
+        let same = patch_edges_crowned(&open, &rim, 0.0).unwrap();
+        // Crown 0 is the plain patch: the same surface, to the last bit.
+        assert_eq!(measure(&plain).unwrap().area, measure(&same).unwrap().area, "crown 0 is patch_edges");
+        for crown in [0.25, -0.25] {
+            let full = patch_edges_crowned(&open, &rim, crown).unwrap();
+            assert_eq!(full.face_count(), 1, "one face");
+            let face = full.solid.face_iter().next().unwrap().clone();
+            assert!(!matches!(face.surface(), mt::Surface::Plane(_)));
+            let own: Vec<mt::EdgeID> = open.solid.edge_iter().map(|e| e.id()).collect();
+            assert!(full.solid.edge_iter().all(|e| own.contains(&e.id())), "an edge that is not the body's");
+            // The loop's edges are within the fill's tolerance of the face, as for the plain fill.
+            let off = edges_off_surface(&face);
+            assert!(off <= super::face_tolerance(&open), "an edge is {off} off the crowned face");
+            mesh_is_clean(&full);
+            // The middle of the loop's box moved by crown × its diagonal (the bump is 1 there).
+            let a = plain.solid.face_iter().next().unwrap().surface();
+            let b = face.surface();
+            let (Some((bu0, bu1)), Some((bv0, bv1))) = a.try_range_tuple() else { panic!("a bounded surface") };
+            let (uc, vc) = ((bu0 + bu1) / 2.0, (bv0 + bv1) / 2.0);
+            let size = (bu1 - bu0).hypot(bv1 - bv0);
+            let bump = a.subs(uc, vc).distance(b.subs(uc, vc));
+            let want = (crown * size).abs();
+            eprintln!("crown {crown}: the middle moved {bump:.6}, wanted {want:.6}");
+            assert!((bump - want).abs() < 1e-6 * size, "middle {bump} against {want}");
+        }
+        // A planar loop: the exact plane, crowned or not (the crown has no middle to fill).
+        let boxed = crate::box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
+        let open = copy_faces(
+            &boxed,
+            &[Vec3::new(5.0, 5.0, 0.0), Vec3::new(5.0, 0.0, 5.0), Vec3::new(10.0, 5.0, 5.0), Vec3::new(5.0, 10.0, 5.0), Vec3::new(0.0, 5.0, 5.0)],
+        )
+        .unwrap();
+        let rim = [Vec3::new(5.0, 0.0, 10.0), Vec3::new(10.0, 5.0, 10.0), Vec3::new(5.0, 10.0, 10.0), Vec3::new(0.0, 5.0, 10.0)];
+        let lid = patch_edges_crowned(&open, &rim, 1.0).unwrap();
+        assert!(matches!(lid.solid.face_iter().next().unwrap().surface(), mt::Surface::Plane(_)), "a planar loop is a plane");
+        // Hostile crowns are refused before anything is built.
+        for crown in [f64::NAN, f64::INFINITY, 3.01, -0.91, 1e300] {
+            assert!(patch_edges_crowned(&open, &rim, crown).is_err(), "crown {crown}");
+        }
     }
 }

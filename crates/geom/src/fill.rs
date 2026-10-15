@@ -11,12 +11,16 @@
 //! A2.1 (span search).
 
 use crate::Vec3;
-use crate::bspline::{HPoint, NurbsSurface, Side, SplineError, SplineResult, find_span, invalid, local_basis_array};
+use crate::bspline::{Dir, HPoint, NurbsSurface, Side, SplineError, SplineResult, find_span, invalid, local_basis_array};
 
 /// Most loop points a fill takes.
 pub const MAX_LOOP_POINTS: usize = 8192;
 /// Most spans of the height field in each direction.
 pub const MAX_FILL_SPANS: usize = 32;
+/// How full a patch's middle may be made (`crown`): 0 the least-bending fill, positive fuller,
+/// negative flatter, in fractions of the loop's size. Outside this range the value is refused.
+pub const MIN_CROWN: f64 = -0.9;
+pub const MAX_CROWN: f64 = 3.0;
 /// Fewest spans of the height field in each direction (the first fit tried).
 const MIN_FILL_SPANS: usize = 4;
 /// The smoothness energy's terms: `(order in u, order in v, weight)` of `∫∫ (∂ h)²`.
@@ -50,6 +54,12 @@ pub struct LoopFill {
     pub counter_clockwise: bool,
     pub deviation: f64,
     pub evaluations: usize,
+    /// The crown the fill was asked for, how many control points took its bump, and how far the
+    /// bump moved the surface at the sampled loop points (always exactly 0: the bump vanishes
+    /// along the loop, so the boundary is untouched).
+    pub crown: f64,
+    pub crowned: usize,
+    pub crown_drift: f64,
 }
 
 /// Fill the closed loop of `sides` curves (side `k` given by `point(k, t)`, `t` from 0 at its
@@ -86,12 +96,23 @@ pub struct LoopFill {
 ///   point (measured along the normal, which bounds the distance) is the fill; otherwise the
 ///   sampling doubles, and when that runs out, "not supported yet" with the closest deviation
 ///   reached.
-pub fn fill_loop(sides: usize, point: &mut dyn FnMut(usize, f64) -> Option<Vec3>, tol: f64) -> SplineResult<LoopFill> {
+/// - `crown` (0 for the plain fill, between [`MIN_CROWN`] and [`MAX_CROWN`]) fills the middle:
+///   the surface gains `crown · size · 16·s·(1−s)·t·(1−t)` (`s`, `t` the box's coordinates scaled
+///   to 0…1, `size` the box's diagonal: 1 at the middle, 0 on the box's boundary), applied to the
+///   control points whose support keeps clear of the loop, so the bump vanishes along the loop
+///   and the boundary does not move at all. The fitted net may be too coarse to hold such a
+///   point; it is then refined by knot insertion, which leaves the surface itself as it is. A
+///   loop whose fill leaves no room inside it even so is refused.
+pub fn fill_loop(sides: usize, point: &mut dyn FnMut(usize, f64) -> Option<Vec3>, tol: f64, crown: f64) -> SplineResult<LoopFill> {
     if sides == 0 || sides.saturating_mul(16) > MAX_LOOP_POINTS / 2 {
         return Err(SplineError::TooLarge(format!("a loop of {sides} sides (at most {})", MAX_LOOP_POINTS / 32)));
     }
     if !(tol.is_finite() && tol > 0.0) {
         return invalid("the fill tolerance must be positive");
+    }
+    // A range test also throws out NaN.
+    if !(MIN_CROWN..=MAX_CROWN).contains(&crown) {
+        return invalid("the crown must be between -0.9 and 3");
     }
     let mut evaluations = 0usize;
     let mut eval = |k: usize, t: f64| -> SplineResult<Vec3> {
@@ -116,7 +137,7 @@ pub fn fill_loop(sides: usize, point: &mut dyn FnMut(usize, f64) -> Option<Vec3>
         }
         // The loop in order: fitted and checked points alternating.
         let all: Vec<Vec3> = fit.iter().zip(&check).flat_map(|(a, b)| [*a, *b]).collect();
-        match fit_once(&fit, &all, tol)? {
+        match fit_once(&fit, &all, tol, crown)? {
             Fit::Done(mut fill) => {
                 fill.evaluations = evaluations;
                 return Ok(*fill);
@@ -147,7 +168,7 @@ enum Fit {
 
 /// One round of [`fill_loop`]: fit the points `fit`, check every point of `all` (the loop in
 /// order, `fit` among them).
-fn fit_once(fit: &[Vec3], all: &[Vec3], tol: f64) -> SplineResult<Fit> {
+fn fit_once(fit: &[Vec3], all: &[Vec3], tol: f64, crown: f64) -> SplineResult<Fit> {
     let m = fit.len();
     let o = fit.iter().fold(Vec3::ZERO, |a, p| a + *p) / m as f64;
     let at = |k: usize| fit.get(k % m).copied().unwrap_or(Vec3::ZERO);
@@ -236,7 +257,19 @@ fn fit_once(fit: &[Vec3], all: &[Vec3], tol: f64) -> SplineResult<Fit> {
         deviation = deviation.min(dev);
         if dev <= tol && holds {
             let surface = grid.surface(&heights, o, x, y, n)?;
-            let fill = LoopFill { surface, origin: o, axes: [x, y], normal: n, counter_clockwise, deviation: dev, evaluations: 0 };
+            let (surface, crowned, crown_drift) = crown_fill(surface, &uv, crown, n)?;
+            let fill = LoopFill {
+                surface,
+                origin: o,
+                axes: [x, y],
+                normal: n,
+                counter_clockwise,
+                deviation: dev,
+                evaluations: 0,
+                crown,
+                crowned,
+                crown_drift,
+            };
             return Ok(Fit::Done(Box::new(fill)));
         }
         if !holds {
@@ -245,6 +278,193 @@ fn fit_once(fit: &[Vec3], all: &[Vec3], tol: f64) -> SplineResult<Fit> {
         level *= 2;
     }
     Ok(Fit::Exhausted(deviation))
+}
+
+/// The fitted surface with the crown's bump (see [`fill_loop`]): `crown == 0` gives it back as it
+/// is. A control point whose support rectangle keeps clear of the loop takes the bump's blossom
+/// coefficients, so the surface between the perturbed points is the bubble exactly and the
+/// surface over the loop is not moved at all (those points' basis functions are zero all along
+/// it). A fitted net is often too coarse to hold one; it is then refined by knot insertion, which
+/// leaves the surface itself as it is, until it does. Returns the crowned surface, how many
+/// control points took the bump, and the farthest the bump moved the surface at a sampled loop
+/// point (0).
+fn crown_fill(surface: NurbsSurface, uv: &[[f64; 2]], crown: f64, normal: Vec3) -> SplineResult<(NurbsSurface, usize, f64)> {
+    if crown == 0.0 {
+        return Ok((surface, 0, 0.0));
+    }
+    let gap = loop_gap(uv);
+    let mut base = surface;
+    loop {
+        if let Some((crowned, points)) = crown_net(&base, uv, gap, crown, normal)? {
+            let mut drift = 0.0f64;
+            for q in uv {
+                if let (Ok(a), Ok(b)) = (base.eval(q[0], q[1]), crowned.eval(q[0], q[1])) {
+                    drift = drift.max(a.dist(b));
+                }
+            }
+            if drift > 0.0 {
+                return Err(SplineError::Unsupported("crowning a patch whose loop the fill cannot keep clear".into()));
+            }
+            return Ok((crowned, points, drift));
+        }
+        // No room inside the loop yet: halve the cells (the surface itself does not change).
+        let spans = [0, 1].map(|d| base.count()[d].saturating_sub(3));
+        if spans[0] >= MAX_FILL_SPANS && spans[1] >= MAX_FILL_SPANS {
+            return Err(SplineError::Unsupported("crowning a patch whose loop leaves no room inside it".into()));
+        }
+        for (d, &s) in spans.iter().enumerate() {
+            if s < MAX_FILL_SPANS {
+                base = subdivide(&base, d)?;
+            }
+        }
+    }
+}
+
+/// The crown's bump in the net `base`: a control point whose support rectangle keeps clear of the
+/// loop takes `crown · size · B(ξ, η)`, `B` the bubble's blossom at the point's knots (so the
+/// surface between the perturbed points is exactly the bubble, not a fit of it) and `size` the
+/// box's diagonal. `None` when the net has no such point.
+fn crown_net(base: &NurbsSurface, uv: &[[f64; 2]], gap: [f64; 2], crown: f64, normal: Vec3) -> SplineResult<Option<(NurbsSurface, usize)>> {
+    let [cu, cv] = base.count();
+    let degree = base.degree();
+    let knots = base.knots();
+    let domain = base.domain();
+    let size = (domain[0][1] - domain[0][0]).hypot(domain[1][1] - domain[1][0]);
+    if !(size > 0.0 && size.is_finite() && normal.is_finite()) {
+        return invalid("the loop's extent is not finite");
+    }
+    // The bubble `4·s·(1−s)` per direction, as a quadratic in the plane coordinate.
+    let quad = |d: usize| {
+        let (lo, hi) = (domain[d][0], domain[d][1]);
+        let w = hi - lo;
+        (-4.0 * lo * hi / (w * w), 4.0 * (lo + hi) / (w * w), -4.0 / (w * w))
+    };
+    let (qu, qv) = (quad(0), quad(1));
+    let (Some(knots_u), Some(knots_v)) = (knots.first(), knots.get(1)) else { return invalid("the surface has no knot vectors") };
+    let mut ctrl = base.homogeneous().to_vec();
+    let mut points = 0usize;
+    for j in 0..cv {
+        let Some((v_span, v_knots)) = support(knots_v, degree[1], j) else { continue };
+        for i in 0..cu {
+            let Some((u_span, u_knots)) = support(knots_u, degree[0], i) else { continue };
+            if !clear_of_loop(u_span, v_span, uv, gap) {
+                continue;
+            }
+            let bump = crown * size * blossom(qu, u_knots) * blossom(qv, v_knots);
+            let Some(slot) = ctrl.get_mut(j * cu + i) else { continue };
+            let h = *slot;
+            let Some(p) = h.project() else { continue };
+            *slot = HPoint::weighted(p + normal * bump, h.w);
+            points += 1;
+        }
+    }
+    if points == 0 {
+        return Ok(None);
+    }
+    Ok(Some((NurbsSurface::from_homogeneous(degree, knots.clone(), ctrl)?, points)))
+}
+
+/// The same surface with a knot inserted in the middle of every span of direction `d` (0 = u):
+/// the surface itself does not change, only its net is finer, which is what gives the crown room
+/// inside the loop.
+fn subdivide(surface: &NurbsSurface, d: usize) -> SplineResult<NurbsSurface> {
+    let (degree, count) = (surface.degree()[d], surface.count()[d]);
+    let knots = surface.knots()[d].clone();
+    let mut mids = Vec::new();
+    for i in degree..count {
+        let (a, b) = (knots.get(i).copied().unwrap_or(0.0), knots.get(i + 1).copied().unwrap_or(0.0));
+        if b > a {
+            mids.push(0.5 * (a + b));
+        }
+    }
+    let mut out = surface.clone();
+    for m in mids {
+        out = out.insert_knot(if d == 0 { Dir::S } else { Dir::T }, m)?;
+    }
+    Ok(out)
+}
+
+/// A control point's knot interval — where its basis is non-zero — and its knot triple, whose
+/// blossom is the value the point must take for the spline to reproduce a quadratic exactly.
+fn support(knots: &[f64], degree: usize, i: usize) -> Option<([f64; 2], [f64; 3])> {
+    let interval = [*knots.get(i)?, *knots.get(i + degree + 1)?];
+    let triple = [*knots.get(i + 1)?, *knots.get(i + 2)?, *knots.get(i + 3)?];
+    (interval[1] >= interval[0]).then_some((interval, triple))
+}
+
+/// A quadratic `a + b·x + c·x²`'s blossom at a knot triple.
+fn blossom(quad: (f64, f64, f64), t: [f64; 3]) -> f64 {
+    let (a, b, c) = quad;
+    let mean = (t[0] + t[1] + t[2]) / 3.0;
+    let pair = (t[0] * t[1] + t[1] * t[2] + t[0] * t[2]) / 3.0;
+    a + b * mean + c * pair
+}
+
+/// Whether the parameter rectangle `u` × `v` keeps clear of the sampled loop: its middle is
+/// inside the loop and no loop segment comes within `gap` of it. A control point whose support
+/// keeps clear takes the crown's bump without moving the surface over the loop.
+fn clear_of_loop(u: [f64; 2], v: [f64; 2], uv: &[[f64; 2]], gap: [f64; 2]) -> bool {
+    if !inside_loop([(u[0] + u[1]) / 2.0, (v[0] + v[1]) / 2.0], uv) {
+        return false;
+    }
+    let lo = [u[0] - gap[0], v[0] - gap[1]];
+    let hi = [u[1] + gap[0], v[1] + gap[1]];
+    let m = uv.len();
+    (0..m).all(|k| {
+        let (Some(a), Some(b)) = (uv.get(k).copied(), uv.get((k + 1) % m).copied()) else { return false };
+        !segment_meets_rect(a, b, lo, hi)
+    })
+}
+
+/// The largest step between neighbouring samples of the loop, per direction: a rectangle this far
+/// clear of the sampled loop cannot be entered by the edges between the samples either.
+fn loop_gap(uv: &[[f64; 2]]) -> [f64; 2] {
+    let m = uv.len();
+    let mut gap = [0.0f64; 2];
+    for k in 0..m {
+        let (Some(a), Some(b)) = (uv.get(k).copied(), uv.get((k + 1) % m).copied()) else { continue };
+        for d in 0..2 {
+            gap[d] = gap[d].max((b[d] - a[d]).abs());
+        }
+    }
+    gap
+}
+
+/// Whether `p` is inside the closed loop `uv` (ray casting).
+fn inside_loop(p: [f64; 2], uv: &[[f64; 2]]) -> bool {
+    let m = uv.len();
+    let mut inside = false;
+    for k in 0..m {
+        let (Some(a), Some(b)) = (uv.get(k).copied(), uv.get((k + 1) % m).copied()) else { continue };
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Whether the segment `p`–`q` meets the rectangle `lo`–`hi` (Liang–Barsky clipping).
+fn segment_meets_rect(p: [f64; 2], q: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> bool {
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for d in 0..2 {
+        let delta = q[d] - p[d];
+        if delta == 0.0 {
+            if p[d] < lo[d] || p[d] > hi[d] {
+                return false;
+            }
+            continue;
+        }
+        let (mut a, mut b) = ((lo[d] - p[d]) / delta, (hi[d] - p[d]) / delta);
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        t0 = t0.max(a);
+        t1 = t1.min(b);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
 }
 
 /// Refuse a loop that does not bound a height field over its plane (see [`fill_loop`]).
@@ -599,7 +819,7 @@ mod tests {
         // A tilted plane over a hexagon: the smoothness energy vanishes on it, so the fill is it.
         let hex = ring(6, 10.0);
         let plane = |x: f64, y: f64| 0.3 * x - 0.2 * y + 1.0;
-        let f = fill_loop(6, &mut lifted(&hex, &plane), 1e-6).unwrap();
+        let f = fill_loop(6, &mut lifted(&hex, &plane), 1e-6, 0.0).unwrap();
         let inside = off_inside(&f, &hex, &plane);
         eprintln!("plane: deviation {:e}, inside off by {inside:e}, {} evaluations", f.deviation, f.evaluations);
         assert!(f.deviation <= 1e-6 && inside < 1e-9);
@@ -608,7 +828,7 @@ mod tests {
         let saddle = |x: f64, y: f64| 0.05 * x * y;
         let dome = |x: f64, y: f64| 3.0 - 0.02 * (x * x + y * y);
         for (name, z, bound) in [("saddle", &saddle as &dyn Fn(f64, f64) -> f64, 0.1), ("dome", &dome, 1.0)] {
-            let f = fill_loop(6, &mut lifted(&hex, z), 2e-5).unwrap();
+            let f = fill_loop(6, &mut lifted(&hex, z), 2e-5, 0.0).unwrap();
             let inside = off_inside(&f, &hex, z);
             eprintln!("{name}: deviation {:e}, inside off by {inside:e}", f.deviation);
             assert!(f.deviation <= 2e-5 && inside < bound, "{name}: {inside}");
@@ -638,7 +858,7 @@ mod tests {
         let flat_corner = vec![[-10.0, -10.0], [0.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]];
         for (name, c) in [("dart", dart), ("arrow", arrow), ("plus", plus), ("flat corner", flat_corner)] {
             let n = c.len();
-            let f = fill_loop(n, &mut lifted(&c, &z), 1e-4).unwrap();
+            let f = fill_loop(n, &mut lifted(&c, &z), 1e-4, 0.0).unwrap();
             let inside = off_inside(&f, &c, &z);
             eprintln!("{name}: deviation {:e}, inside off the cylinder by {inside:e}, {} evaluations", f.deviation, f.evaluations);
             // The least-bending fill, not the cylinder: within a few tenths of a millimetre of it.
@@ -647,7 +867,7 @@ mod tests {
             let mut back = c.clone();
             back.rotate_left(2);
             back.reverse();
-            let g = fill_loop(n, &mut lifted(&back, &z), 1e-4).unwrap();
+            let g = fill_loop(n, &mut lifted(&back, &z), 1e-4, 0.0).unwrap();
             assert_ne!(f.counter_clockwise, g.counter_clockwise);
             for (x, y) in [(4.0, 0.0), (6.0, 1.0), (5.0, -1.0)] {
                 let p = Vec3::new(x, y, z(x, y));
@@ -663,7 +883,7 @@ mod tests {
         // scaled and moved alike.
         let z = |x: f64, _: f64| 50.0 - (1600.0 - x * x).sqrt();
         let arrow = [[0.0, 0.0], [10.0, -8.0], [10.0, -3.0], [20.0, 0.0], [10.0, 3.0]];
-        let f = fill_loop(5, &mut lifted(&arrow, &z), 1e-4).unwrap();
+        let f = fill_loop(5, &mut lifted(&arrow, &z), 1e-4, 0.0).unwrap();
         let axis = Vec3::new(1.0, -2.0, 0.5).normalized().unwrap();
         let shift = Vec3::new(30.0, -12.0, 7.0);
         for scale in [100.0, 0.01] {
@@ -674,7 +894,7 @@ mod tests {
                 p * c + axis.cross(p) * s + axis * (axis.dot(p) * (1.0 - c)) + shift * scale
             };
             let mut moved = |k: usize, t: f64| lifted(&arrow, &z)(k, t).map(place);
-            let g = fill_loop(5, &mut moved, 1e-4 * scale).unwrap();
+            let g = fill_loop(5, &mut moved, 1e-4 * scale, 0.0).unwrap();
             let mut worst = 0.0f64;
             for (x, y) in [(4.0, 0.0), (6.0, 1.0), (5.0, -1.0), (9.0, -2.0), (12.0, 0.5)] {
                 let p = Vec3::new(x, y, z(x, y));
@@ -690,7 +910,7 @@ mod tests {
         // A 200 × 1 mm slot on a cylinder of radius 300 running along it.
         let z = |x: f64, _: f64| 300.0 - (90_000.0 - (x - 100.0) * (x - 100.0)).sqrt();
         let slot = [[0.0, 0.0], [200.0, 0.0], [200.0, 1.0], [0.0, 1.0]];
-        let f = fill_loop(4, &mut lifted(&slot, &z), 2e-4).unwrap();
+        let f = fill_loop(4, &mut lifted(&slot, &z), 2e-4, 0.0).unwrap();
         let inside = off_inside(&f, &slot, &z);
         eprintln!("slot: deviation {:e}, inside off the cylinder by {inside:e}, {} evaluations", f.deviation, f.evaluations);
         assert!(f.deviation <= 2e-4 && inside < 1e-2);
@@ -702,7 +922,7 @@ mod tests {
         let flat = |_: f64, _: f64| 0.0;
         // A figure eight (lobes of different sizes).
         let eight = [[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 6.0]];
-        assert!(unsupported(fill_loop(4, &mut lifted(&eight, &flat), 1e-4)));
+        assert!(unsupported(fill_loop(4, &mut lifted(&eight, &flat), 1e-4, 0.0)));
         // A loop with a vertical spike in it (up along the normal and down again).
         let spike = [
             Vec3::ZERO,
@@ -713,30 +933,77 @@ mod tests {
             Vec3::new(5.0, 10.0, 0.0),
             Vec3::new(0.0, 10.0, 0.0),
         ];
-        assert!(unsupported(fill_loop(7, &mut polygon3(&spike), 1e-4)));
+        assert!(unsupported(fill_loop(7, &mut polygon3(&spike), 1e-4, 0.0)));
         // A loop that runs back over itself.
         let back = [[0.0, 0.0], [10.0, 0.0], [4.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
-        assert!(unsupported(fill_loop(5, &mut lifted(&back, &flat), 1e-4)));
+        assert!(unsupported(fill_loop(5, &mut lifted(&back, &flat), 1e-4, 0.0)));
         // A loop too wavy for one surface.
         let wavy = |x: f64, y: f64| (x * 9.0).sin() * (y * 7.0).cos();
-        assert!(unsupported(fill_loop(64, &mut lifted(&ring(64, 10.0), &wavy), 1e-6)));
+        assert!(unsupported(fill_loop(64, &mut lifted(&ring(64, 10.0), &wavy), 1e-6, 0.0)));
     }
 
     #[test]
     fn hostile_loops_are_refused() {
         let flat = |_: f64, _: f64| 0.0;
         let five = ring(5, 10.0);
-        assert!(fill_loop(0, &mut lifted(&five, &flat), 1e-4).is_err());
-        assert!(fill_loop(5, &mut |_, _| Some(Vec3::X), 1e-4).is_err(), "no area");
-        assert!(fill_loop(5, &mut |_, _| None, 1e-4).is_err());
-        assert!(fill_loop(5, &mut |k, t| Some(Vec3::new(k as f64, t, f64::NAN)), 1e-4).is_err());
-        assert!(fill_loop(5, &mut lifted(&five, &flat), 0.0).is_err() && fill_loop(5, &mut lifted(&five, &flat), f64::NAN).is_err());
-        assert!(fill_loop(10_000, &mut lifted(&five, &flat), 1e-4).is_err());
+        assert!(fill_loop(0, &mut lifted(&five, &flat), 1e-4, 0.0).is_err());
+        assert!(fill_loop(5, &mut |_, _| Some(Vec3::X), 1e-4, 0.0).is_err(), "no area");
+        assert!(fill_loop(5, &mut |_, _| None, 1e-4, 0.0).is_err());
+        assert!(fill_loop(5, &mut |k, t| Some(Vec3::new(k as f64, t, f64::NAN)), 1e-4, 0.0).is_err());
+        assert!(fill_loop(5, &mut lifted(&five, &flat), 0.0, 0.0).is_err() && fill_loop(5, &mut lifted(&five, &flat), f64::NAN, 0.0).is_err());
+        assert!(fill_loop(10_000, &mut lifted(&five, &flat), 1e-4, 0.0).is_err());
         let huge = |x: f64, y: f64| (x * y) * 1e300;
-        let _ = fill_loop(5, &mut lifted(&five, &huge), 1e-4);
+        let _ = fill_loop(5, &mut lifted(&five, &huge), 1e-4, 0.0);
         let tiny: Vec<[f64; 2]> = five.iter().map(|p| [p[0] * 1e-300, p[1] * 1e-300]).collect();
-        let _ = fill_loop(5, &mut lifted(&tiny, &flat), 1e-4);
+        let _ = fill_loop(5, &mut lifted(&tiny, &flat), 1e-4, 0.0);
         let big: Vec<[f64; 2]> = five.iter().map(|p| [p[0] * 1e300, p[1] * 1e300]).collect();
-        let _ = fill_loop(5, &mut lifted(&big, &flat), 1e-4);
+        let _ = fill_loop(5, &mut lifted(&big, &flat), 1e-4, 0.0);
+    }
+
+    /// A patch whose rim is a dome: the crown fills its middle by `crown` times the loop's size
+    /// and leaves the loop — the body's own edges — exactly where it was.
+    #[test]
+    fn a_crown_fills_the_middle_of_a_patch_and_leaves_its_loop_alone() {
+        let hex = ring(6, 10.0);
+        let dome = |x: f64, y: f64| 3.0 - 0.02 * (x * x + y * y);
+        let plain = fill_loop(6, &mut lifted(&hex, &dome), 2e-5, 0.0).unwrap();
+        // Crown 0 is the fit as it was: no refinement, no bump, nothing moved.
+        assert_eq!((plain.crown, plain.crowned, plain.crown_drift), (0.0, 0, 0.0));
+        assert_eq!(plain.surface.count(), [19, 17], "crown 0 keeps the fitted net (16 × 14 spans)");
+        let crown = 0.25;
+        let full = fill_loop(6, &mut lifted(&hex, &dome), 2e-5, crown).unwrap();
+        assert!(full.crowned > 0, "the crown needs room inside the loop");
+        assert_eq!(full.crown_drift, 0.0, "the bump must not move the loop at all");
+        assert_eq!(full.deviation, plain.deviation, "the crown must not touch the fit");
+        // The middle of the box rises by `crown` times the loop's size: the bubble is 1 there.
+        let [du, dv] = plain.surface.domain();
+        let (uc, vc) = ((du[0] + du[1]) / 2.0, (dv[0] + dv[1]) / 2.0);
+        let size = (du[1] - du[0]).hypot(dv[1] - dv[0]);
+        let mid = |f: &LoopFill| f.surface.eval(uc, vc).unwrap_or(Vec3::ZERO);
+        let bump = (mid(&full) - mid(&plain)).dot(plain.normal);
+        eprintln!("crown {crown}: {} points took the bump, the middle rose by {bump} of {}", full.crowned, crown * size);
+        assert!((bump - crown * size).abs() < 1e-9 * size, "the middle rose by {bump}, wanted {}", crown * size);
+        // A flatter crown lowers the middle by the same.
+        let flat = fill_loop(6, &mut lifted(&hex, &dome), 2e-5, -crown).unwrap();
+        let dip = (mid(&flat) - mid(&plain)).dot(plain.normal);
+        assert!((dip + crown * size).abs() < 1e-9 * size, "the middle fell by {dip}");
+        // The loop's own points are still on the surface, as closely as they were.
+        let off = |f: &LoopFill| {
+            hex.iter()
+                .map(|p| f.point_over(Vec3::new(p[0], p[1], dome(p[0], p[1]))).map_or(f64::INFINITY, |q| (q.z - dome(p[0], p[1])).abs()))
+                .fold(0.0f64, f64::max)
+        };
+        assert!(off(&full) <= off(&plain) + 1e-9, "the crowned fill left the loop: {:e} against {:e}", off(&full), off(&plain));
+    }
+
+    #[test]
+    fn hostile_crowns_are_refused() {
+        let hex = ring(6, 10.0);
+        let dome = |x: f64, y: f64| 3.0 - 0.02 * (x * x + y * y);
+        for crown in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 3.01, -0.91, 1e300] {
+            assert!(fill_loop(6, &mut lifted(&hex, &dome), 2e-5, crown).is_err(), "crown {crown}");
+        }
+        assert!(fill_loop(6, &mut lifted(&hex, &dome), 2e-5, MAX_CROWN).is_ok());
+        assert!(fill_loop(6, &mut lifted(&hex, &dome), 2e-5, MIN_CROWN).is_ok());
     }
 }
