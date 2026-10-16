@@ -956,15 +956,23 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         match r {
             Ok(Some(body)) => {
                 let (ok, v) = check(&body);
-                if ok {
+                // Measured finely too: a face the boolean left a hair wide, its loops a hair
+                // apart, can mesh as its whole plane at a fine step though it meshed as a sliver
+                // at the check's (#1360: an annulus cut flush with a hole's wall came out 21000
+                // mm³ larger than the part it was cut from, a square plane across it).
+                let fine_ok = ok && crate::measure(&body).is_ok_and(|m| plausible(m.volume, op, va, vb, slack));
+                if ok && !fine_ok {
+                    last = format!("{last}; the nudged tool gave a solid whose faces mesh inconsistently");
+                } else if ok {
                     merge(diagnostics);
                     let mut event = BooleanFallback::new(BooleanStrategy::ToolNudge);
                     event.translation_mm = translation.len();
                     event.rotation_rad = 2e-6;
                     record(event);
                     return Ok(Some(body));
+                } else {
+                    last = format!("{last}; the nudged tool gave an implausible volume {v:.4}");
                 }
-                last = format!("{last}; the nudged tool gave an implausible volume {v:.4}");
             }
             Ok(None) => {
                 merge(diagnostics);
