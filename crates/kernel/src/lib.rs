@@ -24,6 +24,7 @@ mod boolean_diagnostics;
 mod boolean_guard;
 mod boolean_record;
 mod bore_guard;
+mod boundary;
 mod bridge;
 mod build;
 mod clearance;
@@ -36,6 +37,7 @@ mod emboss;
 mod face_params;
 #[cfg(test)]
 mod face_source_tests;
+mod fair;
 mod fill;
 mod freeform;
 pub mod fuzz;
@@ -66,6 +68,7 @@ mod issue_871_tests;
 mod join_between_caps_tests;
 mod lip;
 mod loopblend;
+mod matchsurf;
 mod measure;
 mod mesh_convert;
 mod meshbody;
@@ -125,6 +128,7 @@ pub use blend_corner::fillet_radii;
 pub use blend_variable::{RadiusSpline, Taper, fillet_chord, fillet_tapered, fillet_variable, fillet_variable_points, fillet_variable_spline, taper};
 pub use body::{Body, CapSignature, DISPLAY_ANGLE, EdgeInfo, FaceInfo, FacePaint, FaceSource, Paint};
 pub use boolean_diagnostics::{BooleanDiagnostics, BooleanFallback, BooleanStrategy, capture_boolean_diagnostics};
+pub use boundary::{Boundary, boundary_patch};
 pub use bridge::{Continuity, Frame, blend_between, bridge, chain, chain_closes, frames, frames_across, sample_grid};
 pub use build::{
     PathSeg, box_solid, canonical_revolve_axis, cylinder, extrude, extrude_tapered, extrude_tapered_between, loft, revolve, sphere, sweep,
@@ -132,11 +136,16 @@ pub use build::{
 };
 pub use delete_face::delete_faces;
 pub use emboss::{cylinder_emboss_anchor, emboss_cylinder, emboss_cylinder_at, has_cylinder_emboss_wall, infer_cylinder_emboss};
+pub use fair::{
+    FairCurve, FairNet, FairOptions, FairReport, MAX_FAIR_ITERATIONS, MAX_FAIR_POINTS, fair_bspline_curve, fair_bspline_surface, fair_curve,
+    fair_faces, fair_net, fair_nurbs_curve, fair_nurbs_surface, fair_surface,
+};
 pub use fill::{PATCH_ANGLE_TOL_DEG, PatchReport, PatchSpec, patch_edges_crowned, patch_edges_report, patch_edges_with};
 pub use helix::{loft_to_point, sweep_helix, sweep_helix_mesh};
 pub use iges_in::{MAX_IGES_BYTES, iges_import, iges_to_step};
 pub use iges_out::iges_export_bodies;
 pub use lip::raise_band;
+pub use matchsurf::{match_surface, seam_continuity};
 pub use measure::{BodyMeasure, measure};
 pub use mesh_convert::convert_prismatic_mesh;
 pub use meshbody::{MAX_TRIANGLES, mesh_body};
