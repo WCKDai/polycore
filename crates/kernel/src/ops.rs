@@ -363,7 +363,9 @@ fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, Bool
     match op {
         BoolOp::Cut => r = r.and_then(|result| result.map(|body| body.with_preserved_boolean_planar_sources(a, b, true)).transpose()),
         BoolOp::Union => r = r.and_then(|result| result.map(|body| body.with_preserved_union_planar_sources(a, b)).transpose()),
-        BoolOp::Intersect => {}
+        // Every face of an intersection lies on one operand's face, as a union's does: the same
+        // roles carry over (#565).
+        BoolOp::Intersect => r = r.and_then(|result| result.map(|body| body.with_preserved_union_planar_sources(a, b)).transpose()),
     }
     // A retry's result is held to what the operation can do at all; one that fails is refused
     // rather than returned wrong (issue #616).
@@ -1434,7 +1436,8 @@ pub fn split_by_plane(body: &Body, plane: &solidcraft_geom::Plane) -> Result<Vec
 /// The part of a body on one side of a plane (`None` when nothing is there): its intersection
 /// with [`half_box`] (whose history it carries, over the body and the box).
 pub(crate) fn half_space(body: &Body, plane: &solidcraft_geom::Plane, positive: bool) -> Result<Option<Body>> {
-    boolean(body, &half_box(body, plane, positive)?, BoolOp::Intersect)
+    // The box's own construction roles describe no face of the design: the cut face has none.
+    boolean(body, &half_box(body, plane, positive)?.with_face_sources(None), BoolOp::Intersect)
 }
 
 /// A box covering everything of `body` on one side of a plane, its start cap in the plane.
