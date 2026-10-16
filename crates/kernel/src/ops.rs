@@ -332,6 +332,15 @@ fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, Bool
             }
         }
     }
+    // A piece with sealed voids, cut clear of them: the outer shell alone, the voids put back.
+    if op == BoolOp::Cut && r.is_err() {
+        let (cut, report) = capture_boolean_diagnostics(|| cut_around_voids(a, b, whole));
+        if let Ok(Some(x)) = cut {
+            r = Ok(Some(x));
+            diagnostics = report;
+            diagnostics.push(BooleanFallback::new(BooleanStrategy::Piecewise));
+        }
+    }
     if op == BoolOp::Union
         && let Ok(Some(body)) = &r
         && !preserves_planar_surfaces(a, b, body)
@@ -372,6 +381,72 @@ fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, Bool
         merge(diagnostics);
     }
     r
+}
+
+/// The most shells [`cut_around_voids`] takes apart.
+const MAX_VOID_SHELLS: usize = 64;
+
+/// `a` cut by `b` around `a`'s voids: when `a` is one piece with sealed voids (inner shells) and
+/// `b` stays clear of every void, the outer shell alone is cut and the voids are put back. The cut
+/// of the whole failed on such bodies where the same cut of the outer shell works: a sphere cut
+/// far from a void (robustness seed 15). `None` when `a` has no voids, `b` comes near one, or
+/// the cut of the outer shell fails too. The result carries no history.
+fn cut_around_voids(a: &Body, b: &Body, whole: &dyn Fn(&Body, &Body, BoolOp) -> Result<Option<Body>>) -> Result<Option<Body>> {
+    let shells = a.solid.boundaries().clone();
+    if shells.len() < 2 || shells.len() > MAX_VOID_SHELLS || b.solid.boundaries().len() != 1 || a.lumps()?.len() != 1 {
+        return Ok(None);
+    }
+    let tol = (a.size() * 1e-3).max(1e-3);
+    let mut boxes = Vec::with_capacity(shells.len());
+    for sh in &shells {
+        let piece =
+            guard("void shell", || Body::new(Solid::try_new(vec![sh.clone()]).map_err(|e| KernelError::Failed(format!("void shell: {e}")))?))?;
+        let m = piece.tessellate(tol)?;
+        if m.positions.is_empty() {
+            return Ok(None);
+        }
+        boxes.push(m.bounds());
+    }
+    let extent = |i: usize| {
+        boxes.get(i).map_or(0.0, |x| {
+            let d = x.max - x.min;
+            d.x * d.y * d.z
+        })
+    };
+    let Some(outer) = (0..shells.len()).max_by(|i, j| extent(*i).total_cmp(&extent(*j))) else { return Ok(None) };
+    let Some(ob) = boxes.get(outer) else { return Ok(None) };
+    let tm = b.tessellate((b.size() * 1e-3).max(1e-3))?;
+    let tb = tm.bounds();
+    // Clear of the tool by more than both meshes' deflection.
+    let gap = 4.0 * tol + (b.size() * 1e-3).max(1e-3);
+    let inside = |x: &solidcraft_geom::Aabb3| {
+        x.min.x >= ob.min.x && x.min.y >= ob.min.y && x.min.z >= ob.min.z && x.max.x <= ob.max.x && x.max.y <= ob.max.y && x.max.z <= ob.max.z
+    };
+    let clear = |x: &solidcraft_geom::Aabb3| {
+        x.max.x + gap < tb.min.x
+            || tb.max.x + gap < x.min.x
+            || x.max.y + gap < tb.min.y
+            || tb.max.y + gap < x.min.y
+            || x.max.z + gap < tb.min.z
+            || tb.max.z + gap < x.min.z
+    };
+    let mut voids = Vec::new();
+    for (i, (sh, x)) in shells.iter().zip(&boxes).enumerate() {
+        if i == outer {
+            continue;
+        }
+        if !inside(x) || !clear(x) {
+            return Ok(None);
+        }
+        voids.push(sh.clone());
+    }
+    let Some(outer_shell) = shells.get(outer) else { return Ok(None) };
+    let alone =
+        guard("outer shell", || Body::new(Solid::try_new(vec![outer_shell.clone()]).map_err(|e| KernelError::Failed(format!("outer shell: {e}")))?))?;
+    let Some(cut) = boolean_via(&alone, b, BoolOp::Cut, whole)? else { return Ok(None) };
+    let mut all = cut.solid.boundaries().clone();
+    all.extend(voids);
+    Ok(Some(guard("voids back", || Body::new(Solid::try_new(all).map_err(|e| KernelError::Failed(format!("voids back: {e}")))?))?))
 }
 
 /// Every face of an all-planar union must remain on an operand's original plane.
