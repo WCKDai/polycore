@@ -239,7 +239,8 @@ fn survey(body: &Body, d: Vec3, tol: f64, mesh_tol: f64, axes: [Vec3; 3]) -> Opt
                     let o = p.origin();
                     flat.push((n, n.dot(Vec3::new(o.x, o.y, o.z))));
                     let along = n.dot(d).abs();
-                    !(along > 1.0 - 1e-9 || along < 1e-9)
+                    // NaN counts as inside, as the comparisons it replaces did.
+                    along.is_nan() || (1e-9..=1.0 - 1e-9).contains(&along)
                 }
                 _ => !crate::prism::wall_along(&surface, d, tol, &mut work),
             }
