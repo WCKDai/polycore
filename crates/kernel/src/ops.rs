@@ -1428,16 +1428,19 @@ pub fn transform(body: &Body, translate: Vec3, origin: Vec3, axis: Vec3, angle: 
 pub fn split_by_plane(body: &Body, plane: &solidcraft_geom::Plane) -> Result<Vec<Body>> {
     let mut out = Vec::new();
     for positive in [true, false] {
-        out.extend(half_space(body, plane, positive)?);
+        out.extend(half_space(body, plane, positive)?.0);
     }
     Ok(out)
 }
 
-/// The part of a body on one side of a plane (`None` when nothing is there): its intersection
-/// with [`half_box`] (whose history it carries, over the body and the box).
-pub(crate) fn half_space(body: &Body, plane: &solidcraft_geom::Plane, positive: bool) -> Result<Option<Body>> {
+/// The part of a body on one side of a plane (`None` when nothing is there), and the tool it is
+/// cut with: the part is the body's intersection with [`half_box`] (the tool), whose history it
+/// carries, over the body and the box. The box's face in the plane, the part's cut face, is its
+/// start cap on the positive side and its end cap on the negative side.
+pub fn half_space(body: &Body, plane: &solidcraft_geom::Plane, positive: bool) -> Result<(Option<Body>, Body)> {
     // The box's own construction roles describe no face of the design: the cut face has none.
-    boolean(body, &half_box(body, plane, positive)?.with_face_sources(None), BoolOp::Intersect)
+    let tool = half_box(body, plane, positive)?.with_face_sources(None);
+    Ok((boolean(body, &tool, BoolOp::Intersect)?, tool))
 }
 
 /// A box covering everything of `body` on one side of a plane, its start cap in the plane.
