@@ -903,14 +903,15 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     if !APART.with(|c| c.get()) {
         APART.with(|c| c.set(true));
         let c = b.solid.vertex_iter().fold(Vec3::ZERO, |acc, v| acc + from_p3(v.point())) * (1.0 / b.solid.vertex_iter().count().max(1) as f64);
-        let translation = Vec3::new(0.61, -0.37, 0.71) * (size * 2e-6);
-        let nudge = |sign: f64| {
+        let translation = |screw: usize| SCREWS.get(screw).map_or(Vec3::ZERO, |s| Vec3::new(s.0[0], s.0[1], s.0[2]) * (size * 2e-6));
+        let nudge = |screw: usize, sign: f64| {
+            let axis = SCREWS.get(screw).map_or(Vec3::Z, |s| Vec3::new(s.1[0], s.1[1], s.1[2]));
             capture_boolean_diagnostics(|| {
-                transform(b, translation * sign, c, Vec3::new(0.27, 0.83, -0.49), 2e-6 * sign)
-                    .and_then(|nb| Ok(boolean(a, &nb, op)?.map(|r| nudged(r, &nb, &counts))))
+                transform(b, translation(screw) * sign, c, axis, 2e-6 * sign).and_then(|nb| Ok(boolean(a, &nb, op)?.map(|r| nudged(r, &nb, &counts))))
             })
         };
-        let (mut r, mut diagnostics) = nudge(1.0);
+        let mut used = 0;
+        let (mut r, mut diagnostics) = nudge(used, 1.0);
         // A nudge that pushes a face into a curved face it only touched (a cut whose end lies
         // tangent to a round side) leaves a sliver of that face behind, a fraction of a
         // millimetre wide, which later features (a shell, a fillet) can't work with. The
@@ -923,7 +924,7 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         };
         let made = slivers.is_none_or(|n| n > 0 && n > sliver_faces(a, size).saturating_add(sliver_faces(b, size)));
         if !matches!(r, Ok(None)) && made {
-            let (r2, diagnostics2) = nudge(-1.0);
+            let (r2, diagnostics2) = nudge(used, -1.0);
             if let Ok(Some(body)) = &r2
                 && slivers.is_none_or(|n| sliver_faces(body, size) < n)
                 && check(body).0
@@ -931,6 +932,26 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
                 (r, diagnostics) = (r2, diagnostics2);
             }
         }
+        // Neither way worked: the screw can turn the tool along a seam it lies in (a loft
+        // standing in the rim of a shelled case with its ends in the wall's inner face, #1490).
+        // The other screws are tried in turn, and the first result that checks is taken.
+        let works = |r: &Result<Option<Body>>| match r {
+            Ok(None) => true,
+            Ok(Some(body)) => check(body).0,
+            Err(_) => false,
+        };
+        if !works(&r) {
+            'screws: for screw in 1..SCREWS.len() {
+                for sign in [1.0, -1.0] {
+                    let (r2, diagnostics2) = nudge(screw, sign);
+                    if matches!(&r2, Ok(Some(body)) if check(body).0) {
+                        (r, diagnostics, used) = (r2, diagnostics2, screw);
+                        break 'screws;
+                    }
+                }
+            }
+        }
+        let translation = translation(used);
         APART.with(|c| c.set(false));
         match r {
             Ok(Some(body)) => {
@@ -971,6 +992,12 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         None => Err(KernelError::Failed(format!("boolean {op:?}: {last}"))),
     }
 }
+
+/// The screw motions a tool is nudged by as a last resort: (direction of the move, axis of the
+/// turn), each tried both ways. The first is the one every nudge used before #1490; the others
+/// are asked only when it fails both ways.
+const SCREWS: [([f64; 3], [f64; 3]); 3] =
+    [([0.61, -0.37, 0.71], [0.27, 0.83, -0.49]), ([-0.42, 0.68, 0.6], [0.77, -0.18, 0.61]), ([0.31, 0.52, -0.79], [-0.58, 0.41, 0.70])];
 
 /// Faces of `b` narrower than 1/200 of `size` (twice their area over their boundary's
 /// length): the slivers a nudged tool leaves where it was pushed into a face it touched.
