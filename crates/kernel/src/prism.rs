@@ -1995,7 +1995,7 @@ fn sew_connected_sections(
                 let [p0, p1, p2, p3] = cubic_of(sg)?;
                 let c = same_chain([welded(p0, z), at(p1, z), at(p2, z), welded(p3, z)]);
                 let mid = (c[0] + (c[1] + c[2]) * 3.0 + c[3]) * 0.125;
-                same_edge(EdgeSpec::Chain { ctrl: c.to_vec().into() }, c[0], c[3], mid)
+                same_edge(EdgeSpec::Chain { degree: 3, ctrl: c.to_vec().into() }, c[0], c[3], mid)
             }
         })
     };
