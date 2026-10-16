@@ -977,6 +977,30 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
             Err(e) => last = format!("{last}; nudged: {e}"),
         }
     }
+    // A join whose coincident planar faces cannot be pushed apart because the neighbours of one of them curve (a flange
+    // flush with the end of a lofted tube): the faces are grown instead, and what the growth leaves beyond the plane is cut
+    // off by editing the faces. After every route above, the nudge included, has failed, so that a join any of them takes
+    // stays as it was.
+    if op == BoolOp::Union && !APART.with(|c| c.get()) {
+        APART.with(|c| c.set(true));
+        let (r, diagnostics) = capture_boolean_diagnostics(|| crate::coplanar::boolean_grown(a, b, op));
+        APART.with(|c| c.set(false));
+        match r {
+            Some(Ok(Some(body))) => {
+                let (ok, v) = check(&body);
+                if ok {
+                    merge(diagnostics);
+                    let mut event = BooleanFallback::new(BooleanStrategy::CoplanarSeparation);
+                    event.face_shift_mm = size * 0.0137;
+                    record(event);
+                    return Ok(Some(body));
+                }
+                last = format!("{last}; faces grown apart gave an implausible volume {v:.4}");
+            }
+            Some(Err(e)) => last = format!("{last}; {e}"),
+            Some(Ok(None)) | None => {}
+        }
+    }
     // The tries at the meeting region's scale come last, after every strategy that answered
     // before them, so a result any of those gave is kept as it was.
     if let Some(body) = fine(&mut last) {
