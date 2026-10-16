@@ -509,3 +509,6 @@ impl<C: PolylineableCurve, S: RobustMeshableSurface> RobustMeshableShape
 }
 
 mod triangulation;
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub use triangulation::include_test_hooks;

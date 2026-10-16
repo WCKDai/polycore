@@ -142,6 +142,11 @@ Changes:
   `analyzers::collision_test_hooks`, behind a `test-hooks` feature that only
   `solidcraft-kernel`'s tests turn on, and `crates/kernel/tests/mesh_collision_equivalence.rs`
   compares the two.
+- `tessellation/triangulation.rs`: the inside test of a face's boundary also skips runs of 32
+  segments whose box, grown by the tolerance, the test's ray cannot meet. Same answers. The
+  old test is kept as `tessellation::include_test_hooks`, behind a `test-hooks` feature that
+  only `solidcraft-kernel`'s tests turn on, and `crates/kernel/tests/tess_include_equivalence.rs`
+  compares the two.
 - `lib.rs`: compiler warnings no longer fail the build. Example, test and bench targets are
   dropped (their sources are not vendored).
 
