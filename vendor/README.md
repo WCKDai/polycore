@@ -53,6 +53,12 @@ Changes:
   mirrored revolutions (ISO 10303-42 parameterises them by angle then profile, so their normal
   is the opposite of truck's; a mirroring transform reverses it again), and the modeling-surface
   wrapper passes the revolution's sense through instead of always `true`.
+- `out/geometry.rs`: a surface of revolution under a transform that commutes with turning about
+  its axis (a scale across the axis that differs from the scale along it, as a shell or offset
+  makes of a revolved face) is written as the transformed profile revolved about the
+  transformed axis. Only uniform scales were taken. Other transforms are still refused: the
+  writer stops with a formatting error, which SolidCraft's `step.rs` now reports as an export
+  error (`to_string` panicked on it).
 - `lib.rs`: compiler warnings no longer fail the build. Example and test targets are dropped
   (their sources are not vendored).
 
