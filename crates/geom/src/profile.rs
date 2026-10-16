@@ -372,6 +372,10 @@ pub struct Loop2 {
 }
 
 impl Loop2 {
+    /// The radius of the largest circle inside the loop, to about `tol` ([`Region2::inradius`]).
+    pub fn inradius(&self, tol: f64) -> f64 {
+        max_clearance(&[self.polyline(tol)])
+    }
     /// Full circle as two half arcs (counter-clockwise).
     pub fn circle(center: Vec2, radius: f64) -> Loop2 {
         Loop2 {
@@ -505,6 +509,79 @@ impl Region2 {
     pub fn contains(&self, p: Vec2) -> bool {
         self.outer.contains(p) && !self.holes.iter().any(|h| h.contains(p))
     }
+    /// The radius of the largest circle inside the region: how far its sides can move inwards
+    /// before they meet (a taper going in closes it there). Found by a grid search refined
+    /// around the best point, to about `tol`.
+    pub fn inradius(&self, tol: f64) -> f64 {
+        let loops: Vec<Vec<Vec2>> = std::iter::once(&self.outer).chain(&self.holes).map(|l| l.polyline(tol)).collect();
+        max_clearance(&loops)
+    }
+}
+
+/// The largest distance from a point inside `loops` (even-odd) to their sides, by a grid search
+/// over their box refined around the best point. Zero for an empty or degenerate outline.
+fn max_clearance(loops: &[Vec<Vec2>]) -> f64 {
+    let sides: Vec<(Vec2, Vec2)> = loops
+        .iter()
+        .flat_map(|pl| (0..pl.len()).filter_map(move |i| Some((*pl.get(i)?, *pl.get((i + 1) % pl.len())?))))
+        .filter(|(a, b)| a.dist(*b) > 0.0)
+        .collect();
+    let (Some(lo), Some(hi)) = (
+        sides.iter().map(|s| s.0).reduce(|a, b| Vec2::new(a.x.min(b.x), a.y.min(b.y))),
+        sides.iter().map(|s| s.0).reduce(|a, b| Vec2::new(a.x.max(b.x), a.y.max(b.y))),
+    ) else {
+        return 0.0;
+    };
+    let inside = |p: Vec2| {
+        let mut odd = false;
+        for (a, b) in &sides {
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                odd = !odd;
+            }
+        }
+        odd
+    };
+    let clearance = |p: Vec2| -> f64 {
+        if !inside(p) {
+            return 0.0;
+        }
+        sides
+            .iter()
+            .map(|(a, b)| {
+                let ab = *b - *a;
+                let t = ((p - *a).dot(ab) / ab.len2()).clamp(0.0, 1.0);
+                p.dist(*a + ab * t)
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    const N: usize = 32;
+    let size = hi - lo;
+    let mut best = (0.0, (lo + hi) * 0.5);
+    for i in 0..=N {
+        for j in 0..=N {
+            let p = Vec2::new(lo.x + size.x * i as f64 / N as f64, lo.y + size.y * j as f64 / N as f64);
+            let c = clearance(p);
+            if c > best.0 {
+                best = (c, p);
+            }
+        }
+    }
+    // Refine: try the eight neighbours, halving the step whenever none is better.
+    let mut step = size.x.max(size.y) / N as f64;
+    for _ in 0..60 {
+        if step < size.x.max(size.y) * 1e-9 {
+            break;
+        }
+        let around = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)];
+        match around.iter().map(|(dx, dy)| best.1 + Vec2::new(dx * step, dy * step)).map(|p| (clearance(p), p)).max_by(|a, b| a.0.total_cmp(&b.0)) {
+            Some(n) if n.0 > best.0 => best = n,
+            _ => step *= 0.5,
+        }
+    }
+    best.0
+}
+
+impl Region2 {
     /// Triangles covering the region (for filled display), by slabs between the vertex
     /// heights: inside each slab the boundary edges don't cross, so consecutive crossings pair
     /// up into trapezoids.
@@ -670,6 +747,22 @@ mod tests {
 
     fn solid(l: Loop2) -> Region2 {
         Region2 { outer: l, holes: Vec::new() }
+    }
+
+    /// #1602: the largest circle inside a region, which bounds how far a taper can go.
+    #[test]
+    fn inradius_of_rectangles_circles_and_rings() {
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-3 * b.max(1.0);
+        let rect = Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 4.0), Vec2::new(0.0, 4.0)]);
+        assert!(close(solid(rect.clone()).inradius(1e-3), 2.0), "{}", solid(rect.clone()).inradius(1e-3));
+        assert!(close(rect.inradius(1e-3), 2.0));
+        let disc = Loop2::circle(Vec2::new(3.0, -2.0), 5.0);
+        assert!(close(solid(disc.clone()).inradius(1e-4), 5.0), "{}", solid(disc).inradius(1e-4));
+        // A ring 10 to 6: the material is 4 wide (radius 2); the hole alone has radius 6.
+        let ring = Region2 { outer: Loop2::circle(Vec2::ZERO, 10.0), holes: vec![Loop2::circle(Vec2::ZERO, 6.0).reversed()] };
+        assert!(close(ring.inradius(1e-4), 2.0), "{}", ring.inradius(1e-4));
+        assert!(close(ring.holes[0].inradius(1e-4), 6.0));
+        assert_eq!(Region2::default().inradius(1e-3), 0.0);
     }
 
     #[test]
