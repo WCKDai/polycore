@@ -2217,6 +2217,34 @@ fn directions(a: &Body, b: &Body) -> Option<Vec<Vec3>> {
     Some(dirs)
 }
 
+/// The direction `b` is a prism (or a stack of prisms) along: the first of its planar faces'
+/// normals along which it is one. `None` when there is none.
+pub(crate) fn prism_axis(b: &Body) -> Option<Vec3> {
+    if b.face_count() > MAX_PLANAR_SEGMENTS {
+        return None;
+    }
+    let tol = (b.size() * 1e-7).max(1e-9) * 10.0;
+    let index = LazyIndex::new(b, 1);
+    let mut tried: Vec<Vec3> = Vec::new();
+    for f in b.solid.face_iter() {
+        let mt::Surface::Plane(p) = f.oriented_surface() else { continue };
+        let n = p.normal();
+        let Some(n) = Vec3::new(n.x, n.y, n.z).normalized() else { continue };
+        if tried.iter().any(|m| m.dot(n).abs() > 1.0 - 1e-9) {
+            continue;
+        }
+        tried.push(n);
+        if tried.len() > 16 {
+            return None;
+        }
+        let plane = Plane::from_normal(Vec3::ZERO, n)?;
+        if stack_tagged(b, n, &plane, tol, &index).is_some() {
+            return Some(n);
+        }
+    }
+    None
+}
+
 /// Whether a boolean of sections left one of area `v` as it was (area `u` after): the same to
 /// within rounding, as the very same outline gives (a change is at least a sliver `tol` wide).
 fn same_area(u: f64, v: f64, tol: f64) -> bool {
