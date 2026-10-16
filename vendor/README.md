@@ -76,6 +76,12 @@ Changes:
 
 ## truck-meshalgo 0.4.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
+CAM uses a separate `tessellation/verification.rs` path adapted from the original
+fixed-tolerance triangulator. It propagates failed projection/refinement explicitly,
+retains a physical tolerance independent of display LOD, and uses an original bounded
+boundary candidate index plus Spade bulk loading. Display meshing remains unchanged.
+The adapter is exposed only through the guarded kernel verification-mesh API.
+
 Changes:
 - `tessellation/mod.rs`, `triangulation.rs`: a separate provisional `preview_face`
   path accepts at most 4,096 already sampled boundary points and a fixed grid of
