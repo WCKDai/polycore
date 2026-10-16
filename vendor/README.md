@@ -135,6 +135,13 @@ Changes:
   stops refining a face's grid at 16 384 points. Each edge is still divided once for both its
   faces. `triangulation` and `robust_triangulation` divide by the chord tolerance alone, as
   before.
+- `analyzers/collision.rs`: the collision search builds each triangle's box once, filters the
+  sweep's open list by box overlap as it goes (it cloned the list for every triangle and built
+  both boxes for every pair), and runs the exact triangle tests on the rayon pool, in order
+  (sequential on wasm). Same collisions in the same order. The old search is kept as
+  `analyzers::collision_test_hooks`, behind a `test-hooks` feature that only
+  `solidcraft-kernel`'s tests turn on, and `crates/kernel/tests/mesh_collision_equivalence.rs`
+  compares the two.
 - `lib.rs`: compiler warnings no longer fail the build. Example, test and bench targets are
   dropped (their sources are not vendored).
 
