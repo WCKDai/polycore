@@ -47,6 +47,8 @@ mod iges_out;
 #[cfg(test)]
 mod intersection_curve_tests;
 #[cfg(test)]
+mod issue_1038_tests;
+#[cfg(test)]
 mod issue_1080_tests;
 #[cfg(test)]
 mod issue_616_tests;

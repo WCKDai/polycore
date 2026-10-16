@@ -42,6 +42,18 @@ Changes:
   wrappers that drop the history; the `*_with_history` forms return the same solid with the
   history as an `Option` (`None` where a face or edge went unrecorded).
 
+## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
+
+Changes:
+- `decorators/intersection_curve.rs`: `IntersectionCurve::parameter_division` divides as
+  `algo::curve::parameter_division` does (the same split points, in the same order), but each
+  point's projection onto the two surfaces starts from the parameters of the point that begins
+  its piece, instead of a search of the whole surfaces (a grid pre-search of a B-spline surface
+  for every point: a small hole on a large curved face took seconds, #1038). A hinted result
+  farther from the leader's point than the curve's tolerance (the projection settled on another
+  part of a surface, such as the far side of a small hole) is dropped for the search from
+  nothing, as before. `crates/kernel/src/issue_1038_tests.rs` holds it to that search.
+
 ## truck-stepio 0.3.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
 Only the writer (`out`) is used; SolidCraft reads STEP with its own reader.
