@@ -908,6 +908,18 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
                 return Ok(Some(body));
             }
         }
+        // A whole turn of a cylinder or cone bounded by one wire along its seam (as STEP files
+        // write them) can't be divided by a loop lying inside it, and the tries below end in a
+        // nudged tool, or fail: the same boolean with such faces in two halves, which is exact.
+        if attempt == 1 && crate::seam_faces::needed(a, b) {
+            let (halves, diagnostics) = capture_boolean_diagnostics(|| crate::seam_faces::boolean(a, b, op, &boolean));
+            if let Some(Ok(r)) = halves
+                && r.as_ref().is_none_or(|body| check(body).0)
+            {
+                merge(diagnostics);
+                return Ok(r);
+            }
+        }
         let shift = mt::Vector3::new(j[0], j[1], j[2]) * (size * 0.01);
         for k in [2e-3, 5e-4] {
             let tol = (size * k).max(1e-5);
