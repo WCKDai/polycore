@@ -300,6 +300,14 @@ thread_local! {
 /// The result carries its exact history ([`Body::history`]) over the operands `[a, b]`,
 /// whichever way it was made, or none where a step it took does not report one.
 pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
+    // Earlier coarse bores can leave a junction a later pattern copy cannot intersect.
+    // Resolve conical-cut junctions from the first copy, while the operands are unchanged.
+    if op == BoolOp::Cut && !APART.with(|c| c.get()) && conical_cut_junction(a, b) {
+        let refined = |a: &Body, b: &Body, op| boolean_whole_with_refinement(a, b, op, true);
+        if let Ok(result) = boolean_via(a, b, op, &refined) {
+            return Ok(result);
+        }
+    }
     let r = boolean_via(a, b, op, &boolean_whole);
     if r.is_ok() || !crate::tangent_cylinders::needed(a, b) {
         return r;
@@ -310,6 +318,19 @@ pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         crate::tangent_cylinders::boolean(a, b, op, &boolean_whole).unwrap_or_else(|| Err(KernelError::Failed("no split of faces helps".into())))
     };
     boolean_via(a, b, op, &split).or(r)
+}
+
+/// A conical cutter meeting a body with an earlier conical cut needs finer tracing at
+/// their junctions. Guard the analytic recognition as well as the Boolean itself.
+fn conical_cut_junction(a: &Body, b: &Body) -> bool {
+    guard("conical cut junction", || {
+        let conical = |body: &Body| {
+            let tol = (body.size() * 1e-5).max(1e-7);
+            body.solid.face_iter().any(|face| matches!(crate::offset::surf_of(face, tol), Some(crate::offset::Surf::Cone { .. })))
+        };
+        Ok(conical(b) && conical(a))
+    })
+    .unwrap_or(false)
 }
 
 /// [`boolean`], the boolean of the whole bodies taken by `whole`.
@@ -548,6 +569,10 @@ fn swept_prism(a: &Body, b: &Body, op: BoolOp) -> Option<Body> {
 }
 
 fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
+    boolean_whole_with_refinement(a, b, op, false)
+}
+
+fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -> Result<Option<Body>> {
     if let Some(body) = swept_prism(a, b, op) {
         return Ok(Some(body));
     }
@@ -622,6 +647,25 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
         };
         (consistent, v)
     };
+    if refine {
+        let keep: Vec<Vec<Vec3>> = a.split_keep().iter().chain(b.split_keep()).cloned().collect();
+        // Bounded to two finer meshes; no tool displacement or relaxed acceptance tests.
+        for k in [1e-5, 1e-6] {
+            let tol = (size * k).max(1e-6);
+            if let Ok((solid, history)) = truck_boolean(a, b, op, None, tol)
+                && !solid.boundaries().is_empty()
+                && let Ok(body) = guard("refined boolean result", || recorded::truck_result(solid, history, size, &keep, &counts))
+                && check(&body).0
+                && crate::boolean_guard::check_retry(a, b, op, Some(&body)).is_ok()
+            {
+                let mut event = BooleanFallback::new(BooleanStrategy::RefinedTolerance);
+                event.tolerance_mm = tol;
+                record(event);
+                return Ok(Some(body));
+            }
+        }
+        return Err(KernelError::Failed("no reliable result at refined tolerances".into()));
+    }
     // One body clear of or inside the other: no intersection needed.
     // Kept for the end when the facetings disagree with it: bodies that touch along curved
     // faces can pass through each other slightly, and often can't be intersected.
