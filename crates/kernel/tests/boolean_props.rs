@@ -285,9 +285,9 @@ fn check(r: Result<(), TestCaseError>) {
     }
 }
 
-/// A box and a cylinder in general position: the intersect is refused as an implausible volume.
+/// A box and a cylinder in general position: the intersect is a sliver 0.5 mm thick. It was
+/// refused as an implausible volume, because the meshes of the check were faceted at 0.017 mm.
 #[test]
-#[ignore = "kernel bug, #1647"]
 fn generic_box_cylinder_intersect() {
     let a = Prim::Box { at: [11.483767761089219, 4.801612107504224, 3.6313476467611787], size: [4.789088988834864, 3.0, 10.419335961063835] };
     let b = Prim::Cyl { at: [29.2480632732879, 8.3683289461485, 6.947922225984966], axis: 2, r: 13.502884497756853, h: 19.719218725477496 };

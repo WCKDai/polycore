@@ -512,6 +512,15 @@ fn meeting_size(a: &Body, b: &Body) -> f64 {
     if s.x > 0.0 && s.y > 0.0 && s.z > 0.0 { s.x.min(s.y).min(s.z) } else { f64::INFINITY }
 }
 
+/// Smallest side of the box where the bounds of two meshes overlap (infinite when they don't).
+/// Unlike [`meeting_size`], this follows curved faces: a cylinder's vertices are only the points
+/// on its seam, so its vertex box says nothing about where its side reaches.
+fn mesh_meeting_size(a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh) -> f64 {
+    let (ba, bb) = (a.bounds(), b.bounds());
+    let s = solidcraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) }.size();
+    if s.x > 0.0 && s.y > 0.0 && s.z > 0.0 { s.x.min(s.y).min(s.z) } else { f64::INFINITY }
+}
+
 /// Whether a result volume is plausible for `op`: within the bounds the operands' volumes
 /// leave, plus the slack the meshed volumes are measured to.
 fn plausible(v: f64, op: BoolOp, va: f64, vb: f64, slack: f64) -> bool {
@@ -586,7 +595,7 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
     // refined: a round side trimmed to a thin band (a short boss crossing a gently sloping
     // floor) is otherwise spanned by triangles cutting through it, which reads as missing
     // material.
-    let tol_m = (size * 5e-4).min(meeting_size(a, b) * 2e-3).max(size * 1e-5);
+    let mut tol_m = (size * 5e-4).min(meeting_size(a, b) * 2e-3).max(size * 1e-5);
     // A prism pair (a plate and the tool through it) is decided exactly in 2D, with no mesh of
     // either operand. The sampled shortcuts below need a refined mesh of both, and that mesh is
     // most of what a boolean costs: a pattern or a multi-profile sketch rebuilds the whole
@@ -610,7 +619,30 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
             return Ok(Some(body.clone()));
         }
     }
-    let meshes = (a.tessellate_with(tol_m, true).ok(), b.tessellate_with(tol_m, true).ok());
+    let mut meshes = (a.tessellate_with(tol_m, true).ok(), b.tessellate_with(tol_m, true).ok());
+    // The vertex boxes above miss a curved operand's reach (a cylinder has only seam vertices),
+    // so a thin meeting region of curved bodies kept the coarse step: a sliver 0.5 mm thick was
+    // faceted at 0.017 mm and a correct result failed the membership test. The meshes just made
+    // do span the bodies, so the step is set again from where they meet and the meshes are
+    // remade once, when that is a much finer step.
+    let refined = match &meshes {
+        // A meeting box only a few steps thick is the tessellation error of bodies that merely
+        // touch or miss each other: a finer mesh there cannot help and only slows the operation.
+        (Some(ma), Some(mb)) => {
+            let meet = mesh_meeting_size(ma, mb);
+            (meet > tol_m * 8.0).then(|| (size * 5e-4).min(meet * 2e-3).max(size * 1e-5))
+        }
+        _ => None,
+    };
+    if let Some(refined) = refined
+        && refined < tol_m * 0.5
+    {
+        let again = (a.tessellate_with(refined, true).ok(), b.tessellate_with(refined, true).ok());
+        if again.0.is_some() && again.1.is_some() {
+            tol_m = refined;
+            meshes = again;
+        }
+    }
     let (va, vb) = match &meshes {
         (Some(ma), Some(mb)) => (ma.measure().volume, mb.measure().volume),
         _ => (volume(a), volume(b)),
