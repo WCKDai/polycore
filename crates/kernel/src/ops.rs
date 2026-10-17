@@ -300,6 +300,10 @@ thread_local! {
 /// The result carries its exact history ([`Body::history`]) over the operands `[a, b]`,
 /// whichever way it was made, or none where a step it took does not report one.
 pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
+    crate::profile::timed(crate::profile::Kind::Boolean, || boolean_untimed(a, b, op))
+}
+
+fn boolean_untimed(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     // Earlier coarse bores can leave a junction a later pattern copy cannot intersect.
     // Resolve conical-cut junctions from the first copy, while the operands are unchanged.
     if op == BoolOp::Cut && !APART.with(|c| c.get()) && conical_cut_junction(a, b) {
@@ -1273,6 +1277,10 @@ pub(crate) fn by_lumps(a: &Body, b: &Body, la: Vec<Body>, lb: Vec<Body>, op: Boo
 /// intersection work (many identical pattern tools, #261). `None` when any two may meet, or a
 /// body is a mesh: the caller unions those the usual way.
 pub fn union_apart(bodies: &[Body]) -> Result<Option<Body>> {
+    crate::profile::timed(crate::profile::Kind::Boolean, || union_apart_untimed(bodies))
+}
+
+fn union_apart_untimed(bodies: &[Body]) -> Result<Option<Body>> {
     if bodies.len() < 2 || bodies.len() > 10_000 || bodies.iter().any(Body::is_mesh) {
         return Ok(None);
     }
@@ -1311,6 +1319,10 @@ pub fn union_apart(bodies: &[Body]) -> Result<Option<Body>> {
 /// shows they are apart (profiles apart in their sketch, extruded alike). `None` for fewer than
 /// two bodies or a mesh.
 pub fn join_apart(bodies: &[Body]) -> Result<Option<Body>> {
+    crate::profile::timed(crate::profile::Kind::Boolean, || join_apart_untimed(bodies))
+}
+
+fn join_apart_untimed(bodies: &[Body]) -> Result<Option<Body>> {
     if bodies.len() < 2 || bodies.len() > 10_000 || bodies.iter().any(Body::is_mesh) {
         return Ok(None);
     }
