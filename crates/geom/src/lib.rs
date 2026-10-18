@@ -23,6 +23,7 @@ pub mod mesh_distance;
 pub mod network;
 mod plane;
 mod profile;
+pub mod section;
 pub mod spline_space;
 pub mod tess;
 pub mod tspline;
