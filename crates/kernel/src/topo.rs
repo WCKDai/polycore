@@ -554,7 +554,7 @@ pub fn merged_topology(b: &Body, mesh: &Mesh) -> Result<TopoCounts> {
         }
         let gs: Vec<usize> = faces.iter().map(|f| find(&mut fp, *f)).collect();
         // A free-form face pinched to a point (a horn torus at its axis): a zero-length edge
-        // inside one face. Fusion keeps a degenerate loop there (two edges and a vertex).
+        // inside one face. A degenerate loop is kept there (two edges and a vertex).
         if let Some(g) = gs.first()
             && gs.iter().all(|x| x == g)
             && matches!(surfs.get(*g), Some(Surf::Other(_)))
