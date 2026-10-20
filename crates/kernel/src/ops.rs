@@ -874,6 +874,40 @@ thread_local! {
     static APART: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a union runs with a bore narrowed off a common cylinder (no second round).
     static BORES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The intersections left to the booleans running under [`with_attempt_budget`], if any.
+    static ATTEMPTS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// `f`, with the booleans it runs on this thread allowed `attempts` of the kernel's own
+/// intersections between them (each try of a boolean takes one): past those, a boolean fails at
+/// once instead of trying on. For a caller that would rather report a pair it could not answer
+/// than wait on bodies the boolean cannot take, and the same on every machine. A budget inside
+/// another takes the smaller and uses up the outer one's too.
+pub fn with_attempt_budget<T>(attempts: usize, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<usize>, usize);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let left = ATTEMPTS.with(|c| c.get()).unwrap_or(0);
+            ATTEMPTS.with(|c| c.set(self.0.map(|outer| outer.saturating_sub(self.1.saturating_sub(left)))));
+        }
+    }
+    let outer = ATTEMPTS.with(|c| c.get());
+    let mine = outer.map_or(attempts, |o| o.min(attempts));
+    ATTEMPTS.with(|c| c.set(Some(mine)));
+    let _restore = Restore(outer, mine);
+    f()
+}
+
+/// Takes one of the attempts left under [`with_attempt_budget`]; false when none is left.
+fn take_attempt() -> bool {
+    ATTEMPTS.with(|c| match c.get() {
+        None => true,
+        Some(0) => false,
+        Some(n) => {
+            c.set(Some(n - 1));
+            true
+        }
+    })
 }
 
 /// Boolean of two bodies. The result may be empty (`Ok(None)`) for a cut that removes
@@ -1829,6 +1863,9 @@ pub(crate) fn nudged(r: Body, nb: &Body, counts: &[(usize, usize)]) -> Body {
 /// copies) keep the operands' face and edge order, and so does moving the result back, so the
 /// history truck records holds for the operands themselves.
 pub(crate) fn truck_boolean(a: &Body, b: &Body, op: BoolOp, shift: Option<mt::Vector3>, tol: f64) -> Result<(Solid, Option<recorded::Shapeops>)> {
+    if !take_attempt() {
+        return Err(KernelError::Failed("no result in the tries it was given".into()));
+    }
     guard("boolean", || {
         let (mut sa, mut sb) = (a.deep_copy(), b.deep_copy());
         if let Some(shift) = shift {

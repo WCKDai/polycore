@@ -163,7 +163,7 @@ pub use build::{
     path_polyline, revolve, revolve_whole, sphere, sweep, sweep_with, torus,
 };
 pub use clearance::{Clearance, Occupancy};
-pub use coaxial_overlap::{CoaxialOverlap, coaxial_overlap};
+pub use coaxial_overlap::{CoaxialOverlap, coaxial_candidate, coaxial_overlap};
 pub use continuity::{
     ContinuityReport, ContinuityTolerances, EdgePick, MAX_SAMPLES, MIN_SAMPLES, SeamReport, SeamVerdict, SeamWorst, pick_edges, seam_diagnostics,
 };
@@ -189,7 +189,7 @@ pub use native::{decode_native_body, encode_native_body, native_preview_mesh};
 pub use offset::with_same_surface;
 pub use ops::{
     BoolOp, boolean, can_join_all_touching_faces, can_join_touching_faces, compound_disjoint_extrusions, half_space, is_planar, join_apart,
-    split_by_plane, transform, transform_matrix, union_apart,
+    split_by_plane, transform, transform_matrix, union_apart, with_attempt_budget,
 };
 pub use polybool::{faceted_boolean, planar_boolean};
 pub use polyhedron::{HalfSpace, convex_polyhedron, draft, offset_faces, shell};
