@@ -347,6 +347,11 @@ struct Nurbs {
 
 impl Nurbs {
     fn eval(&self, t: f64) -> Option<V3> {
+        let h = self.eval_h(t)?;
+        (h[3].abs() > 1e-300).then(|| [h[0] / h[3], h[1] / h[3], h[2] / h[3]])
+    }
+    /// The homogeneous point (x·w, y·w, z·w, w) at `t`.
+    fn eval_h(&self, t: f64) -> Option<[f64; 4]> {
         let p = self.deg;
         let n = self.pts.len();
         if n == 0 || self.knots.len() != n + p + 1 {
@@ -368,8 +373,7 @@ impl Nurbs {
                 d[j] = [0, 1, 2, 3].map(|c| (1.0 - alpha) * x[c] + alpha * y[c]);
             }
         }
-        let h = d[p];
-        (h[3].abs() > 1e-300).then(|| [h[0] / h[3], h[1] / h[3], h[2] / h[3]])
+        d.get(p).copied()
     }
     fn range(&self) -> (f64, f64) {
         (self.knots.get(self.deg).copied().unwrap_or(0.0), self.knots.get(self.pts.len()).copied().unwrap_or(0.0))
@@ -459,6 +463,11 @@ impl<'a> Tr<'a> {
     }
     /// The entity's own transformation (its chain), in millimetres.
     fn own_xf(&self, seq: i64, depth: usize) -> R<Xf> {
+        self.own_xf_in(seq, depth, self.f.unit)
+    }
+    /// The entity's own transformation with translations in units of `unit` millimetres (1 for
+    /// a curve in a surface's parameter space, which has no length unit).
+    fn own_xf_in(&self, seq: i64, depth: usize, unit: f64) -> R<Xf> {
         let de = self.de(seq)?;
         if de.xform <= 0 || depth > MAX_DEPTH {
             return Ok(Xf::ID);
@@ -473,13 +482,15 @@ impl<'a> Tr<'a> {
             for (col, x) in r.iter_mut().enumerate() {
                 *x = self.n(t, 1 + row * 4 + col)?;
             }
-            r[3] *= self.f.unit;
+            r[3] *= unit;
         }
-        let parent = self.own_xf(t, depth + 1)?;
+        let parent = self.own_xf_in(t, depth + 1, unit)?;
         Ok(parent.then(&Xf(m)))
     }
     fn pt(&self, seq: i64, i: usize) -> R<V3> {
-        let u = self.f.unit;
+        self.pt_in(seq, i, self.f.unit)
+    }
+    fn pt_in(&self, seq: i64, i: usize, u: f64) -> R<V3> {
         Ok([self.n(seq, i)? * u, self.n(seq, i + 1)? * u, self.n(seq, i + 2)? * u])
     }
     /// A point entity (116) or direction (123), placed.
@@ -646,6 +657,9 @@ impl<'a> Tr<'a> {
     }
 
     fn nurbs_curve(&self, seq: i64, x: &Xf) -> R<Nurbs> {
+        self.nurbs_curve_in(seq, x, self.f.unit)
+    }
+    fn nurbs_curve_in(&self, seq: i64, x: &Xf, unit: f64) -> R<Nurbs> {
         let k = self.i(seq, 1)?;
         let m = self.i(seq, 2)?;
         if !(0..=MAX_LIST as i64).contains(&k) || !(1..=32).contains(&m) || m > k.max(1) + 1 {
@@ -665,7 +679,7 @@ impl<'a> Tr<'a> {
             if !(w > 0.0) {
                 return Err(format!("entity {seq}: non-positive weight"));
             }
-            let p = x.point(self.pt(seq, base_p + 3 * j)?);
+            let p = x.point(self.pt_in(seq, base_p + 3 * j, unit)?);
             pts.push([p[0] * w, p[1] * w, p[2] * w, w]);
         }
         if knots.windows(2).any(|w| w[1] < w[0]) {
@@ -881,6 +895,61 @@ impl<'a> Tr<'a> {
             140 => Err(format!("entity {seq}: offset surfaces are not read")),
             t => Err(format!("surface type {t} is not read")),
         }
+    }
+
+    /// The start point of a curve in a surface's parameter space (the B curve of a curve on a
+    /// surface, 142): its (u, v) are the first two coordinates. Lines, arcs, B-splines and
+    /// composites of them, as the specification lists for parameter-space curves.
+    fn param_start(&self, seq: i64, depth: usize) -> R<V3> {
+        if depth > MAX_DEPTH {
+            return Err("parameter-space curves nested too deeply".into());
+        }
+        let de = self.de(seq)?;
+        let x = self.own_xf_in(seq, 0, 1.0)?;
+        let p = match de.typ {
+            110 => self.pt_in(seq, 1, 1.0)?,
+            100 => [self.n(seq, 4)?, self.n(seq, 5)?, self.n(seq, 1)?],
+            126 => {
+                let nb = self.nurbs_curve_in(seq, &Xf::ID, 1.0)?;
+                nb.eval(nb.range().0).ok_or_else(|| format!("entity {seq}: B-spline cannot be evaluated"))?
+            }
+            102 if self.i(seq, 1)? > 0 => self.param_start(self.i(seq, 2)?, depth + 1)?,
+            t => return Err(format!("parameter-space curve type {t} is not read")),
+        };
+        Ok(x.point(p))
+    }
+
+    /// The point of a B-spline surface (128) at parameters (u, v), placed as `surface` places it.
+    fn surface_point(&self, seq: i64, xf: &Xf, u: f64, v: f64) -> R<V3> {
+        if self.de(seq)?.typ != 128 {
+            return Err(format!("entity {seq}: only B-spline surfaces are evaluated"));
+        }
+        let x = xf.then(&self.own_xf(seq, 0)?);
+        let (k1, k2, m1, m2) = (self.i(seq, 1)?, self.i(seq, 2)?, self.i(seq, 3)?, self.i(seq, 4)?);
+        if !(0..=4096).contains(&k1) || !(0..=4096).contains(&k2) || !(1..=32).contains(&m1) || !(1..=32).contains(&m2) {
+            return Err(format!("entity {seq}: bad B-spline surface size"));
+        }
+        let (k1, k2, m1, m2) = (k1 as usize, k2 as usize, m1 as usize, m2 as usize);
+        let (n1, n2) = (k1 + m1 + 2, k2 + m2 + 2);
+        let s_knots: Vec<f64> = (0..n1).map(|j| self.n(seq, 10 + j)).collect::<R<_>>()?;
+        let t_knots: Vec<f64> = (0..n2).map(|j| self.n(seq, 10 + n1 + j)).collect::<R<_>>()?;
+        let base_w = 10 + n1 + n2;
+        let base_p = base_w + (k1 + 1) * (k2 + 1);
+        // Each row of the net at u, then the column of those points at v (homogeneous, so the
+        // weights combine as the rational tensor product does).
+        let mut column = Vec::with_capacity(k2 + 1);
+        for j in 0..=k2 {
+            let mut row = Vec::with_capacity(k1 + 1);
+            for i in 0..=k1 {
+                let idx = j * (k1 + 1) + i;
+                let w = self.n(seq, base_w + idx)?;
+                let p = x.point(self.pt(seq, base_p + 3 * idx)?);
+                row.push([p[0] * w, p[1] * w, p[2] * w, w]);
+            }
+            let h = Nurbs { deg: m1, knots: s_knots.clone(), pts: row }.eval_h(u).ok_or("surface cannot be evaluated")?;
+            column.push(h);
+        }
+        Nurbs { deg: m2, knots: t_knots, pts: column }.eval(v).ok_or_else(|| "surface cannot be evaluated".into())
     }
 
     /// The natural boundary of a B-spline surface (its four edge curves), for trimmed surfaces
@@ -1274,10 +1343,10 @@ fn trimmed(t: &mut Tr, sw: &mut Sewer, seq: i64) -> R<FaceB> {
             let n1 = t.i(seq, 2)?;
             let n2 = t.i(seq, 3)?.clamp(0, MAX_LIST as i64) as usize;
             let mut loops = Vec::new();
-            let outer = if n1 == 0 { t.natural_boundary(surf_seq, &xf)? } else { cos_curve(t, t.i(seq, 4)?, &xf)? };
+            let outer = if n1 == 0 { t.natural_boundary(surf_seq, &xf)? } else { cos_curve(t, t.i(seq, 4)?, &xf, surf_seq)? };
             loops.push(loop_of(t, sw, outer));
             for k in 0..n2 {
-                let segs = cos_curve(t, t.i(seq, 5 + k)?, &xf)?;
+                let segs = cos_curve(t, t.i(seq, 5 + k)?, &xf, surf_seq)?;
                 loops.push(loop_of(t, sw, segs));
             }
             loops.retain(|l| !l.is_empty());
@@ -1311,8 +1380,16 @@ fn trimmed(t: &mut Tr, sw: &mut Sewer, seq: i64) -> R<FaceB> {
     }
 }
 
-/// The model-space curve of a curve on a surface (142).
-fn cos_curve(t: &mut Tr, seq: i64, xf: &Xf) -> R<Vec<Seg>> {
+/// The model-space curve of a curve on a surface (142) bounding a trimmed `surface`, its pieces
+/// head to tail.
+///
+/// A curve on a surface is one curve given twice: B in the surface's parameter space and C in
+/// model space, both running the same way (C = S∘B). A composite C must run each piece on from
+/// the end of the one before, but some exporters write its pieces in order with some of them
+/// reversed, so the loop does not close and the face is lost. The pieces are turned to run on,
+/// starting where S(B) starts (the end of the first piece there), so the loop also keeps the
+/// sense the file gives it (outer loop and holes the opposite ways round).
+fn cos_curve(t: &mut Tr, seq: i64, xf: &Xf, surface: i64) -> R<Vec<Seg>> {
     let de = t.de(seq)?;
     if de.typ != 142 {
         return t.curve(seq, xf, 0);
@@ -1322,7 +1399,27 @@ fn cos_curve(t: &mut Tr, seq: i64, xf: &Xf) -> R<Vec<Seg>> {
     if c <= 0 {
         return Err("a curve on a surface without its model-space curve".into());
     }
-    t.curve(c, &x, 0)
+    let segs = t.curve(c, &x, 0)?;
+    let b = t.i(seq, 3).unwrap_or(0);
+    let start = if b > 0 { t.param_start(b, 0).and_then(|p| t.surface_point(surface, xf, p[0], p[1])).ok() } else { None };
+    Ok(head_to_tail(segs, start, t.tol))
+}
+
+/// Pieces of a composite curve turned so that each starts where the one before ends, the first
+/// at the end nearer `start` (when known). A closed piece (its ends within `tol`, the sewing
+/// tolerance that decides they are one vertex) keeps its direction.
+fn head_to_tail(segs: Vec<Seg>, start: Option<V3>, tol: f64) -> Vec<Seg> {
+    let mut prev = start;
+    segs.into_iter()
+        .map(|s| {
+            let s = match prev {
+                Some(p) if norm(sub(s.a, s.b)) > tol && norm(sub(s.b, p)) < norm(sub(s.a, p)) => s.reversed(),
+                _ => s,
+            };
+            prev = Some(s.b);
+            s
+        })
+        .collect()
 }
 
 /// The model-space curves of a boundary (141), each in its sense.
