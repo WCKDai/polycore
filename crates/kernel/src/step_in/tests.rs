@@ -1709,3 +1709,40 @@ fn explicit_outer_bound_crossing_a_closed_nurbs_seam_stays_trimmed() {
         assert!((mesh.measure().area - 42.0).abs() < 0.01, "sense={sense}: area {}", mesh.measure().area);
     }
 }
+
+#[test]
+fn extruded_ellipse_patch_crossing_profile_seam_stays_trimmed() {
+    for (sense, outer) in [(true, true), (false, true), (true, false)] {
+        for radius in [9.0, 3000.0] {
+            let text = shallow_cylinder_patch_at_radius(sense, outer, radius);
+            let old = format!("#5=CYLINDRICAL_SURFACE('',#4,{radius});");
+            let angle = 3.0 / radius;
+            let surface = format!(
+                "#5=SURFACE_OF_LINEAR_EXTRUSION('',#35,#18);
+#35=ELLIPSE('',#36,{radius},{radius});
+#36=AXIS2_PLACEMENT_3D('',#1,#2,#37);
+#37=DIRECTION('',({},{},0.));",
+                angle.cos(),
+                angle.sin()
+            );
+            assert!(text.contains(&old));
+            let text = text.replacen(&old, &surface, 1);
+            let imported = step_import(&text).unwrap();
+            assert_eq!(imported.warnings, ["solid 'Strip': imported as an open body (the shell is not closed)"]);
+            assert_eq!(imported.bodies.len(), 1);
+            let body = &imported.bodies[0].body;
+            assert_eq!(imported.bodies[0].file_faces, 1);
+            let plan = body.display_plan(0.01).unwrap();
+            for mesh in [
+                plan.evaluate(),
+                body.display_mesh_angular(0.01, crate::DISPLAY_ANGLE).unwrap(),
+                body.reference_display_mesh_angular(0.01, crate::DISPLAY_ANGLE).unwrap(),
+                body.tessellate(0.01).unwrap(),
+            ] {
+                assert!(!mesh.triangles.is_empty());
+                assert!(mesh.bounds().diagonal() < 10.0, "radius={radius}, sense={sense}, outer={outer}: {:?}", mesh.bounds());
+                assert!((mesh.measure().area - 42.0).abs() < 0.1, "radius={radius}, sense={sense}, outer={outer}: area {}", mesh.measure().area);
+            }
+        }
+    }
+}
