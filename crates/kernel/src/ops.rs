@@ -2095,6 +2095,19 @@ pub(crate) fn rigid_placement(m: &[[f64; 4]; 4]) -> bool {
 
 /// Affine transform by a column-major 4x4 matrix (rotations, translations, reflections).
 pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
+    transform_matrix_keeping(body, m, false)
+}
+
+/// [`transform_matrix`] for showing a body where an assembly places it (world placement): the
+/// revolved faces stay turned the way the body has them instead of being searched again for
+/// every placed copy (#3044). A modelling operation keeps using [`transform_matrix`]: where a
+/// face wraps all the way round, the turn it finds depends on the copy's own coordinates, and
+/// booleans on the copy depend on that.
+pub fn place_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
+    transform_matrix_keeping(body, m, body.phased)
+}
+
+fn transform_matrix_keeping(body: &Body, m: [[f64; 4]; 4], phased: bool) -> Result<Body> {
     if m.iter().flatten().any(|x| !x.is_finite()) {
         return Err(KernelError::Invalid("non-finite transform".into()));
     }
@@ -2129,6 +2142,7 @@ pub fn transform_matrix(body: &Body, m: [[f64; 4]; 4]) -> Result<Body> {
             edges.as_ref(),
             det3(&m) < 0.0,
             rigid_placement(&m).then_some(body.coarse_missing).flatten(),
+            phased,
         )?;
         Ok(placed.with_color(body.color()).with_paint(body.paint().cloned()).with_face_sources(sources).inherit_regularization_protection(body))
     })
