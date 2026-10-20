@@ -82,6 +82,25 @@ impl SharedDisplay {
     }
 }
 
+/// The display one body shares with its placed copies (see [`Body::display_share`]), so a
+/// saved design can store the part once and give its copies the same display again.
+#[derive(Clone, Debug)]
+pub struct DisplayShare(std::sync::Arc<SharedDisplay>);
+
+impl DisplayShare {
+    pub fn new(original: Body) -> Self {
+        DisplayShare(std::sync::Arc::new(SharedDisplay::new(original)))
+    }
+    /// The body whose display the copies show.
+    pub fn original(&self) -> &Body {
+        &self.0.original
+    }
+    /// Identity: copies that show the same display have the same id.
+    pub fn id(&self) -> usize {
+        std::sync::Arc::as_ptr(&self.0) as usize
+    }
+}
+
 /// `m` placed by the rigid matrix `t` (by columns, translation in `t[3]`, as the kernel's
 /// transforms take it): positions, normals and edge polylines move, everything indexed stays.
 /// `None` for anything but a rotation and translation (a reflection would turn the triangles
@@ -974,6 +993,23 @@ impl Body {
             self.display_of = Some(std::sync::Arc::new((shared, t)));
         }
         self
+    }
+
+    /// The display this body shows placed by a matrix (by columns), when it is a placed copy of
+    /// another body.
+    pub fn display_share(&self) -> Option<(DisplayShare, [[f64; 4]; 4])> {
+        self.display_of.as_deref().map(|(shared, t)| (DisplayShare(shared.clone()), *t))
+    }
+
+    /// The same body showing `share`'s display placed by `t` (see [`Body::display_share`]).
+    pub fn with_display_share(self, share: &DisplayShare, t: [[f64; 4]; 4]) -> Body {
+        self.with_display_of(share.0.clone(), t)
+    }
+
+    /// Identity of the solid: clones of a body (and bodies a feature passed through unchanged)
+    /// share it.
+    pub fn solid_id(&self) -> usize {
+        std::sync::Arc::as_ptr(&self.solid) as usize
     }
 
     pub fn with_split_lines(mut self, s: Option<std::sync::Arc<Vec<Vec<Vec3>>>>) -> Body {
