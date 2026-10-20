@@ -7,7 +7,7 @@ use truck_modeling as mt;
 use std::collections::HashMap;
 
 use crate::body::{Body, Solid, from_p3};
-use crate::boolean_diagnostics::{BooleanFallback, BooleanStrategy, capture_boolean_diagnostics, merge, record};
+use crate::boolean_diagnostics::{BooleanFallback, BooleanStrategy, capture_boolean_diagnostics, merge, record, reject};
 use crate::boolean_record::{self as recorded, Traced};
 use crate::{KernelError, Result, guard, record};
 
@@ -1289,6 +1289,9 @@ where
         _ => (volume(a), volume(b)),
     };
     let slack = 2e-3 * (va + vb) + 1e-9;
+    // Where a result's edges can run: a candidate with an edge far outside the operands is
+    // discarded before it is meshed (#3020), as meshing such a face may never finish.
+    let reach = crate::candidate_reach::Reach::new(a, b, (meshes.0.as_ref(), meshes.1.as_ref()), size);
     // Volume bounds, then membership against the operands (catches misclassified pieces), on
     // one mesh of the result. Returns (plausible, volume).
     // Shells that touch were never fused: coincident back-to-back faces leave the intersection
@@ -1306,6 +1309,10 @@ where
             && crate::coplanar::faces_touch(a, b)
     };
     let check = |r: &Body| -> (bool, f64) {
+        if let Some(reason) = reach.as_ref().and_then(|reach| reach.runaway(r)) {
+            reject(reason);
+            return (false, f64::NAN);
+        }
         let Ok(mr) = r.tessellate_with(tol_m, true) else { return (false, f64::NAN) };
         let v = mr.measure().volume;
         let bounds = plausible(v, op, va, vb, slack);

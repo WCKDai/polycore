@@ -28,6 +28,7 @@ mod boundary;
 mod boundary_network;
 mod bridge;
 mod build;
+mod candidate_reach;
 #[cfg(test)]
 mod chamfer_sides_curved_tests;
 mod clearance;
