@@ -767,7 +767,9 @@ fn distinct_parts_convert_together_across_instances() {
 fn later_instances_show_the_first_instances_mesh_placed() {
     let imp = step_import(&two_instance_assembly()).unwrap();
     let (first, second) = (&imp.bodies[0].body, &imp.bodies[1].body);
-    assert!(first.display_of.is_none() && second.display_of.is_some());
+    // The first instance shows the shared mesh as well (meshing its own would mesh the part twice).
+    let (Some(a), Some(b)) = (first.display_of.as_deref(), second.display_of.as_deref()) else { panic!("both instances share a display") };
+    assert!(std::sync::Arc::ptr_eq(&a.0, &b.0));
     let a = first.reference_display_mesh_angular(0.01, crate::DISPLAY_ANGLE).unwrap();
     let b = second.reference_display_mesh_angular(0.01, crate::DISPLAY_ANGLE).unwrap();
     assert_eq!(a.triangles, b.triangles);
