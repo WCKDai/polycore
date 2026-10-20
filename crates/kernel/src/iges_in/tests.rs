@@ -85,10 +85,16 @@ fn hostile_iges_never_panics() {
 
 /// An IGES file from (type, form, parameters) entities, in order (pointers are 2k + 1).
 fn iges_file(ents: &[(i64, i64, String)]) -> String {
+    let placed: Vec<(i64, i64, String, i64)> = ents.iter().map(|(t, f, p)| (*t, *f, p.clone(), 0)).collect();
+    iges_file_placed(&placed)
+}
+
+/// Like [`iges_file`], with each entity's transformation matrix pointer (0 for none).
+fn iges_file_placed(ents: &[(i64, i64, String, i64)]) -> String {
     let mut out = vec![format!("{:<72}S{:>7}", "test", 1), format!("{:<72}G{:>7}", "1H,,1H;,,,,,,,,,,,1.,2,2HMM,,,,1.E-6;", 1)];
     let mut p_lines: Vec<(usize, String)> = Vec::new();
     let mut starts = Vec::new();
-    for (k, (t, _, p)) in ents.iter().enumerate() {
+    for (k, (t, _, p, _)) in ents.iter().enumerate() {
         starts.push(p_lines.len() + 1);
         let text = format!("{t},{p};");
         let chars: Vec<char> = text.chars().collect();
@@ -96,9 +102,9 @@ fn iges_file(ents: &[(i64, i64, String)]) -> String {
             p_lines.push((2 * k + 1, c.iter().collect()));
         }
     }
-    for (k, (t, form, _)) in ents.iter().enumerate() {
+    for (k, (t, form, _, xf)) in ents.iter().enumerate() {
         let count = p_lines.iter().filter(|(d, _)| *d == 2 * k + 1).count();
-        out.push(format!("{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}D{:>7}", t, starts[k], 0, 0, 0, 0, 0, 0, "00000000", 2 * k + 1));
+        out.push(format!("{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}D{:>7}", t, starts[k], 0, 0, 0, 0, xf, 0, "00000000", 2 * k + 1));
         out.push(format!("{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}D{:>7}", t, 0, 0, count, form, 0, 0, "", 0, 2 * k + 2));
     }
     for (i, (d, l)) in p_lines.iter().enumerate() {
@@ -106,6 +112,48 @@ fn iges_file(ents: &[(i64, i64, String)]) -> String {
     }
     out.push(format!("{:<72}T{:>7}", "", 1));
     out.join("\n")
+}
+
+/// A spherical cap written the way analytic IGES exports write one: a surface of revolution
+/// (120) whose generatrix is a short circular arc (100) centred on the axis, turned into the
+/// meridian plane by its transformation matrix (124), trimmed by a circle round the axis. The arc
+/// is only the part of the circle the cap needs; read as the whole circle, the revolution was a
+/// whole sphere twice over and the cap meshed as the full ball.
+#[test]
+fn an_arc_revolved_about_its_centre_is_a_cap_not_a_ball() {
+    let (r, polar) = (50.0f64, 30f64.to_radians());
+    let (rim_r, rim_z) = (r * polar.sin(), r * polar.cos());
+    let ents: Vec<(i64, i64, String, i64)> = vec![
+        // 1: the meridian plane: local x stays x, local y becomes z.
+        (124, 0, "1.,0.,0.,0.,0.,0.,-1.,0.,0.,1.,0.,0.".into(), 0),
+        // 3: the axis, 5: the arc from the rim (60° in its plane) to the pole (90°).
+        (110, 0, "0.,0.,0.,0.,0.,1.".into(), 0),
+        (100, 0, format!("0.,0.,0.,{:?},{:?},0.,{r:?}", rim_r, rim_z), 1),
+        // 7: the surface, 9: the rim (a full circle at the cap's height), 11: on the surface.
+        (120, 0, format!("3,5,0.,{:?}", std::f64::consts::TAU), 0),
+        (100, 0, format!("{rim_z:?},0.,0.,{rim_r:?},0.,{rim_r:?},0."), 0),
+        (142, 0, "0,7,0,9,2".into(), 0),
+        // 13: the cap.
+        (144, 0, "7,1,0,11".into(), 0),
+    ];
+    let imp = iges_import(&iges_file_placed(&ents)).unwrap();
+    assert_eq!(imp.bodies.len(), 1, "{:?}", imp.warnings);
+    let mesh = imp.bodies[0].body.tessellate(0.01).unwrap();
+    let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+    for p in &mesh.positions {
+        for (k, x) in [p.x, p.y, p.z].into_iter().enumerate() {
+            lo[k] = lo[k].min(x);
+            hi[k] = hi[k].max(x);
+        }
+    }
+    for k in 0..2 {
+        assert!((lo[k] + rim_r).abs() < 0.1 && (hi[k] - rim_r).abs() < 0.1, "cap is {lo:?} .. {hi:?}");
+    }
+    assert!((lo[2] - rim_z).abs() < 0.1 && (hi[2] - r).abs() < 0.1, "cap is {lo:?} .. {hi:?}");
+    // Area of a cap: 2π r h.
+    let area = measure(&imp.bodies[0].body).unwrap().area;
+    let cap = std::f64::consts::TAU * r * (r - rim_z);
+    assert!(rel(area, cap) < 1e-3, "area {area} vs {cap}");
 }
 
 /// A unit-cube-like box (10 × 20 × 30) made of six trimmed bilinear B-spline patches whose

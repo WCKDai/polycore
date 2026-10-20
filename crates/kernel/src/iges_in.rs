@@ -376,6 +376,42 @@ impl Nurbs {
     }
 }
 
+/// A circular arc in its definition plane (at height `c[2]`), counter-clockwise from `a0` to
+/// `a1` (radians, `a1 > a0`).
+struct Arc {
+    c: V3,
+    rad: f64,
+    a0: f64,
+    a1: f64,
+}
+
+impl Arc {
+    /// The arc placed by `x`, as an exact rational quadratic B-spline (pieces of at most a
+    /// quarter turn).
+    fn nurbs(&self, x: &Xf) -> Nurbs {
+        let sweep = self.a1 - self.a0;
+        let pieces = (sweep / std::f64::consts::FRAC_PI_2).ceil().clamp(1.0, 8.0) as usize;
+        let step = sweep / pieces as f64;
+        let w = (step / 2.0).cos();
+        let on = |t: f64, k: f64| x.point([self.c[0] + k * t.cos(), self.c[1] + k * t.sin(), self.c[2]]);
+        let mut pts = Vec::with_capacity(2 * pieces + 1);
+        let mut knots = vec![0.0; 3];
+        for i in 0..pieces {
+            let t = self.a0 + step * i as f64;
+            let (p, m) = (on(t, self.rad), on(t + step / 2.0, self.rad / w));
+            pts.push([p[0], p[1], p[2], 1.0]);
+            pts.push([m[0] * w, m[1] * w, m[2] * w, w]);
+            if i > 0 {
+                knots.extend([i as f64 / pieces as f64; 2]);
+            }
+        }
+        let p = on(self.a1, self.rad);
+        pts.push([p[0], p[1], p[2], 1.0]);
+        knots.extend([1.0; 3]);
+        Nurbs { deg: 2, knots, pts }
+    }
+}
+
 struct Tr<'a> {
     f: &'a Iges,
     o: Out,
@@ -489,20 +525,8 @@ impl<'a> Tr<'a> {
                 Ok(vec![Seg::along(c, |t| add(a, mul(sub(b, a), t)))])
             }
             100 => {
-                let u = self.f.unit;
-                let zt = self.n(seq, 1)? * u;
-                let c = [self.n(seq, 2)? * u, self.n(seq, 3)? * u, zt];
-                let s = [self.n(seq, 4)? * u, self.n(seq, 5)? * u, zt];
-                let e = [self.n(seq, 6)? * u, self.n(seq, 7)? * u, zt];
-                let rad = norm(sub(s, c));
-                if !(rad > 0.0) {
-                    return Err(format!("entity {seq}: arc of zero radius"));
-                }
-                let a0 = (s[1] - c[1]).atan2(s[0] - c[0]);
-                let mut a1 = (e[1] - c[1]).atan2(e[0] - c[0]);
-                while a1 <= a0 + 1e-12 {
-                    a1 += std::f64::consts::TAU;
-                }
+                let Arc { c, rad, a0, a1 } = self.arc(seq)?;
+                let zt = c[2];
                 let at = |t: f64| x.point([c[0] + rad * t.cos(), c[1] + rad * t.sin(), zt]);
                 let z = unit(x.dir([0.0, 0.0, 1.0])).ok_or("degenerate arc frame")?;
                 let xa = unit(x.dir([1.0, 0.0, 0.0])).ok_or("degenerate arc frame")?;
@@ -569,6 +593,56 @@ impl<'a> Tr<'a> {
             130 => Err(format!("entity {seq}: offset curves are not read")),
             t => Err(format!("curve type {t} is not read")),
         }
+    }
+
+    /// A circular arc (100) in its definition plane, in millimetres.
+    fn arc(&self, seq: i64) -> R<Arc> {
+        let u = self.f.unit;
+        let zt = self.n(seq, 1)? * u;
+        let c = [self.n(seq, 2)? * u, self.n(seq, 3)? * u, zt];
+        let s = [self.n(seq, 4)? * u, self.n(seq, 5)? * u, zt];
+        let e = [self.n(seq, 6)? * u, self.n(seq, 7)? * u, zt];
+        let rad = norm(sub(s, c));
+        if !(rad > 0.0) {
+            return Err(format!("entity {seq}: arc of zero radius"));
+        }
+        let a0 = (s[1] - c[1]).atan2(s[0] - c[0]);
+        let mut a1 = (e[1] - c[1]).atan2(e[0] - c[0]);
+        while a1 <= a0 + 1e-12 {
+            a1 += std::f64::consts::TAU;
+        }
+        Ok(Arc { c, rad, a0, a1 })
+    }
+
+    /// A surface of revolution (120) whose generatrix is the circular arc `seq`, about the axis
+    /// through `o` along `d`. A STEP surface of revolution turns the whole of its curve, and the
+    /// whole circle turns into a whole sphere or torus (a sphere twice over when the arc is
+    /// centred on the axis): the face's trim cannot pick its piece out of that, and the face
+    /// meshed as the full ball. An arc in a plane through the axis is a sphere or a torus; any
+    /// other arc turns as an exact rational B-spline of just the arc.
+    fn revolved_arc(&mut self, seq: i64, xf: &Xf, o: V3, d: V3) -> R<u64> {
+        let x = xf.then(&self.own_xf(seq, 0)?);
+        let arc = self.arc(seq)?;
+        let n = unit(x.dir([0.0, 0.0, 1.0])).ok_or("degenerate arc frame")?;
+        let (centre, rad) = (x.point(arc.c), arc.rad * x.scale());
+        let off = sub(centre, o);
+        let h = dot(off, d);
+        let rho = norm(sub(off, mul(d, h)));
+        let tol = self.tol.max(rad * 1e-9);
+        if dot(n, d).abs() < 1e-7 && dot(off, n).abs() <= tol {
+            let ax = self.o.placement(add(o, mul(d, h)), d, perp(d));
+            if rho <= tol {
+                return Ok(self.o.add(format!("SPHERICAL_SURFACE('',#{ax},{})", r(rad))));
+            }
+            if rad < rho {
+                return Ok(self.o.add(format!("TOROIDAL_SURFACE('',#{ax},{},{})", r(rho), r(rad))));
+            }
+        }
+        let nb = arc.nurbs(&x);
+        let curve = self.write_nurbs_curve(&nb);
+        let (pa, dd) = (self.o.point(o), self.o.dir(d));
+        let a1 = self.o.add(format!("AXIS1_PLACEMENT('',#{pa},#{dd})"));
+        Ok(self.o.add(format!("SURFACE_OF_REVOLUTION('',#{curve},#{a1})")))
     }
 
     fn nurbs_curve(&self, seq: i64, x: &Xf) -> R<Nurbs> {
@@ -784,6 +858,9 @@ impl<'a> Tr<'a> {
                 let ax_x = x.then(&self.own_xf(axis, 0)?);
                 let (a, b) = (ax_x.point(self.pt(axis, 1)?), ax_x.point(self.pt(axis, 4)?));
                 let d = unit(sub(b, a)).ok_or("zero-length revolution axis")?;
+                if self.de(generatrix)?.typ == 100 {
+                    return self.revolved_arc(generatrix, &x, a, d);
+                }
                 let segs = self.curve(generatrix, &x, 1)?;
                 let [seg] = segs.as_slice() else { return Err(format!("entity {seq}: composite generatrix is not read")) };
                 let (pa, dd) = (self.o.point(a), self.o.dir(d));
