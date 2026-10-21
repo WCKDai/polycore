@@ -1775,13 +1775,14 @@ fn extruded_ellipse_patch_crossing_profile_seam_stays_trimmed() {
 /// from formulas by https://github.com/dan335/step-conformance at 96f30bb, CC0 1.0):
 /// each reads back with its exact volume (from the generator's own profile), its box and its
 /// face count. Left out: `torus_ring` (meshes below its equator, a meshing issue for the
-/// tessellation work), `cone_point` and `cone_point_vertex` (#258, #3871) and the
-/// 1.4 MB `plate_900_holes`.
+/// tessellation work) and the 1.4 MB `plate_900_holes`.
 #[test]
 fn step_conformance_parts_read_back_their_exact_shape() {
     // (file, exact volume (mm³), box (min, max), kernel faces, bodies)
     #[rustfmt::skip]
-    let parts: [(&str, &str, f64, [f64; 6], usize, usize); 15] = [
+    let parts: [(&str, &str, f64, [f64; 6], usize, usize); 17] = [
+        ("cone_point", include_str!("../../../../tests/step-conformance/cone_point.step"), 1000.0 * std::f64::consts::PI, [-10.0, -10.0, 0.0, 10.0, 10.0, 30.0], 2, 1),
+        ("cone_point_vertex", include_str!("../../../../tests/step-conformance/cone_point_vertex.step"), 1000.0 * std::f64::consts::PI, [-10.0, -10.0, 0.0, 10.0, 10.0, 30.0], 2, 1),
         ("cylinder", include_str!("../../../../tests/step-conformance/cylinder.step"), 9424.778, [-10.0, -10.0, 0.0, 10.0, 10.0, 30.0], 3, 1),
         ("cylinder_inch", include_str!("../../../../tests/step-conformance/cylinder_inch.step"), 9424.778, [-10.0, -10.0, 0.0, 10.0, 10.0, 30.0], 3, 1),
         ("cylinder_nurbs", include_str!("../../../../tests/step-conformance/cylinder_nurbs.step"), 9424.778, [-10.0, -10.0, 0.0, 10.0, 10.0, 30.0], 3, 1),
