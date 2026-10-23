@@ -1,6 +1,6 @@
 //! The B-rep kernel boundary.
 //!
-//! Everything SolidCraft does with solids goes through this crate: building bodies from planar
+//! Everything Polykrom does with solids goes through this crate: building bodies from planar
 //! regions (extrude, revolve) and primitives, booleans, fillets and chamfers, tessellation,
 //! measurement and STEP export and import. The implementation uses the `truck` crates (Apache-2.0; see
 //! `plan/adr/0001-geometry-kernel.md`) plus our own local operations (edge fillets and

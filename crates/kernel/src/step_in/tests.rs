@@ -111,7 +111,7 @@ fn seam_only_sphere_void_is_turned_inside_out() {
     assert!(rel(m.area, area) < 1e-3, "area {} vs {area}", m.area);
 }
 
-/// A block with a closed cavity, written as BREP_WITH_VOIDS. SolidCraft writes the void's
+/// A block with a closed cavity, written as BREP_WITH_VOIDS. Polykrom writes the void's
 /// shell facing into the cavity with ORIENTED_CLOSED_SHELL `.T.`; some exporters write the
 /// same faces with `.F.` (#3730), which turned the void inside out and added its volume. Either
 /// way the cavity is taken out.

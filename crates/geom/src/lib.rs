@@ -1,4 +1,4 @@
-//! Geometry foundation for SolidCraft: 2D/3D vectors, sketch planes, axis-aligned boxes,
+//! Geometry foundation for Polykrom: 2D/3D vectors, sketch planes, axis-aligned boxes,
 //! triangle meshes with their measures (volume, area, centroid), and freeform surface maths
 //! (B-spline basis and NURBS surfaces in [`bspline`], spline spaces and the operators that make
 //! splines compatible in [`spline_space`], one-surface fills of closed loops in [`fill`],

@@ -1,4 +1,4 @@
-//! SolidCraft native, versioned binary geometry. No STEP conversion or display meshes.
+//! Polykrom native, versioned binary geometry. No STEP conversion or display meshes.
 //! Exact: a decoded body is the encoded one, number for number, for the same producer.
 use crate::{Body, KernelError, Result, guard};
 use serde::{Deserialize, Serialize};
