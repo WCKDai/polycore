@@ -876,6 +876,8 @@ thread_local! {
     static BORES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The intersections left to the booleans running under [`with_attempt_budget`], if any.
     static ATTEMPTS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// When the booleans running under [`with_deadline`] stop trying, if ever.
+    static DEADLINE: std::cell::Cell<Option<web_time::Instant>> = const { std::cell::Cell::new(None) };
 }
 
 /// `f`, with the booleans it runs on this thread allowed `attempts` of the kernel's own
@@ -898,8 +900,29 @@ pub fn with_attempt_budget<T>(attempts: usize, f: impl FnOnce() -> T) -> T {
     f()
 }
 
-/// Takes one of the attempts left under [`with_attempt_budget`]; false when none is left.
+/// `f`, with the booleans it runs on this thread trying no more once `deadline` has passed: a
+/// try under way finishes (truck's intersection can't be stopped part way) and the boolean then
+/// fails as it does with no attempts left. For a caller with a time budget, which the kernel's
+/// retries would otherwise run far past. A deadline inside another keeps the earlier.
+pub fn with_deadline<T>(deadline: web_time::Instant, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<web_time::Instant>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DEADLINE.with(|c| c.set(self.0));
+        }
+    }
+    let outer = DEADLINE.with(|c| c.get());
+    DEADLINE.with(|c| c.set(Some(outer.map_or(deadline, |o| o.min(deadline)))));
+    let _restore = Restore(outer);
+    f()
+}
+
+/// Takes one of the attempts left under [`with_attempt_budget`]; false when none is left, or
+/// when the deadline of [`with_deadline`] has passed.
 fn take_attempt() -> bool {
+    if DEADLINE.with(|c| c.get()).is_some_and(|d| web_time::Instant::now() >= d) {
+        return false;
+    }
     ATTEMPTS.with(|c| match c.get() {
         None => true,
         Some(0) => false,

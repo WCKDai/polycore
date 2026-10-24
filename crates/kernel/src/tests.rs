@@ -3039,6 +3039,21 @@ fn an_attempt_budget_stops_the_boolean_and_is_shared_by_nesting() {
     assert!(boolean(&a, &b, BoolOp::Intersect).unwrap().is_some());
 }
 
+/// A deadline already past stops the same boolean as no tries left does, an earlier deadline
+/// inside a later one holds, and none lingers after (#86).
+#[test]
+fn a_passed_deadline_stops_the_boolean_and_nesting_keeps_the_earlier() {
+    let a = cylinder(Vec3::new(0.0, 0.0, -10.0), Vec3::Z, 3.0, 20.0).unwrap();
+    let b = cylinder(Vec3::new(-10.0, 0.0, 0.0), Vec3::X, 2.0, 20.0).unwrap();
+    let now = web_time::Instant::now();
+    let later = now + std::time::Duration::from_secs(3600);
+    assert!(with_deadline(now, || boolean(&a, &b, BoolOp::Intersect)).is_err());
+    assert!(with_deadline(later, || boolean(&a, &b, BoolOp::Intersect)).unwrap().is_some());
+    // The inner deadline is later than the outer one: the outer still holds.
+    assert!(with_deadline(now, || with_deadline(later, || boolean(&a, &b, BoolOp::Intersect))).is_err());
+    assert!(boolean(&a, &b, BoolOp::Intersect).unwrap().is_some());
+}
+
 /// #2847: identical elliptic spline sections (3 x 5 mm, 30 mm off the Z axis) on planes turning
 /// about Z in 10 degree steps. The start vertex was matched by projecting the lead section's
 /// vertex directions onto each plane, which squeezes them as the plane turns (and flips them past
