@@ -41,7 +41,7 @@ pub struct StepHeader {
     pub time_stamp: String,
     pub author: String,
     pub organization: String,
-    /// FILE_DESCRIPTION text; `SolidCraft model` when empty.
+    /// FILE_DESCRIPTION text; `Polykrom model` when empty.
     pub description: String,
 }
 
@@ -1507,7 +1507,7 @@ fn trim_sheet(sheet: &truck_modeling::Surface, pts: &[V3]) -> Option<truck_model
 /// as cylinders and cones (see `analytic_sheets`) and those to write cut down to their faces
 /// (see `trimmed_sheets`). Without `merge` the file is truck's, as is.
 fn brep_exchange(b: &Body, merge: bool) -> Result<(p21::Exchange, HashMap<u64, V3>, HashMap<u64, truck_modeling::Surface>, HashMap<u64, FaceLook>)> {
-    let text = crate::step::truck_step(&[b], "SolidCraft")?;
+    let text = crate::step::truck_step(&[b], "Polykrom")?;
     let mut ex = p21::parse(&text).map_err(|e| KernelError::Failed(format!("STEP export: {e}")))?;
     collapse_short_edges(&mut ex);
     // Face colours by exchange face: truck writes each shell's faces in the body's face order.
@@ -1791,11 +1791,11 @@ fn products_text(products: &[ExportProduct], root: usize, header: &StepHeader, m
 
     let mut s = String::new();
     s.push_str("ISO-10303-21;\nHEADER;\n");
-    let description = if header.description.is_empty() { "SolidCraft model" } else { header.description.as_str() };
+    let description = if header.description.is_empty() { "Polykrom model" } else { header.description.as_str() };
     let _ = writeln!(s, "FILE_DESCRIPTION(({}),'2;1');", string(description));
     let _ = writeln!(
         s,
-        "FILE_NAME({},{},({}),({}),'SolidCraft','SolidCraft','');",
+        "FILE_NAME({},{},({}),({}),'Polykrom','Polykrom','');",
         string(&header.file_name),
         string(&header.time_stamp),
         string(&header.author),

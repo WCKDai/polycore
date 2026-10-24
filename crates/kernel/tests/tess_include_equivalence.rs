@@ -1,4 +1,4 @@
-//! Equivalence check for SolidCraft's change to the vendored tessellator's point-in-trim test.
+//! Equivalence check for Polykrom's change to the vendored tessellator's point-in-trim test.
 //!
 //! The vendored crates are outside the workspace, so their own tests never run in CI. The old
 //! test is kept behind the crate's `test-hooks` feature (on only for kernel tests) and this

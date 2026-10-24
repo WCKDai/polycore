@@ -1,4 +1,4 @@
-//! Equivalence checks for SolidCraft's changes to the vendored truck crates.
+//! Equivalence checks for Polykrom's changes to the vendored truck crates.
 //!
 //! The vendored crates are outside the workspace, so their own tests never run in CI. Each
 //! change that replaces an algorithm keeps the old one behind the crate's `test-hooks` feature
