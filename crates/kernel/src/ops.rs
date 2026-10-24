@@ -900,6 +900,12 @@ pub fn with_attempt_budget<T>(attempts: usize, f: impl FnOnce() -> T) -> T {
     f()
 }
 
+/// The tries left to the booleans under the innermost [`with_attempt_budget`] on this thread,
+/// if any: `Some(0)` after work that used them all up.
+pub fn attempts_left() -> Option<usize> {
+    ATTEMPTS.with(|c| c.get())
+}
+
 /// `f`, with the booleans it runs on this thread trying no more once `deadline` has passed: a
 /// try under way finishes (truck's intersection can't be stopped part way) and the boolean then
 /// fails as it does with no attempts left. For a caller with a time budget, which the kernel's

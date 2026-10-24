@@ -3036,6 +3036,8 @@ fn an_attempt_budget_stops_the_boolean_and_is_shared_by_nesting() {
         (inner, boolean(&a, &b, BoolOp::Intersect).is_ok())
     });
     assert!(inner && !after);
+    assert_eq!(with_attempt_budget(0, || (boolean(&a, &b, BoolOp::Intersect).is_err(), attempts_left())), (true, Some(0)));
+    assert_eq!(attempts_left(), None, "no budget lingers");
     assert!(boolean(&a, &b, BoolOp::Intersect).unwrap().is_some());
 }
 
