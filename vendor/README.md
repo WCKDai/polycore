@@ -56,6 +56,13 @@ Changes:
   holds what lies outside it. Faces with reversed surfaces (a revolved body's) counted the wrong
   way, and a void dropped every face outside it: a cut beside a sealed void came out empty or
   with the body gone. An OR keeps truck's count.
+- `transversal/broad_phase.rs` (new), `loops_store/mod.rs`, `integrate/mod.rs`: a broad phase. Of
+  every pair of faces (one from each shell), only those whose meshes' bounding boxes overlap
+  (grown by the operation's tolerance) are intersected, found by a sort and sweep along x, in
+  the order truck visited them. A pair whose boxes miss has no triangles whose boxes meet, so
+  truck's intersection of it was empty: the result is the same, without the cost of meshing
+  the pair's triangles again and sorting them for every pair (#125). The `test-hooks` feature
+  keeps the boolean that intersects every pair, for the kernel's equivalence tests.
 
 ## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 

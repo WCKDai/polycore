@@ -3180,3 +3180,49 @@ fn transform_refuses_a_matrix_that_is_not_an_affine_placement() {
     let removed = measure(&lifted).unwrap().volume - measure(&cut).unwrap().volume;
     assert!((removed - 6.0 * 6.0 * 3.0).abs() < 1.0, "{removed}");
 }
+
+/// The boolean's broad phase (#125) intersects only the face pairs whose mesh boxes overlap, and
+/// gives what intersecting every pair gives: two 32-sided prisms that overlap in a lens (most of
+/// their 34 x 34 face pairs are far apart), and the same prisms far apart (no pair is kept).
+#[test]
+fn boolean_broad_phase_gives_the_every_pair_result() {
+    use truck_shapeops::broad_phase_test_hooks::{every_pair, pairs_kept};
+    let prism = |cx: f64, cy: f64, z0: f64, z1: f64| {
+        let pts: Vec<Vec2> =
+            (0..32).map(|k| (k as f64 + 0.3) * std::f64::consts::TAU / 32.0).map(|t| Vec2::new(cx + 10.0 * t.cos(), cy + 10.0 * t.sin())).collect();
+        extrude(&Plane::XY, &[Region2 { outer: Loop2::polygon(&pts), holes: vec![] }], z0, z1).unwrap().pop().unwrap()
+    };
+    let a = prism(0.0, 0.0, 0.0, 10.0);
+    let tol = 0.05;
+    for (b, apart) in [(prism(14.0, 3.0, 4.0, 16.0), false), (prism(40.0, 0.0, 0.0, 10.0), true)] {
+        // AND, cut (AND with the tool turned inside out) and OR.
+        for (and, invert) in [(true, false), (true, true), (false, false)] {
+            let operands = || {
+                let (sa, mut sb) = (a.deep_copy(), b.deep_copy());
+                if invert {
+                    sb.not();
+                }
+                (sa, sb)
+            };
+            let (sa, sb) = operands();
+            let (kept, all) = pairs_kept(&sa, &sb, tol).unwrap();
+            assert_eq!(all, 34 * 34);
+            assert!(if apart { kept == 0 } else { kept > 0 && kept * 4 < all }, "kept {kept} of {all}");
+            let broad = guard("t", || Ok(if and { truck_shapeops::and(&sa, &sb, tol) } else { truck_shapeops::or(&sa, &sb, tol) })).unwrap();
+            let (sa, sb) = operands();
+            let every = guard("t", || Ok(every_pair(&sa, &sb, tol, and))).unwrap();
+            let (Some(broad), Some(every)) = (broad, every) else { panic!("and {and} invert {invert} apart {apart}: no result") };
+            let faces = |s: &crate::body::Solid| s.boundaries().iter().map(|shell| shell.len()).collect::<Vec<_>>();
+            assert_eq!(faces(&broad), faces(&every), "and {and} invert {invert} apart {apart}");
+            if broad.boundaries().is_empty() {
+                // The AND of prisms far apart: nothing, either way.
+                assert!(apart && and && !invert);
+                continue;
+            }
+            let (mb, me) = (measure(&Body::new(broad).unwrap()).unwrap(), measure(&Body::new(every).unwrap()).unwrap());
+            assert_eq!((mb.faces, mb.edges, mb.vertices), (me.faces, me.edges, me.vertices), "and {and} invert {invert} apart {apart}");
+            assert!(rel(mb.volume, me.volume) < 1e-9, "and {and} invert {invert} apart {apart}: volume {} vs {}", mb.volume, me.volume);
+            assert!(rel(mb.area, me.area) < 1e-9, "and {and} invert {invert} apart {apart}: area {} vs {}", mb.area, me.area);
+        }
+    }
+}

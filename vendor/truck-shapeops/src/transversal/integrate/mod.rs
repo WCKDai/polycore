@@ -95,6 +95,7 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     tol: f64,
     lineage: &mut Lineage<C, S>,
     and: bool,
+    every_pair: bool,
 ) -> Option<[Shell<Point3, C, S>; 2]> {
     nonpositive_tolerance!(tol);
     // SolidCraft: robust meshing (boundaries from earlier operations lie on surfaces only
@@ -104,11 +105,17 @@ fn process_one_pair_of_shells<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
         _ => shell0.robust_triangulation(tol),
     };
     let poly_shell1 = shell1.robust_triangulation(tol);
+    // SolidCraft: only the face pairs whose meshes' boxes overlap can meet (the broad phase).
+    // `every_pair` intersects them all, as truck did, for the test hooks to compare with.
+    let pairs = match every_pair {
+        true => broad_phase::every_pair(poly_shell0.len(), poly_shell1.len()),
+        false => broad_phase::face_pairs(&poly_shell0, &poly_shell1, tol),
+    };
     let loops_store::LoopsStoreQuadruple {
         geom_loops_store0: loops_store0,
         geom_loops_store1: loops_store1,
         ..
-    } = crate::tr!(loops_store::create_loops_stores(shell0, &poly_shell0, shell1, &poly_shell1, tol, lineage), "loops stores");
+    } = crate::tr!(loops_store::create_loops_stores_for(shell0, &poly_shell0, shell1, &poly_shell1, &pairs, tol, lineage), "loops stores");
     let mut cls0 = crate::tr!(divide_face::divide_faces(shell0, &loops_store0, tol, lineage), "divide faces 0");
     cls0.integrate_by_component();
     let mut cls1 = crate::tr!(divide_face::divide_faces(shell1, &loops_store1, tol, lineage), "divide faces 1");
@@ -148,7 +155,7 @@ pub fn and<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<Solid<Point3, C, S>> {
-    boolean(solid0, None, solid1, tol, true).map(|(solid, _)| solid)
+    boolean(solid0, None, solid1, tol, true, false).map(|(solid, _)| solid)
 }
 
 /// OR operation between two solids.
@@ -157,7 +164,7 @@ pub fn or<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<Solid<Point3, C, S>> {
-    boolean(solid0, None, solid1, tol, false).map(|(solid, _)| solid)
+    boolean(solid0, None, solid1, tol, false, false).map(|(solid, _)| solid)
 }
 
 /// SolidCraft: AND operation between two solids, with where each face and edge of the result
@@ -169,7 +176,7 @@ pub fn and_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<(Solid<Point3, C, S>, Option<History>)> {
-    boolean(solid0, None, solid1, tol, true)
+    boolean(solid0, None, solid1, tol, true, false)
 }
 
 /// SolidCraft: [`and_with_history`] with `solid0` meshed already ([`meshes`] of it, or of a
@@ -180,7 +187,7 @@ pub fn and_with_history_meshed<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<(Solid<Point3, C, S>, Option<History>)> {
-    boolean(solid0, Some(meshed0), solid1, tol, true)
+    boolean(solid0, Some(meshed0), solid1, tol, true, false)
 }
 
 /// SolidCraft: OR operation between two solids, with where each face and edge of the result
@@ -192,18 +199,20 @@ pub fn or_with_history<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid1: &Solid<Point3, C, S>,
     tol: f64,
 ) -> Option<(Solid<Point3, C, S>, Option<History>)> {
-    boolean(solid0, None, solid1, tol, false)
+    boolean(solid0, None, solid1, tol, false, false)
 }
 
 /// Combines the operands' first shells, then folds in their other shells one at a time
 /// (`and` chooses the AND or the OR shell of each pass). The history is `None` when a face or
-/// edge of the result was not recorded; the result stands without it.
+/// edge of the result was not recorded; the result stands without it. `every_pair` skips the
+/// broad phase (the test hooks only).
 fn boolean<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     solid0: &Solid<Point3, C, S>,
     meshed0: Option<&[MeshedShell]>,
     solid1: &Solid<Point3, C, S>,
     tol: f64,
     and: bool,
+    every_pair: bool,
 ) -> Option<(Solid<Point3, C, S>, Option<History>)> {
     let pick = |[and_shell, or_shell]: [Shell<Point3, C, S>; 2]| if and { and_shell } else { or_shell };
     let mut lineage = Lineage::new([solid0, solid1]);
@@ -212,9 +221,9 @@ fn boolean<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
     let shell0 = iter0.next()?;
     let shell1 = iter1.next()?;
     let meshed0 = meshed0.filter(|m| m.len() == solid0.boundaries().len()).and_then(|m| m.first());
-    let mut shell = pick(crate::tr!(process_one_pair_of_shells(shell0, meshed0, shell1, tol, &mut lineage, and), "first shells"));
+    let mut shell = pick(crate::tr!(process_one_pair_of_shells(shell0, meshed0, shell1, tol, &mut lineage, and, every_pair), "first shells"));
     for other in iter0.chain(iter1) {
-        shell = pick(crate::tr!(process_one_pair_of_shells(&shell, None, other, tol, &mut lineage, and), "another shell"));
+        shell = pick(crate::tr!(process_one_pair_of_shells(&shell, None, other, tol, &mut lineage, and, every_pair), "another shell"));
     }
     let solid = crate::tr!(Solid::try_new(components_in_order(&shell)).ok(), "result solid");
     let history = lineage.history(&solid);
@@ -237,6 +246,40 @@ fn components_in_order<C, S>(shell: &Shell<Point3, C, S>) -> Vec<Shell<Point3, C
         .collect();
     comps.sort_by_key(|c| c.first().map(|f| key(f)).unwrap_or(usize::MAX));
     comps.into_iter().map(Shell::from).collect()
+}
+
+/// The boolean with every pair of faces intersected, as before the broad phase: kept to check
+/// that the broad phase gives the same results.
+///
+/// Not part of the API. Built only for tests, or with the `test-hooks` feature, so the
+/// SolidCraft kernel tests can run these checks in CI (this crate's own tests do not run there).
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub mod test_hooks {
+    use super::*;
+
+    /// [`and`] (`and` true) or [`or`], with every face pair intersected.
+    pub fn every_pair<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+        solid0: &Solid<Point3, C, S>,
+        solid1: &Solid<Point3, C, S>,
+        tol: f64,
+        and: bool,
+    ) -> Option<Solid<Point3, C, S>> {
+        boolean(solid0, None, solid1, tol, and, true).map(|(solid, _)| solid)
+    }
+
+    /// How many face pairs of the solids' first shells the broad phase keeps, and how many
+    /// there are, at `tol`.
+    pub fn pairs_kept<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(
+        solid0: &Solid<Point3, C, S>,
+        solid1: &Solid<Point3, C, S>,
+        tol: f64,
+    ) -> Option<(usize, usize)> {
+        let (shell0, shell1) = (solid0.boundaries().first()?, solid1.boundaries().first()?);
+        let (poly0, poly1) = (shell0.robust_triangulation(tol), shell1.robust_triangulation(tol));
+        let kept = broad_phase::face_pairs(&poly0, &poly1, tol);
+        Some((kept.len(), poly0.len() * poly1.len()))
+    }
 }
 
 #[cfg(test)]

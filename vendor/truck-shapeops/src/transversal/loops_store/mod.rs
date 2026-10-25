@@ -569,6 +569,8 @@ pub struct LoopsStoreQuadruple<C> {
     pub poly_loops_store1: LoopsStore<Point3, PolylineCurve>,
 }
 
+/// The loops stores of two shells cut by each other, intersecting only the face pairs whose
+/// meshes' boxes overlap (SolidCraft: [`broad_phase`]; the others have no intersection).
 pub fn create_loops_stores<C, S>(
     geom_shell0: &Shell<Point3, C, S>,
     poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
@@ -584,14 +586,41 @@ where
         + From<IntersectionCurve<PolylineCurve, S>>,
     S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>,
 {
+    let pairs = broad_phase::face_pairs(poly_shell0, poly_shell1, tol);
+    create_loops_stores_for(geom_shell0, poly_shell0, geom_shell1, poly_shell1, &pairs, tol, lineage)
+}
+
+/// SolidCraft: [`create_loops_stores`] intersecting the face pairs `pairs` (indices into the
+/// first and second shell), in their order.
+pub fn create_loops_stores_for<C, S>(
+    geom_shell0: &Shell<Point3, C, S>,
+    poly_shell0: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    geom_shell1: &Shell<Point3, C, S>,
+    poly_shell1: &Shell<Point3, PolylineCurve, Option<PolygonMesh>>,
+    pairs: &[(usize, usize)],
+    tol: f64,
+    lineage: &mut Lineage<C, S>,
+) -> Option<LoopsStoreQuadruple<C>>
+where
+    C: SearchNearestParameter<D1, Point = Point3>
+        + SearchParameter<D1, Point = Point3>
+        + Cut<Point = Point3, Vector = Vector3>
+        + From<IntersectionCurve<PolylineCurve, S>>,
+    S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>,
+{
     let mut geom_loops_store0: LoopsStore<_, _> = geom_shell0.face_iter().collect();
     let mut poly_loops_store0: LoopsStore<_, _> = poly_shell0.face_iter().collect();
     let mut geom_loops_store1: LoopsStore<_, _> = geom_shell1.face_iter().collect();
     let mut poly_loops_store1: LoopsStore<_, _> = poly_shell1.face_iter().collect();
-    let store0_len = geom_loops_store0.len();
-    let store1_len = geom_loops_store1.len();
-    (0..store0_len)
-        .flat_map(move |i| (0..store1_len).map(move |j| (i, j)))
+    let store0_len = geom_loops_store0.len().min(poly_loops_store0.len());
+    let store1_len = geom_loops_store1.len().min(poly_loops_store1.len());
+    // A pair out of range would index past a shell (the caller made the pairs for other shells).
+    if pairs.iter().any(|&(i, j)| i >= store0_len || j >= store1_len) {
+        return None;
+    }
+    pairs
+        .iter()
+        .copied()
         .try_for_each(|(face_index0, face_index1)| {
             let ori0 = geom_shell0[face_index0].orientation();
             let ori1 = geom_shell1[face_index1].orientation();

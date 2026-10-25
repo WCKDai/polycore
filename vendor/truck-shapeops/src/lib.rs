@@ -40,4 +40,8 @@ pub use transversal::{
 // SolidCraft: exercised by kernel regressions in the workspace CI.
 #[doc(hidden)]
 pub use transversal::IntersectionCurveWithParameters;
+// SolidCraft: the brute-force boolean, for the kernel's equivalence tests.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+pub use transversal::broad_phase_test_hooks;
 mod alternative;

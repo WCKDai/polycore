@@ -72,6 +72,8 @@ version = "0.6.0"
 [features]
 default = ["step-test"]
 step-test = ["truck-stepio"]
+# Exposes equivalence checks for the SolidCraft kernel tests. Never on in shipped builds.
+test-hooks = []
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies.getrandom]
 version = "0.2.15"
