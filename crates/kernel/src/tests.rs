@@ -3184,6 +3184,20 @@ fn transform_refuses_a_matrix_that_is_not_an_affine_placement() {
 /// The boolean's broad phase (#125) intersects only the face pairs whose mesh boxes overlap, and
 /// gives what intersecting every pair gives: two 32-sided prisms that overlap in a lens (most of
 /// their 34 x 34 face pairs are far apart), and the same prisms far apart (no pair is kept).
+/// A face without a mesh box (one that could not be meshed) pairs with every face across, and
+/// the faces with boxes are still pruned among themselves.
+#[test]
+fn an_unboxed_face_pairs_alone_and_the_rest_are_still_pruned() {
+    use truck_shapeops::broad_phase_test_hooks::pairs_of_boxes;
+    let bx = |x0: f64, x1: f64| Some([[x0, x1], [0.0, 1.0], [0.0, 1.0]]);
+    let boxes0 = [bx(0.0, 1.0), None, bx(10.0, 11.0)];
+    assert_eq!(pairs_of_boxes(&boxes0, &[bx(0.5, 1.5), bx(20.0, 21.0)]), [(0, 0), (1, 0), (1, 1)]);
+    // A pair whose faces both lack boxes is taken once.
+    assert_eq!(pairs_of_boxes(&boxes0, &[None, bx(10.5, 12.0)]), [(0, 0), (1, 0), (1, 1), (2, 0), (2, 1)]);
+    // No boxes on one side: every pair.
+    assert_eq!(pairs_of_boxes(&boxes0, &[None, None]), [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]);
+}
+
 #[test]
 fn boolean_broad_phase_gives_the_every_pair_result() {
     use truck_shapeops::broad_phase_test_hooks::{every_pair, pairs_kept};
@@ -3224,5 +3238,25 @@ fn boolean_broad_phase_gives_the_every_pair_result() {
             assert!(rel(mb.volume, me.volume) < 1e-9, "and {and} invert {invert} apart {apart}: volume {} vs {}", mb.volume, me.volume);
             assert!(rel(mb.area, me.area) < 1e-9, "and {and} invert {invert} apart {apart}: area {} vs {}", mb.area, me.area);
         }
+    }
+}
+
+/// A mesh made of a body is reused for every body of the same solid at the same settings (#190),
+/// and only for those: the bodies made one after another here are dropped as soon as they are
+/// meshed, so a new solid can take the address an old one had, and each must still be meshed as
+/// itself (its own length, the same mesh as one made without reuse).
+#[test]
+fn recent_meshes_answer_only_for_their_own_solid() {
+    let same = |m: &solidcraft_geom::Mesh, n: &solidcraft_geom::Mesh| m.positions == n.positions && m.triangles == n.triangles;
+    let tol = 0.05;
+    for k in 0..40 {
+        let len = 10.0 + k as f64;
+        let body = extrude(&Plane::XY, &[rect(len, 5.0)], 0.0, 3.0).unwrap().pop().unwrap();
+        let first = body.tessellate_with(tol, true).unwrap();
+        let x = first.bounds().max.x - first.bounds().min.x;
+        assert!((x - len).abs() < 1e-9, "body {k}: meshed {x} long, want {len}");
+        // A clone shares the solid, and its mesh; a body that keeps its own meshes makes it anew.
+        assert!(same(&body.clone().tessellate_with(tol, true).unwrap(), &first), "body {k}");
+        assert!(same(&body.keeping_meshes().tessellate_with(tol, true).unwrap(), &first), "body {k}");
     }
 }

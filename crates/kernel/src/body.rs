@@ -82,6 +82,23 @@ pub(crate) struct MeshMemo {
 /// Meshes a [`MeshMemo`] keeps at most (the oldest goes first).
 const MEMO_MESHES: usize = 4;
 
+/// A mesh made of a solid (see [`Body::recent_mesh`]). The solid is held weakly: the mesh does not
+/// keep it alive, and while the entry exists its address cannot be taken by another solid, so a
+/// body whose solid is at that address has that very solid.
+struct RecentMesh {
+    solid: std::sync::Weak<Solid>,
+    key: (u64, u64, bool, u64, Option<u64>),
+    mesh: std::sync::Arc<Mesh>,
+    bytes: usize,
+}
+
+/// The meshes made most recently of solids that keep none of their own, oldest first.
+static RECENT_MESHES: std::sync::Mutex<Vec<RecentMesh>> = std::sync::Mutex::new(Vec::new());
+
+/// How many meshes [`RECENT_MESHES`] keeps at most, and how many bytes (roughly) of them.
+const RECENT_MESH_COUNT: usize = 16;
+const RECENT_MESH_BYTES: usize = 128 << 20;
+
 /// The display mesh of a body that several placed copies show (see `Body::display_of`): the
 /// body, and its mesh once made.
 #[derive(Debug)]
@@ -1233,7 +1250,7 @@ impl Body {
         let mesh = || crate::profile::timed(crate::profile::Kind::Tessellate, || self.tessellate_within_untimed(tol, angle, refine));
         let memo = self.meshes.as_ref().filter(|m| std::sync::Arc::ptr_eq(&m.solid, &self.solid));
         // Held while meshing: threads asking for the same mesh wait for it rather than make it too.
-        let Some(Ok(mut made)) = memo.map(|m| m.made.lock()) else { return mesh() };
+        let Some(Ok(mut made)) = memo.map(|m| m.made.lock()) else { return self.recent_mesh(tol, angle, refine, mesh) };
         let key = (tol.to_bits(), angle.to_bits(), refine);
         if let Some((_, m)) = made.iter().find(|(k, _)| *k == key) {
             return Ok(Mesh::clone(m));
@@ -1243,6 +1260,42 @@ impl Body {
             made.remove(0);
         }
         made.push((key, std::sync::Arc::new(m.clone())));
+        Ok(m)
+    }
+
+    /// [`Body::tessellate_within`] for a body that keeps no meshes of its own: the mesh is taken
+    /// from [`RECENT_MESHES`] when one of the same solid was made at the same settings, and kept
+    /// there otherwise. A boolean meshes its operands and its result for its checks, its retries
+    /// and its guard, often at the same tolerance, and the next feature takes the result as an
+    /// operand: about a third of the meshing of a large design was the same mesh made again.
+    fn recent_mesh(&self, tol: f64, angle: f64, refine: bool, mesh: impl FnOnce() -> Result<Mesh>) -> Result<Mesh> {
+        if self.mesh.is_some() {
+            return mesh();
+        }
+        // Everything the mesh depends on besides the solid.
+        let key = (tol.to_bits(), angle.to_bits(), refine, self.size.to_bits(), self.boundary_tol.map(f64::to_bits));
+        let solid = std::sync::Arc::as_ptr(&self.solid);
+        // Copied after the lock is let go: other threads look up their meshes meanwhile.
+        let found =
+            RECENT_MESHES.lock().ok().and_then(|recent| recent.iter().find(|r| r.key == key && r.solid.as_ptr() == solid).map(|r| r.mesh.clone()));
+        if let Some(m) = found {
+            return Ok(Mesh::clone(&m));
+        }
+        // Not held while meshing: other threads mesh other bodies meanwhile.
+        let m = mesh()?;
+        let bytes = m.positions.len() * 48 + m.triangles.len() * 16 + m.edges.iter().map(|e| e.len() * 24).sum::<usize>();
+        if bytes <= RECENT_MESH_BYTES / 4
+            && let Ok(mut recent) = RECENT_MESHES.lock()
+        {
+            // A solid that is gone is never asked for again.
+            recent.retain(|r| r.solid.strong_count() > 0);
+            recent.push(RecentMesh { solid: std::sync::Arc::downgrade(&self.solid), key, mesh: std::sync::Arc::new(m.clone()), bytes });
+            let mut total: usize = recent.iter().map(|r| r.bytes).sum();
+            while recent.len() > RECENT_MESH_COUNT || total > RECENT_MESH_BYTES {
+                let oldest = recent.remove(0);
+                total -= oldest.bytes;
+            }
+        }
         Ok(m)
     }
 

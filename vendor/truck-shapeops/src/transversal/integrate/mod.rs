@@ -268,6 +268,13 @@ pub mod test_hooks {
         boolean(solid0, None, solid1, tol, and, true).map(|(solid, _)| solid)
     }
 
+    /// The face pairs the broad phase keeps for faces with these boxes (`[min, max]` per axis;
+    /// `None` for a face without one).
+    pub fn pairs_of_boxes(boxes0: &[Option<[[f64; 2]; 3]>], boxes1: &[Option<[[f64; 2]; 3]>]) -> Vec<(usize, usize)> {
+        let boxed = |b: &[Option<[[f64; 2]; 3]>]| b.iter().map(|x| x.map(broad_phase::Aabb::new)).collect::<Vec<_>>();
+        broad_phase::overlapping_pairs(&boxed(boxes0), &boxed(boxes1))
+    }
+
     /// How many face pairs of the solids' first shells the broad phase keeps, and how many
     /// there are, at `tol`.
     pub fn pairs_kept<C: ShapeOpsCurve<S>, S: ShapeOpsSurface>(

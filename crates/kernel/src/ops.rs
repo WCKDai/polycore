@@ -215,36 +215,54 @@ fn mismatch(a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh, result: &solid
     if a.triangles.len() + b.triangles.len() + result.triangles.len() > 60_000 {
         return None;
     }
-    let (ba, bb) = (a.bounds(), b.bounds());
-    let lo = ba.min.max(bb.min);
-    let hi = ba.max.min(bb.max);
-    let all = ba.union(&bb);
-    let mut boxes = vec![(all, 300usize)];
-    // A touching seam can overlap by round-off only. Samples there sit on the
-    // operands' boundaries, where ray parity cannot classify membership reliably.
-    let gap = all.diagonal().max(1.0) * 1e-9;
-    if hi.x - lo.x > gap && hi.y - lo.y > gap && hi.z - lo.z > gap {
-        boxes.push((solidcraft_geom::Aabb3 { min: lo, max: hi }, 900));
-    }
-    let (ia_idx, ib_idx, ir_idx) = (a.inside_index(), b.inside_index(), result.inside_index());
-    let (mut n, mut bad) = (0usize, 0usize);
-    for (bx, count) in boxes {
-        let s = bx.size();
-        for i in 1..=count {
-            let p = bx.min + Vec3::new(s.x * halton(i, 2), s.y * halton(i, 3), s.z * halton(i, 5));
-            let (ia, ib) = (ia_idx.contains(p), ib_idx.contains(p));
-            let want = match op {
-                BoolOp::Union => ia || ib,
-                BoolOp::Cut => ia && !ib,
-                BoolOp::Intersect => ia && ib,
-            };
-            n += 1;
-            if ir_idx.contains(p) != want {
-                bad += 1;
+    Some(Membership::new(a, b, op).mismatch(result))
+}
+
+/// What a boolean's result must hold at the sample points [`mismatch`] tests, from the operands'
+/// meshes alone: made once for all the candidates one boolean checks, which used to build both
+/// operands' inside indices and classify the same points against them for every candidate.
+struct Membership {
+    /// The sample points, and whether the result should hold each.
+    samples: Vec<(Vec3, bool)>,
+}
+
+impl Membership {
+    fn new(a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh, op: BoolOp) -> Membership {
+        let (ba, bb) = (a.bounds(), b.bounds());
+        let lo = ba.min.max(bb.min);
+        let hi = ba.max.min(bb.max);
+        let all = ba.union(&bb);
+        let mut boxes = vec![(all, 300usize)];
+        // A touching seam can overlap by round-off only. Samples there sit on the
+        // operands' boundaries, where ray parity cannot classify membership reliably.
+        let gap = all.diagonal().max(1.0) * 1e-9;
+        if hi.x - lo.x > gap && hi.y - lo.y > gap && hi.z - lo.z > gap {
+            boxes.push((solidcraft_geom::Aabb3 { min: lo, max: hi }, 900));
+        }
+        let (ia_idx, ib_idx) = (a.inside_index(), b.inside_index());
+        let mut samples = Vec::with_capacity(1200);
+        for (bx, count) in boxes {
+            let s = bx.size();
+            for i in 1..=count {
+                let p = bx.min + Vec3::new(s.x * halton(i, 2), s.y * halton(i, 3), s.z * halton(i, 5));
+                let (ia, ib) = (ia_idx.contains(p), ib_idx.contains(p));
+                let want = match op {
+                    BoolOp::Union => ia || ib,
+                    BoolOp::Cut => ia && !ib,
+                    BoolOp::Intersect => ia && ib,
+                };
+                samples.push((p, want));
             }
         }
+        Membership { samples }
     }
-    Some(bad as f64 / n.max(1) as f64)
+
+    /// The fraction of the samples `result` holds or misses wrongly.
+    fn mismatch(&self, result: &solidcraft_geom::Mesh) -> f64 {
+        let ir_idx = result.inside_index();
+        let bad = self.samples.iter().filter(|(p, want)| ir_idx.contains(*p) != *want).count();
+        bad as f64 / self.samples.len().max(1) as f64
+    }
 }
 
 /// How one body sits relative to another, from sample points: (fraction of `b`'s samples
@@ -1421,6 +1439,8 @@ where
             && b.union_lumps().is_ok()
             && crate::coplanar::faces_touch(a, b)
     };
+    // What the membership test expects of every candidate, made when the first is tested.
+    let membership = std::cell::OnceCell::new();
     let check = |r: &Body| -> (bool, f64) {
         if let Some(reason) = reach.as_ref().and_then(|reach| reach.runaway(r)) {
             reject(reason);
@@ -1436,7 +1456,9 @@ where
             return (false, v);
         }
         let consistent = match &meshes {
-            (Some(ma), Some(mb)) => mismatch(ma, mb, &mr, op).is_none_or(|f| f < 0.004),
+            (Some(ma), Some(mb)) if ma.triangles.len() + mb.triangles.len() + mr.triangles.len() <= 60_000 => {
+                membership.get_or_init(|| Membership::new(ma, mb, op)).mismatch(&mr) < 0.004
+            }
             _ => true,
         };
         (consistent, v)
