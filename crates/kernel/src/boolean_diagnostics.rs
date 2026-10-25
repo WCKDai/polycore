@@ -80,7 +80,7 @@ pub struct BooleanDiagnostics {
     /// Why candidates of the retries that led to the result were discarded before they were
     /// measured (#3020: a coarse candidate whose edges run far outside the operands, which
     /// meshing never finished). Left out of the report when there are none.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rejected: Vec<String>,
 }
 
@@ -303,5 +303,16 @@ mod tests {
         assert!(report.truncated);
         assert!(report.events.iter().all(|event| event.strategy == BooleanStrategy::PlanarFallback));
         assert!(report.warning().unwrap().contains("capped"));
+    }
+
+    /// Read back as written: `rejected` is left out when empty, so reading must default it
+    /// (#157: a saved model holding such diagnostics was refused, and the design evaluated again).
+    #[test]
+    fn diagnostics_read_back_without_rejected() {
+        let mut d = BooleanDiagnostics::default();
+        d.push(BooleanFallback::new(BooleanStrategy::PlanarFallback));
+        let text = serde_json::to_string(&d).unwrap();
+        assert!(!text.contains("rejected"), "{text}");
+        assert_eq!(serde_json::from_str::<BooleanDiagnostics>(&text).unwrap(), d);
     }
 }
