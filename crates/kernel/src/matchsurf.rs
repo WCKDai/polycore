@@ -317,7 +317,8 @@ fn chain_polyline(chain: &[mt::Edge]) -> Result<Vec<Vec3>> {
     }
     let mut out = Vec::with_capacity(chain.len() * (PER_EDGE + 1));
     for e in chain {
-        let c = e.curve();
+        // As the chain runs: an edge it turned round keeps its curve's own direction in `curve()`.
+        let c = e.oriented_curve();
         let (t0, t1) = c.range_tuple();
         if !(t1 > t0) || ![t0, t1].into_iter().all(f64::is_finite) {
             return Err(KernelError::Failed("match: an edge has no parameter range".into()));

@@ -166,7 +166,9 @@ impl ChainLine {
             samples.push(Sample { p, s, edge, t });
         };
         for (i, e) in edges.iter().enumerate() {
-            let c = e.curve();
+            // The curve as the chain runs it: an edge the chain turned round (`inverse`) keeps
+            // its curve's own direction in `curve()`.
+            let c = e.oriented_curve();
             let (t0, t1) = c.range_tuple();
             if !(t1 > t0) || ![t0, t1].into_iter().all(f64::is_finite) {
                 return Err(KernelError::Invalid("an edge has no parameter range".into()));
