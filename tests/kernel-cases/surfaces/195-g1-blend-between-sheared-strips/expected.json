@@ -4,11 +4,11 @@
  ],
  "what": "a G1 surface.blend between the edges of two lofted strips whose parameter lines do not cross their edges at right angles: refused as 'the support surface is too small around a picked edge to read its shape'",
  "source": "analytic",
- "method": "strip A: the loft from the line (0,0,0)-(10,0,0) to (4,-10,0)-(14,-10,0), a parallelogram of area 10 x 10 = 100 in z = 0; strip B: (0,20,5)-(10,20,5) to (4,30,5)-(14,30,5), 100 in z = 5. Both edges run along x and both strips leave along -y and +y, so every cross-section of the G1 blend is the same cubic Hermite (Bezier) curve from (y, z) = (0, 0) to (20, 5), leaving along +y and arriving along +y at the speed chord/3 (chord = sqrt(425)): control points (0,0), (chord/9, 0), (20 - chord/9, 5), (20, 5), arc length 20.637019 (Simpson, 20000 steps), so the blend's area is 10 x that. Stitched onto both strips: one open sheet of three faces (valid false).",
+ "method": "strip A: the loft from the line (0,0,0)-(10,0,0) to (4,-10,0)-(14,-10,0), a parallelogram of area 10 x 10 = 100 in z = 0; strip B: (0,20,5)-(10,20,5) to (4,30,5)-(14,30,5), 100 in z = 5. Both edges run along x and both strips leave along -y and +y, so every cross-section of the G1 blend is the same cubic Hermite (Bezier) curve from (y, z) = (0, 0) to (20, 5), leaving along +y and arriving along +y at the chord's speed (a new blend's tangent share 1; chord = sqrt(425)): control points (0,0), (chord/3, 0), (20 - chord/3, 5), (20, 5), arc length 20.737084 (Simpson, 20000 steps), so the blend's area is 10 x that. Stitched onto both strips: one open sheet of three faces (valid false).",
  "valid": false,
  "body_count": 1,
  "faces": 3,
- "area_mm2": 406.3701888511152,
+ "area_mm2": 407.37084460779784,
  "bbox": {
   "min": [
    0,
