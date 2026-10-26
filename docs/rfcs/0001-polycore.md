@@ -365,7 +365,7 @@ changed.
 
 | | |
 |---|---|
-| Source | wckdboy/nightfall at `08035ea591f22891694d40fa47172e7d55ada457` (`main`, 2026-10-26). The repository is archived; archived repositories stay cloneable. |
+| Source | wckdboy/nightfall at `f4a8de07a639cef08b5127ea4894bbc1581658ce` (its final `main`, 2026-10-26). The repository is archived; archived repositories stay cloneable. |
 | OCCT | 7.9.3 at `a016080bf6738d6aeae020badee4e888ad1540a5`, built by `third_party/build-occt.sh`, dynamically linked (LGPL-2.1). |
 | Platform | macOS on Apple silicon: the CMake presets fix `arm64` and deployment target 15.0. A Linux build would need a preset change in a copy kept with the bench, not in the frozen tree. |
 | Use | `nf kernel serve`: one JSON request per line on stdin, STEP operands in, STEP results with face history out. |
@@ -375,7 +375,7 @@ Build recipe (Phase 0 runs it and records the binary's SHA-256 in `polycore-benc
 ```sh
 git clone https://github.com/wckdboy/nightfall nightfall-oracle
 cd nightfall-oracle
-git checkout 08035ea591f22891694d40fa47172e7d55ada457
+git checkout f4a8de07a639cef08b5127ea4894bbc1581658ce
 third_party/build-occt.sh --jobs 4
 cmake --preset occt -DNF_WITH_STUDIES=OFF   # no Netgen or MFEM needed
 cmake --build --preset occt --target nf
@@ -460,24 +460,31 @@ SolidCraft is betting on it. So, for as long as both projects run:
 ## Harvest from Nightfall
 
 Nightfall is archived (2026-10-26); another agent handles its notices. It is Apache-2.0 and our
-own, so anything can move, read from the archived repository. Only what earns its place does.
+own, so anything can move. Only what earns its place does.
 
-| Item | What it is | Goes to | How |
-|---|---|---|---|
-| Rust NURBS math (RFC 0008) | `nightfall-math`: checked knot vectors, basis functions, NURBS curves and surfaces, mixed partial derivatives, fixed stack workspaces (degree ≤ 9), finite-difference and property tests, probes and a bench | `polycore-math` | Phase 1: copy the source and tests; merge with `bspline.rs`, keeping the one that passes both test sets faster. |
-| Bake-off (RFC 0001) | The rubric, the decision rule, the per-process runner (crashes become results), sanitiser runs, the history probe, the 20 reference parts, findings F1–F13 | `polycore-bench`; the parts into Polykrom's `tests/oracle/` | Phase 0. Port the Python runner and scoring; re-express the 20 parts as Polykrom recipes with their analytic answers. The C++ kernel drivers stay behind. |
-| Selectors and feature IR (RFC 0005) | References by how an entity came to be, narrowed by geometry; cardinality (`expect`); content hashes per feature | Polykrom's document and MCP | Polykrom's names already follow exact kernel history, which is stronger than generative names plus OCCT's `Modified`/`Generated`. Take three ideas: a reference that resolves to the wrong count is an error with a pointer, never a guess; geometric filters (`type`, `normal`, `near`, `radius`, `convex`) as an agent-facing query in MCP, so an agent can name a face without a pick; per-feature content hashes, measured against today's dependency-aware rebase before adopting. The IR schema itself is not taken. |
-| Studies (RFC 0014) | `services/study`: a study runner, MFEM physics (P2 elasticity and heat), a sparse Cholesky solve, unit handling; the P2 surface field (mid-edge nodes, each P2 triangle drawn as four); the cantilever and thermal checks within 2 % | Polykrom ([Study program](#the-study-program)) | The physics and the checks become the reference for the Rust study code; the field format is kept for Polykrom's stress contours (#29). Netgen is dropped. |
-| USD exchange plan (RFC 0002) | Exact solids in USD through usd-brep's `omniSolid` `BrepArray` | `polycore-io` | Take the plan, not the build: PolyCore writes and reads `BrepArray` prims as `.usda` with its own code. OpenUSD and usd-brep's validator run in CI as separate checking tools. Nothing of OpenUSD is linked. |
-| Assemblies and URDF (RFC 0013) | IR v2 components, occurrences and joints; `nightfall-assembly` with residual, rank and DOF diagnostics; URDF export in C++ | Tests in Polykrom's `crates/doc` | Polykrom already has joints, closed loops with DOF and rank, motion studies, URDF and MJCF. Take the four-bar and slider-crank closure cases (residuals < 1e-9) and the URDF test expectations as extra tests. The code is not needed. |
-| Evals harness (`agent/evals`) | build, edit and repair tasks over reference parts; a deterministic `reference` runner that checks the harness and the MCP contract without a model; `SKIP` for sessions that could not start; `--resume`; the rule that the pass rate may not drop | Polykrom's `tools/agent-eval` | Polykrom's harness is already broader (parts and systems). Add the edit and repair task kinds, the reference runner, `SKIP` and `--resume`, and the rule. TinyRex runs there from wckdboy/tinyrex. |
+Paths are in wckdboy/nightfall at its final `main`, `f4a8de0`.
+
+| Item | What it is | Goes to | Phase | How |
+|---|---|---|---|---|
+| `core/math/rust/src` (RFC 0008) | `nightfall-math`: NURBS basis functions, checked knot vectors, curves, and surfaces with mixed partial derivatives. Mature, std only, no unsafe; fixed stack workspaces (degree ≤ 9), finite-difference and property tests, probes and a bench | `polycore-math` | 1 | Copy the source, tests and probes. Merge with `bspline.rs`, keeping the one that passes both test sets faster. |
+| `core/kernel/rust/src` | boolean, mesh, step and transform wrappers over the OCCT adapter. Early | Nothing | – | Reference only, when the `Kernel` trait's ownership and error types are written in Phase 0. |
+| `core/assembly/rust` (`nightfall-assembly`, RFC 0013) | A Levenberg–Marquardt joint solver with limits, DOF and loop counts, conflict and redundancy reports; closed-form mechanism tests (four-bar, slider-crank, serial arm). Pure Rust. Draft PR #350 adds a one-pass QR redundancy search: 100 occurrences in 0.14 s | Polykrom's `crates/doc` (joints) | Polykrom, alongside Phase 0 | Compare with Polykrom's joint solver on both test sets (the closed-form mechanisms, residuals < 1e-9, and Polykrom's own); port what wins: at least the mechanism tests, and the conflict and redundancy reports and the QR search if Polykrom lacks or trails them. |
+| `core/sketch/rust` | The sketch solver Nightfall vendored from SolidCraft | Nothing | – | Polykrom already has it. |
+| `services/study/src` (RFC 0014) | Netgen meshing, a custom sparse Cholesky, MFEM physics (P2 elasticity and heat), units; the cantilever and thermal checks within 2 % | Polykrom's `crates/study` ([Study program](#the-study-program)) | Study track, alongside Phases 0–1 | Replaced natively. The physics, the units and the checks are the reference the Rust code must match; Netgen and the custom Cholesky are dropped (fTetWild and faer instead). |
+| P2 field display (#336) | The mid-edge-node logic: each P2 surface triangle drawn as four through its mid-edge values, so the field's maximum equals the reported one to 1e-9 | Polykrom's `crates/study` (field output) and its stress contours (#29) | Study track | Port the logic and its 1e-9 check. The Swift and Metal drawing does not carry over. |
+| `agent/evals` (`run.py`, #259) | A provider-agnostic eval runner: build, edit and repair tasks; a deterministic `reference` runner that checks the harness and the MCP contract without a model; `SKIP` for sessions that could not start; `--resume`; the rule that the pass rate may not drop | Polykrom's `tools/agent-eval` | 0 | Port it; it runs the TinyRex gate from wckdboy/tinyrex. Polykrom's harness keeps its parts and systems rounds. |
+| `examples/parts` | 20 reference parts with analytic answers, the corpus of Nightfall's bake-off | Polykrom's `tests/oracle/` as recipes, and `polycore-bench` | 0 | Re-express each as a Polykrom recipe with its analytic answer. |
+| `tools/bakeoff` (RFC 0001) | The rubric, the decision rule, the per-process runner (crashes become results), sanitiser runs, the history probe, findings F1–F13 | `polycore-bench` | 0 | Port the Python runner and scoring. The C++ kernel drivers stay behind; OCCT is reached through the frozen `nf` ([The OCCT reference program](#the-occt-reference-program)). |
+| `core/ir/schema` (RFC 0005) and `tools/cli/mcp.cpp` | The selector and generative-name design (references by how an entity came to be, narrowed by geometry; cardinality `expect`), per-feature content hashes, and the MCP tool design | Polykrom's `crates/doc` and `crates/mcp`, as design reference | Polykrom, after Phase 0 | Polykrom's names already follow exact kernel history, which is stronger than generative names plus OCCT's `Modified`/`Generated`. Take three ideas: a reference that resolves to the wrong count is an error with a pointer, never a guess; geometric filters (`type`, `normal`, `near`, `radius`, `convex`) as an agent-facing query in MCP; per-feature content hashes, measured against today's dependency-aware rebase before adopting. Compare the MCP tool set with Polykrom's and take what is missing. No code or schema is taken. |
+| USD exchange plan (RFC 0002) | Exact solids in USD through usd-brep's `omniSolid` `BrepArray` | `polycore-io` | 3 | Take the plan, not the build: PolyCore writes and reads `BrepArray` prims as `.usda` with its own code. OpenUSD and usd-brep's validator run in CI as separate checking tools. Nothing of OpenUSD is linked. |
+| URDF export (`urdf.cpp`) | URDF in C++ with its tests | Polykrom's URDF tests | Polykrom, alongside Phase 0 | Polykrom already exports URDF and MJCF. Take the test expectations, not the code. |
 
 Not worth keeping:
 
 | Item | Why |
 |---|---|
 | The OCCT C++: `core/kernel` (`IKernel` and its OCCT backend), `core/kernel/native`, the C++ evaluator in `services/kernel`, `urdf.cpp` | OCCT-specific. PolyCore replaces the kernel; Polykrom already has the evaluator and URDF. The frozen `nf` binary is kept only as the reference program. |
-| The Swift app and the XPC service | Polykrom is the app. |
+| The Swift app, the XPC service, and the Swift and Metal field drawing | Polykrom is the app. |
 | `nf kernel serve` as a consumer (RFC 0015) and Polykrom's `feat/nightfall-backend` branch | There is no second kernel to call. The branch closes unmerged. |
 | `core/ffi` and the RFC 0008 C ABI | No non-Rust consumer. |
 | The Nightfall IR schema and its migrations | Polykrom has its own format (`solidcraft/N`). |
