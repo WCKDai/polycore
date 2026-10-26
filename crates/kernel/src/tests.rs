@@ -3795,3 +3795,44 @@ fn shell_whose_free_form_wall_would_cross_a_flat_one_is_refused() {
     let e = shell(&body, &open, 2.5).unwrap_err().to_string();
     assert!(e.contains("walls would meet"), "{e}");
 }
+
+/// The grid of surface points a search from no starting point takes the nearest of is evaluated
+/// once per intersection polyline (#125), not once per point, and every search goes on exactly as
+/// before: an oblique cut right round a revolved shaft and an extruded bar, and an oblique join
+/// of each with a slab, give the very results (counts, volume and area, bit for bit) of the
+/// searches that evaluate their own grids.
+#[test]
+fn presearch_grids_once_per_polyline_change_nothing() {
+    use truck_shapeops::broad_phase_test_hooks::uncached;
+    let profile =
+        Region2 { outer: Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(12.0, 0.0), Vec2::new(12.0, 40.0), Vec2::new(0.0, 40.0)]), holes: vec![] };
+    let shaft = revolve(&Plane::XZ, &[profile], Vec2::ZERO, Vec2::Y, std::f64::consts::TAU).unwrap().pop().unwrap();
+    let bar = extrude(&Plane::XY, &[Region2 { outer: Loop2::circle(Vec2::ZERO, 12.0), holes: vec![] }], -40.0, 0.0).unwrap().pop().unwrap();
+    let slab = box_solid(Vec3::new(-30.0, -30.0, -24.0), Vec3::new(30.0, 30.0, -16.0)).unwrap();
+    let slab = crate::transform(&slab, Vec3::ZERO, Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.4, 1.0, 0.0), 0.35).unwrap();
+    let tol = 0.05;
+    for (name, round) in [("shaft", &shaft), ("bar", &bar)] {
+        for (and, invert) in [(true, true), (false, false)] {
+            let run = || {
+                let (sa, mut sb) = (round.deep_copy(), slab.deep_copy());
+                if invert {
+                    sb.not();
+                }
+                guard("t", || Ok(if and { truck_shapeops::and(&sa, &sb, tol) } else { truck_shapeops::or(&sa, &sb, tol) })).unwrap()
+            };
+            let what = format!("{name} and {and} invert {invert}");
+            let (Some(cached), Some(plain)) = (run(), uncached(run)) else { panic!("{what}: no result") };
+            let (mc, mp) = (measure(&Body::new(cached).unwrap()).unwrap(), measure(&Body::new(plain).unwrap()).unwrap());
+            assert_eq!((mc.faces, mc.edges, mc.vertices), (mp.faces, mp.edges, mp.vertices), "{what}");
+            assert_eq!(
+                (mc.volume.to_bits(), mc.area.to_bits()),
+                (mp.volume.to_bits(), mp.area.to_bits()),
+                "{what}: {} {} vs {} {}",
+                mc.volume,
+                mc.area,
+                mp.volume,
+                mp.area
+            );
+        }
+    }
+}

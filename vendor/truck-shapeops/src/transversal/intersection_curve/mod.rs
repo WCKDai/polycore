@@ -25,7 +25,10 @@ where S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>
         surface1: S,
         poly: PolylineCurve<Point3>,
         tol: f64,
-    ) -> Option<Self> {
+    ) -> Option<Self>
+    where
+        S: 'static,
+    {
         // SolidCraft: a point contact is not a curve. Reject it before indexing the
         // endpoints, and reject collapsed/non-finite segments before normalizing.
         if poly.len() < 2 || poly.windows(2).any(|p| {
@@ -37,9 +40,20 @@ where S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>
         let mut polyline = PolylineCurve(Vec::new());
         let mut params0 = PolylineCurve(Vec::new());
         let mut params1 = PolylineCurve(Vec::new());
+        // SolidCraft: a point's search from no starting point begins with the nearest of a grid
+        // of the surface's points, evaluated for every point of the polyline alike (#125): most
+        // of what an intersection cost. The grids are evaluated once here and each point's
+        // nearest found among them as the search finds it, so every search goes on from where it
+        // would have and gives the same answer.
+        let grids = (Presearch::of(&surface0), Presearch::of(&surface1));
+        let project = |point: Point3, normal: Vector3| {
+            let hint0 = grids.0.as_ref().map(|g| g.nearest(point));
+            let hint1 = grids.1.as_ref().map(|g| g.nearest(point));
+            double_projection(&surface0, hint0, &surface1, hint1, point, normal, 100)
+        };
         for p in poly.windows(2) {
             let n = (p[1] - p[0]).normalize();
-            let (q, p0, p1) = double_projection(&surface0, None, &surface1, None, p[0], n, 100)?;
+            let (q, p0, p1) = project(p[0], n)?;
             polyline.push(q);
             params0.push(p0);
             params1.push(p1);
@@ -48,15 +62,7 @@ where S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>
             (polyline[0], params0[0], params1[0])
         } else {
             let n = (poly[poly.len() - 1] - poly[poly.len() - 2]).normalize();
-            double_projection(
-                &surface0,
-                None,
-                &surface1,
-                None,
-                poly[poly.len() - 1],
-                n,
-                100,
-            )?
+            project(poly[poly.len() - 1], n)?
         };
         polyline.push(q);
         params0.push(p0);
@@ -150,6 +156,74 @@ where S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>
     }
 }
 
+/// SolidCraft: the grid of a surface's points that truck's search from no starting point
+/// (`SearchNearestParameter` with no hint) takes the nearest of first (`algo::surface::presearch`):
+/// truck-modeling's B-spline and NURBS surfaces over their parameter ranges in 50 divisions, its
+/// revolved curves in 100; a plane is searched in closed form, and any other surface is not
+/// known here (`None`).
+pub(crate) struct Presearch {
+    grid: Vec<((f64, f64), Point3)>,
+}
+
+impl Presearch {
+    /// The grid of `surface`, evaluated as the presearch evaluates it.
+    pub(crate) fn of<S: ParametricSurface3D + 'static>(surface: &S) -> Option<Self> {
+        if !caching_enabled() {
+            return None;
+        }
+        let any: &dyn std::any::Any = surface;
+        let (((u0, u1), (v0, v1)), division) = match any.downcast_ref::<truck_modeling::Surface>()? {
+            truck_modeling::Surface::BSplineSurface(s) => (s.range_tuple(), 50),
+            truck_modeling::Surface::NurbsSurface(s) => (s.range_tuple(), 50),
+            truck_modeling::Surface::RevolutedCurve(s) => (s.range_tuple(), 100),
+            truck_modeling::Surface::Plane(_) => return None,
+        };
+        let mut grid = Vec::with_capacity((division + 1) * (division + 1));
+        for i in 0..=division {
+            for j in 0..=division {
+                let p = i as f64 / division as f64;
+                let q = j as f64 / division as f64;
+                let u = u0 * (1.0 - p) + u1 * p;
+                let v = v0 * (1.0 - q) + v1 * q;
+                grid.push(((u, v), surface.subs(u, v)));
+            }
+        }
+        Some(Presearch { grid })
+    }
+
+    /// The grid's parameters nearest `point`, the first of equals in the presearch's order.
+    pub(crate) fn nearest(&self, point: Point3) -> (f64, f64) {
+        let mut res = (0.0, 0.0);
+        let mut min = f64::INFINITY;
+        for &(uv, q) in &self.grid {
+            let dist = q.distance2(point);
+            if dist < min {
+                min = dist;
+                res = uv;
+            }
+        }
+        res
+    }
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {
+    /// Set by the test hooks: every point's search evaluates its own grid, as before.
+    pub(super) static UNCACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the grids are evaluated once per polyline (always, but in the test hooks' comparisons).
+fn caching_enabled() -> bool {
+    #[cfg(any(test, feature = "test-hooks"))]
+    {
+        !UNCACHED.with(|c| c.get())
+    }
+    #[cfg(not(any(test, feature = "test-hooks")))]
+    {
+        true
+    }
+}
+
 pub fn intersection_curves<S>(
     surface0: S,
     polygon0: &PolygonMesh,
@@ -161,7 +235,7 @@ pub fn intersection_curves<S>(
     Option<IntersectionCurveWithParameters<S>>,
 )>
 where
-    S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>,
+    S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3> + 'static,
 {
     let interferences = polygon0.extract_interference(polygon1);
     let polylines = super::polyline_construction::construct_polylines(&interferences);

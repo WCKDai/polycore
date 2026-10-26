@@ -279,13 +279,29 @@ pub mod test_hooks {
         broad_phase::overlapping_pairs(&boxed(boxes0), &boxed(boxes1))
     }
 
+    /// `f` with the thread-local switch `key` set, put back as it was when `f` returns or unwinds
+    /// (a test that catches a panic goes on with the switch as it found it).
+    fn with_switch<R>(key: &'static std::thread::LocalKey<std::cell::Cell<bool>>, f: impl FnOnce() -> R) -> R {
+        struct Restore(&'static std::thread::LocalKey<std::cell::Cell<bool>>, bool);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                self.0.with(|c| c.set(self.1));
+            }
+        }
+        let _restore = Restore(key, key.with(|c| c.replace(true)));
+        f()
+    }
+
     /// `f` with every face pair intersected by the mesh collision, as before the exact
     /// intersections of #125 (on this thread).
     pub fn mesh_only<R>(f: impl FnOnce() -> R) -> R {
-        let before = analytic::MESH_ONLY.with(|c| c.replace(true));
-        let r = f();
-        analytic::MESH_ONLY.with(|c| c.set(before));
-        r
+        with_switch(&analytic::MESH_ONLY, f)
+    }
+
+    /// `f` with every intersection point's search evaluating its own grid of the surfaces'
+    /// points, as before the grids were evaluated once per polyline (#125), on this thread.
+    pub fn uncached<R>(f: impl FnOnce() -> R) -> R {
+        with_switch(&intersection_curve::UNCACHED, f)
     }
 
     /// `f`, and how many face pairs it intersected exactly (on this thread).

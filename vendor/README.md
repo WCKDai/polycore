@@ -72,6 +72,12 @@ Changes:
   edge curves are read as truck-modeling's (now a dependency, no longer a dev-dependency); the
   shape-op traits ask `'static` for that. The `test-hooks` feature can turn it off
   (`mesh_only`) and count the pairs it took (`exact_pairs`).
+- `transversal/intersection_curve/mod.rs`: truck's search for an intersection point from no
+  starting point begins with the nearest of a grid of the surface's points (`presearch`: 51 x 51
+  on a B-spline or NURBS surface, 101 x 101 on a revolved curve), evaluated anew for every point
+  of a polyline. The grids are now evaluated once per polyline and each point's nearest found
+  among them as the presearch finds it, so every search goes on from where it would have and
+  gives the same answer, bit for bit (#125). The `test-hooks` feature can turn it off (`uncached`).
 
 ## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
