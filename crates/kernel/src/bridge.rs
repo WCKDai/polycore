@@ -869,8 +869,10 @@ fn boundary_gap(made: &Body, line: &ChainLine, at_end: bool) -> Result<f64> {
     };
     let v = if at_end { v1 } else { v0 };
     let mut worst: f64 = 0.0;
-    for i in 0..=256 {
-        let u = u0 + (u1 - u0) * i as f64 / 256.0;
+    // Several samples between any two of up to `MAX_BLEND_STATIONS` stations.
+    const SAMPLES: usize = 1024;
+    for i in 0..=SAMPLES {
+        let u = u0 + (u1 - u0) * i as f64 / SAMPLES as f64;
         worst = worst.max(line.nearest_with_distance(from_p3(surf.subs(u, v))).1);
     }
     Ok(worst)
@@ -1034,6 +1036,9 @@ pub fn blend_between(
     blend_between_tangent(a, picks_a, b, picks_b, orders, crown, [LEGACY_BLEND_TANGENT; 2], align, seam, samples, stitch)
 }
 
+/// The most stations a blend takes along its rims (see [`blend_between_tangent`]).
+pub const MAX_BLEND_STATIONS: usize = 401;
+
 /// [`blend_between`] whose cross-sections leave each side at `tangent` times the chord (see
 /// [`bridge_tangent`]).
 #[allow(clippy::too_many_arguments)]
@@ -1052,8 +1057,8 @@ pub fn blend_between_tangent(
 ) -> Result<(Body, f64)> {
     a.require_brep("blend")?;
     b.require_brep("blend")?;
-    if !(5..=401).contains(&samples) {
-        return Err(KernelError::Invalid("a blend needs 5 to 401 stations".into()));
+    if !(5..=MAX_BLEND_STATIONS).contains(&samples) {
+        return Err(KernelError::Invalid(format!("a blend needs 5 to {MAX_BLEND_STATIONS} stations")));
     }
     if align.iter().chain(&seam).flatten().any(|p| !p.is_finite()) {
         return Err(KernelError::Invalid("`align` and `seam` points must be finite".into()));
@@ -1078,12 +1083,25 @@ pub fn blend_between_tangent(
     let (faces_a, across_a) = support_faces(a, &chain_a, line_a.length(), leave_a, align.is_some())?;
     let (faces_b, across_b) = support_faces(b, &chain_b, line_b.length(), leave_b, align.is_some())?;
     let (start_a, backwards_a) = seam.map_or((0.0, false), |[p, _]| line_a.start_at_seam(p));
-    let stations_a = line_a.stations(samples, start_a, backwards_a)?;
-    let stations_b = pair_with(&stations_a, &line_b, seam.map(|[_, q]| q))?;
-    let frames_a = frames_on(&faces_a, across_a.as_deref(), &stations_a, &line_a, leave_a)?;
-    let frames_b = frames_on(&faces_b, across_b.as_deref(), &stations_b, &line_b, leave_b)?;
-    let made = bridge_tangent(&frames_a, &frames_b, orders, crown, tangent)?;
-    let gap = boundary_gap(&made, &line_a, false)?.max(boundary_gap(&made, &line_b, true)?);
+    // The blend's boundary is a cubic through its stations on the rims, and on a curved rim it
+    // strays between them (0.014 mm at 41 stations round a bottle's hole). A stitch pairs edges
+    // within its default tolerance only, so the stations are doubled until the boundary is that
+    // near the rims, or as many as a blend takes. The stray falls as the fourth power of the
+    // spacing.
+    let near = a.size().max(b.size()) * 1e-6 + 1e-6;
+    let mut count = samples;
+    let (made, gap) = loop {
+        let stations_a = line_a.stations(count, start_a, backwards_a)?;
+        let stations_b = pair_with(&stations_a, &line_b, seam.map(|[_, q]| q))?;
+        let frames_a = frames_on(&faces_a, across_a.as_deref(), &stations_a, &line_a, leave_a)?;
+        let frames_b = frames_on(&faces_b, across_b.as_deref(), &stations_b, &line_b, leave_b)?;
+        let made = bridge_tangent(&frames_a, &frames_b, orders, crown, tangent)?;
+        let gap = boundary_gap(&made, &line_a, false)?.max(boundary_gap(&made, &line_b, true)?);
+        if gap <= near || count >= MAX_BLEND_STATIONS {
+            break (made, gap);
+        }
+        count = (count * 2 - 1).min(MAX_BLEND_STATIONS);
+    };
     let faces: Vec<mt::Face> = made.solid.face_iter().cloned().collect();
     let mut rec = crate::record::Rebuild::default();
     for f in &faces {
