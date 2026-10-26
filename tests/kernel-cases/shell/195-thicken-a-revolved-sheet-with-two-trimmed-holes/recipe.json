@@ -140,6 +140,14 @@
     ],
     "thickness": -2
    }
+  },
+  {
+   "command": "solid.remove",
+   "params": {
+    "bodies": [
+     "Bottle"
+    ]
+   }
   }
  ]
 }
