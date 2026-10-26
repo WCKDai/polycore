@@ -729,6 +729,32 @@ fn section(a: &Frame, b: &Frame, orders: [Continuity; 2], n: usize, speed: [f64;
 /// cross-sections leave each boundary (0: the plain bridge, up to 3: fuller, down to -0.9:
 /// flatter), which shapes the middle without touching the conditions at either end.
 pub fn bridge(a: &[Frame], b: &[Frame], orders: [Continuity; 2], crown: [f64; 2]) -> Result<Body> {
+    bridge_tangent(a, b, orders, crown, [LEGACY_BLEND_TANGENT; 2])
+}
+
+/// How fast a blend's cross-section leaves each boundary when its feature does not say, as a
+/// share of the chord between the boundaries: what blends were built with before the share
+/// was saved with them. A third leaves short tangents, so a blend between offset edges turns
+/// tightly at its ends (0.42 mm on a car hood's 13 mm blend).
+pub const LEGACY_BLEND_TANGENT: f64 = 1.0 / 3.0;
+
+/// The share new blends are built with: tangents as long as the chord, the Hermite blend's
+/// natural speed, which keeps the cross-section's curvature at its ends close to the middle's.
+pub const BLEND_TANGENT: f64 = 1.0;
+
+/// The tangent shares (each end's leaving speed over the chord) a blend may be given.
+pub const BLEND_TANGENT_RANGE: std::ops::RangeInclusive<f64> = 0.05..=3.0;
+
+/// [`bridge`] whose cross-sections leave each boundary at `tangent` times the chord between the
+/// two stations (before `crown` scales it): [`LEGACY_BLEND_TANGENT`] is [`bridge`]'s.
+pub fn bridge_tangent(a: &[Frame], b: &[Frame], orders: [Continuity; 2], crown: [f64; 2], tangent: [f64; 2]) -> Result<Body> {
+    if !tangent.iter().all(|t| BLEND_TANGENT_RANGE.contains(t)) {
+        return Err(KernelError::Invalid(format!(
+            "a blend's tangent share must be between {} and {}",
+            BLEND_TANGENT_RANGE.start(),
+            BLEND_TANGENT_RANGE.end()
+        )));
+    }
     let (Some(&crown_a), Some(&crown_b)) = (crown.first(), crown.get(1)) else { return Err(KernelError::Failed("bridge: crown".into())) };
     if a.len() != b.len() || a.len() < 2 || a.len() > 4097 {
         return Err(KernelError::Invalid("a bridge needs 2 to 4097 stations, the same on both sides".into()));
@@ -743,6 +769,12 @@ pub fn bridge(a: &[Frame], b: &[Frame], orders: [Continuity; 2], crown: [f64; 2]
     if n == 0 || n > solidcraft_geom::bspline::MAX_SPLINE_DEGREE {
         return Err(KernelError::Failed("bridge: degree".into()));
     }
+    if folds(orders, n, [tangent[0] * (1.0 + crown_a), tangent[1] * (1.0 + crown_b)])? {
+        return Err(KernelError::Invalid(
+            "a blend's tangent share and crown together make it leave so fast that its cross-section would fold back on itself: lower one of them"
+                .into(),
+        ));
+    }
     let mut layers: Vec<Vec<Vec3>> = vec![Vec::with_capacity(stations); n + 1];
     for (fa, fb) in a.iter().zip(b) {
         if !fa.p.is_finite() || !fb.p.is_finite() || !fa.leave.is_finite() || !fb.leave.is_finite() {
@@ -752,7 +784,7 @@ pub fn bridge(a: &[Frame], b: &[Frame], orders: [Continuity; 2], crown: [f64; 2]
         if !(chord > 1e-9) {
             return Err(KernelError::Invalid("the two boundaries meet: there is no room for a bridge".into()));
         }
-        let speed = [chord / 3.0 * (1.0 + crown_a), chord / 3.0 * (1.0 + crown_b)];
+        let speed = [chord * tangent[0] * (1.0 + crown_a), chord * tangent[1] * (1.0 + crown_b)];
         let controls = section(fa, fb, orders, n, speed)?;
         for (layer, c) in layers.iter_mut().zip(controls) {
             layer.push(c);
@@ -782,6 +814,26 @@ pub fn bridge(a: &[Frame], b: &[Frame], orders: [Continuity; 2], crown: [f64; 2]
     let points: Vec<HPoint> = ctrl.iter().map(|p| HPoint::weighted(*p, 1.0)).collect();
     let nurbs = NurbsSurface::from_homogeneous([degree, n], [knots_u, knots_v], points).map_err(|e| KernelError::Failed(format!("bridge: {e}")))?;
     guard("bridge surface", || crate::spline_conv::tensor_face(&nurbs).map(|f| surface_body(vec![f])))
+}
+
+/// Whether cross-sections leaving each end at `speed` (in chords) can fold back on themselves.
+/// Leaving fast folds soonest between two rims facing each other in one plane: the cross-section's
+/// controls then lie on the chord, and it folds where their curve runs backwards along it. The
+/// legacy share never folds there, even at the largest crown.
+fn folds(orders: [Continuity; 2], n: usize, speed: [f64; 2]) -> Result<bool> {
+    let a = Frame { p: Vec3::ZERO, leave: Vec3::X, bend: Vec3::ZERO, bend_change: Vec3::ZERO };
+    let b = Frame { p: Vec3::X, leave: Vec3::X * -1.0, bend: Vec3::ZERO, bend_change: Vec3::ZERO };
+    let c = section(&a, &b, orders, n, speed)?;
+    // The hodograph's control values along the chord, and its value by de Casteljau's steps.
+    let d: Vec<f64> = c.windows(2).map(|w| w.get(1).map_or(0.0, |q| q.x) - w.first().map_or(0.0, |p| p.x)).collect();
+    let along = |t: f64| {
+        let mut v = d.clone();
+        while v.len() > 1 {
+            v = v.windows(2).map(|w| w.first().copied().unwrap_or(0.0) * (1.0 - t) + w.get(1).copied().unwrap_or(0.0) * t).collect();
+        }
+        v.first().copied().unwrap_or(0.0)
+    };
+    Ok((0..=256).any(|i| along(i as f64 / 256.0) < -1e-12))
 }
 
 /// The surface of a bridge face as a grid of points, for callers that measure the result.
@@ -979,6 +1031,25 @@ pub fn blend_between(
     samples: usize,
     stitch: bool,
 ) -> Result<(Body, f64)> {
+    blend_between_tangent(a, picks_a, b, picks_b, orders, crown, [LEGACY_BLEND_TANGENT; 2], align, seam, samples, stitch)
+}
+
+/// [`blend_between`] whose cross-sections leave each side at `tangent` times the chord (see
+/// [`bridge_tangent`]).
+#[allow(clippy::too_many_arguments)]
+pub fn blend_between_tangent(
+    a: &Body,
+    picks_a: &[Vec3],
+    b: &Body,
+    picks_b: &[Vec3],
+    orders: [Continuity; 2],
+    crown: [f64; 2],
+    tangent: [f64; 2],
+    align: Option<[Vec3; 2]>,
+    seam: Option<[Vec3; 2]>,
+    samples: usize,
+    stitch: bool,
+) -> Result<(Body, f64)> {
     a.require_brep("blend")?;
     b.require_brep("blend")?;
     if !(5..=401).contains(&samples) {
@@ -1011,7 +1082,7 @@ pub fn blend_between(
     let stations_b = pair_with(&stations_a, &line_b, seam.map(|[_, q]| q))?;
     let frames_a = frames_on(&faces_a, across_a.as_deref(), &stations_a, &line_a, leave_a)?;
     let frames_b = frames_on(&faces_b, across_b.as_deref(), &stations_b, &line_b, leave_b)?;
-    let made = bridge(&frames_a, &frames_b, orders, crown)?;
+    let made = bridge_tangent(&frames_a, &frames_b, orders, crown, tangent)?;
     let gap = boundary_gap(&made, &line_a, false)?.max(boundary_gap(&made, &line_b, true)?);
     let faces: Vec<mt::Face> = made.solid.face_iter().cloned().collect();
     let mut rec = crate::record::Rebuild::default();

@@ -165,7 +165,10 @@ pub use body::{Body, CapSignature, DISPLAY_ANGLE, DisplayShare, EdgeInfo, FaceIn
 pub use boolean_diagnostics::{BooleanDiagnostics, BooleanFallback, BooleanStrategy, capture_boolean_diagnostics};
 pub use boundary::{Boundary, boundary_patch};
 pub use boundary_network::{BoundaryCurve, CurveSource, MAX_CHAIN_CURVES, MAX_EDGE_PICKS, boundary_join, boundary_surface};
-pub use bridge::{Continuity, Frame, blend_between, bridge, chain, chain_closes, frames, frames_across, sample_grid};
+pub use bridge::{
+    BLEND_TANGENT, BLEND_TANGENT_RANGE, Continuity, Frame, LEGACY_BLEND_TANGENT, blend_between, blend_between_tangent, bridge, bridge_tangent, chain,
+    chain_closes, frames, frames_across, sample_grid,
+};
 pub use build::{
     PathSeg, box_solid, canonical_revolve_axis, cylinder, extrude, extrude_tapered, extrude_tapered_between, extrude_whole_sides, loft, loft_regions,
     loft_with_rails, path_polyline, revolve, revolve_whole, sphere, sweep, sweep_with, torus,
