@@ -729,3 +729,167 @@ fn round_along_long_lines_and_small_turns_measures_its_volume() {
     // Centred across the bar, as the part is.
     assert!(m.centroid.x.abs() < 1e-3, "centre of mass x {}", m.centroid.x);
 }
+
+/// An outline of lines and quarter arcs, front (x > 0) corners `rf`, back corners `rb`.
+fn rounded_outline(x0: f64, x1: f64, y0: f64, y1: f64, rf: f64, rb: f64) -> solidcraft_geom::Region2 {
+    use solidcraft_geom::{Loop2, Region2, Seg2, Vec2};
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let line = |a: (f64, f64), b: (f64, f64)| Seg2::Line { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1) };
+    let arc = |c: (f64, f64), r: f64, start: f64| Seg2::Arc { center: Vec2::new(c.0, c.1), radius: r, start, sweep: FRAC_PI_2 };
+    let segs = vec![
+        line((x0 + rb, y0), (x1 - rf, y0)),
+        arc((x1 - rf, y0 + rf), rf, -FRAC_PI_2),
+        line((x1, y0 + rf), (x1, y1 - rf)),
+        arc((x1 - rf, y1 - rf), rf, 0.0),
+        line((x1 - rf, y1), (x0 + rb, y1)),
+        arc((x0 + rb, y1 - rb), rb, FRAC_PI_2),
+        line((x0, y1 - rb), (x0, y0 + rb)),
+        arc((x0 + rb, y0 + rb), rb, PI),
+    ];
+    Region2 { outer: Loop2 { segs }, holes: vec![] }
+}
+
+/// The four outlines TinyRex's torso is lofted through (#184): a flat belly at z 210 out to the
+/// full outline at z 288, the front corners rounder than the back.
+fn torso() -> Body {
+    use solidcraft_geom::Plane;
+    let sections = [
+        (210.0, rounded_outline(-36.0, 32.0, -39.0, 39.0, 9.0, 9.0)),
+        (224.0, rounded_outline(-52.0, 52.0, -45.0, 45.0, 24.0, 20.0)),
+        (254.0, rounded_outline(-63.0, 64.0, -46.0, 46.0, 28.0, 22.0)),
+        (288.0, rounded_outline(-65.0, 65.0, -46.0, 46.0, 28.0, 22.0)),
+    ];
+    crate::loft_regions(&sections.map(|(z, outline)| (Plane::XY.offset(z), outline))).unwrap()
+}
+
+/// What a round of radius `r` on the floor edge (at height `floor`) of a lofted body `before` looks
+/// like in `after`: at points of the new faces as meshed, the largest error of the ball's centre
+/// behind them (inward along the normal by `r`), as its height over the floor less `r` and its
+/// distance from the lofted walls less `r`; and the largest angle (degrees) between the normals of
+/// the faces either side of the new faces' edges. With the number of new faces, and of the points
+/// whose centre has no nearest point within a wall's parameters (by a seam between two walls).
+fn round_errors(before: &Body, after: &Body, floor: f64, r: f64) -> (f64, f64, usize, usize) {
+    let walls: Vec<&mt::Face> = before.solid.face_iter().filter(|f| !matches!(f.oriented_surface(), mt::Surface::Plane(_))).collect();
+    let old: Vec<&mt::Face> = before.solid.face_iter().collect();
+    let faces: Vec<&mt::Face> = after.solid.face_iter().collect();
+    // On a wall: its nearest point within the wall's own parameters (a lofted face is untrimmed).
+    let off_walls = |p: Vec3| {
+        walls.iter().filter_map(|f| project(f, p, None).filter(|x| in_range(f, x.2))).map(|(q, _, _)| q.dist(p)).fold(f64::INFINITY, f64::min)
+    };
+    let (mut missed, mut sampled) = (0, 0);
+    let off_old = |p: Vec3| old.iter().filter_map(|f| project(f, p, None)).map(|(q, _, _)| q.dist(p)).fold(f64::INFINITY, f64::min);
+    // A face is new where the middle of its surface lies off the old faces.
+    let new: Vec<usize> = (0..faces.len())
+        .filter(|i| {
+            let s = faces[*i].oriented_surface();
+            let (Some((u0, u1)), Some((v0, v1))) = s.try_range_tuple() else { return false };
+            off_old(from_p3(s.subs((u0 + u1) * 0.5, (v0 + v1) * 0.5))) > 1e-3 * r
+        })
+        .collect();
+    let mesh = after.tessellate_with(0.05, true).unwrap();
+    let mut radius: f64 = 0.0;
+    for (t, f) in mesh.triangles.iter().zip(&mesh.tri_face).step_by(3) {
+        let (Some(tri), true) = (mesh.tri(t), new.contains(&(*f as usize))) else { continue };
+        let (q, n, _) = project(faces[*f as usize], tri[0], None).unwrap();
+        let centre = q - n * r;
+        let wall = off_walls(centre);
+        if !wall.is_finite() {
+            missed += 1;
+            continue;
+        }
+        sampled += 1;
+        radius = radius.max((centre.z - floor - r).abs()).max((wall - r).abs());
+    }
+    let mut angle: f64 = 0.0;
+    for i in &new {
+        for e in faces[*i].edge_iter() {
+            let Some(j) = (0..faces.len()).find(|j| *j != *i && faces[*j].edge_iter().any(|x| x.id() == e.id())) else { continue };
+            let c = e.curve();
+            let (t0, t1) = c.range_tuple();
+            for k in 1..8 {
+                let m = from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 8.0));
+                let (Some((_, a, _)), Some((_, b, _))) = (project(faces[*i], m, None), project(faces[j], m, None)) else { continue };
+                angle = angle.max(a.dot(b).clamp(-1.0, 1.0).acos().to_degrees());
+            }
+        }
+    }
+    assert!(missed * 50 < sampled, "{missed} of {sampled} centres off the walls");
+    (radius, angle, new.len(), missed)
+}
+
+#[test]
+fn rolling_ball_round_on_a_lofted_torso_bottom_chain() {
+    // #184 case 2: R8 on the bottom edge chain (four lines and four r9 arcs, tangent) between the
+    // floor and eight lofted faces. The contacts cross the curved seams between the lofted faces.
+    let body = torso();
+    let round = fillet(&body, &[Vec3::new(0.0, -39.0, 210.0)], 8.0).unwrap();
+    assert!(round.validity().is_empty(), "{:?}", round.validity());
+    let (radius, angle, count, _) = round_errors(&body, &round, 210.0, 8.0);
+    assert_eq!(count, 8, "one blend face per edge of the chain");
+    assert!(radius < 1e-3, "the ball's centre is {radius} mm off radius 8 from the floor or the walls");
+    assert!(angle < 0.5, "the round meets its neighbours at {angle} degrees");
+    // The loft is its own interpolation: no volume to check here (the sloped loft below has one).
+    assert!(crate::measure(&round).unwrap().volume < crate::measure(&body).unwrap().volume);
+    // #184 case 1: R11, larger than the floor's r9 arcs, is still refused as too large.
+    assert!(matches!(fillet(&body, &[Vec3::new(0.0, -39.0, 210.0)], 11.0), Err(crate::KernelError::TooLarge(_))));
+}
+
+#[test]
+fn rolling_ball_round_on_a_sloped_loft_matches_its_volume() {
+    // R4 on the bottom chain of a two-section loft whose walls all slope 5 in 30 (planes on the
+    // lines, cones on the arcs): its section is the same all round, so Steiner's formula gives the
+    // volume (tests/kernel-cases/fillets/126-fillet-loft-bottom-chain-constant-slope).
+    use solidcraft_geom::Plane;
+    use std::f64::consts::PI;
+    let pad = crate::loft_regions(&[
+        (Plane::XY, rounded_outline(-30.0, 30.0, -20.0, 20.0, 10.0, 10.0)),
+        (Plane::XY.offset(30.0), rounded_outline(-25.0, 25.0, -15.0, 15.0, 5.0, 5.0)),
+    ])
+    .unwrap();
+    let r = 4.0;
+    let round = fillet(&pad, &[Vec3::new(0.0, -20.0, 0.0)], r).unwrap();
+    assert!(round.validity().is_empty(), "{:?}", round.validity());
+    let (radius, angle, count, missed) = round_errors(&pad, &round, 0.0, r);
+    assert_eq!((count, missed), (8, 0));
+    assert!(radius < 1e-4, "the ball's centre is {radius} mm off radius {r}");
+    assert!(angle < 0.5, "the round meets its neighbours at {angle} degrees");
+    // The round's section in the corner (interior angle phi, floor along x): the kite of the edge,
+    // the two contacts and the ball's centre, less the ball's sector between the contacts. Its
+    // area, and its centroid's distance in from the edge (first moments of the two triangles of
+    // the kite and of the sector).
+    let phi = 30f64.atan2(5.0);
+    let t = r / (phi / 2.0).tan();
+    let alpha = PI - phi;
+    let section = t * r - r * r * alpha / 2.0;
+    let triangle = |a: (f64, f64), b: (f64, f64)| (a.0 * b.1 - a.1 * b.0) / 2.0 * (a.0 + b.0) / 3.0;
+    let kite = triangle((t, 0.0), (t, r)) + triangle((t, r), (t * phi.cos(), t * phi.sin()));
+    let reach = 2.0 * r * (alpha / 2.0).sin() / (3.0 * alpha / 2.0);
+    let sector = r * r * alpha / 2.0 * (t + reach * (-PI / 2.0 - alpha / 2.0).cos());
+    let centroid = (kite - sector) / section;
+    let (a0, l0) = (2400.0 - (4.0 - PI) * 100.0, 120.0 + 20.0 * PI);
+    let want = 30.0 * a0 - 75.0 * l0 + 250.0 * PI - section * (l0 - 2.0 * PI * centroid);
+    let got = crate::measure(&round).unwrap().volume;
+    assert!((got - want).abs() < 3e-5 * want, "{got} against {want}");
+}
+
+#[test]
+fn smooth_neighbours_are_judged_at_the_seam_through_the_vertex() {
+    // Two walls sharing two seams: a 270 degree arc and a Bezier leaving its end tangentially and
+    // coming back into its start at a corner. Smooth along the first seam, sharp along the other.
+    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    let outline = Region2 {
+        outer: Loop2 {
+            segs: vec![
+                Seg2::Arc { center: Vec2::ZERO, radius: 10.0, start: 0.0, sweep: 1.5 * std::f64::consts::PI },
+                Seg2::Cubic { p0: Vec2::new(0.0, -10.0), p1: Vec2::new(6.0, -10.0), p2: Vec2::new(12.0, -6.0), p3: Vec2::new(10.0, 0.0) },
+            ],
+        },
+        holes: vec![],
+    };
+    let body = crate::extrude(&Plane::XY, &[outline], 0.0, 5.0).unwrap().pop().unwrap();
+    let walls: Vec<&mt::Face> = body.solid.face_iter().filter(|f| !matches!(f.oriented_surface(), mt::Surface::Plane(_))).collect();
+    let [a, b] = walls[..] else { panic!("{} walls", walls.len()) };
+    let at = |x: f64, y: f64| a.vertex_iter().find(|v| crate::blend::vtx(v).dist(Vec3::new(x, y, 0.0)) < 1e-6).unwrap();
+    assert!(meet_smoothly(a, b, &at(0.0, -10.0)), "the tangent seam");
+    assert!(!meet_smoothly(a, b, &at(10.0, 0.0)), "the corner");
+}

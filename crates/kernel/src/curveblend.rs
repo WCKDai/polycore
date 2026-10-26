@@ -482,6 +482,11 @@ enum Extra<'a> {
     Plane(usize, Vec3, Vec3),
     /// Side `k`'s contact lies on this curved seam (a lofted wall's seam between its two halves).
     Seam(usize, &'a mt::Edge),
+    /// [`Extra::Seam`], with how the contact's offset from the seam changes with the centre
+    /// measured rather than taken as the seam plane's normal. On a curved wall the contact moves
+    /// faster than the centre (by the wall's radius over the radius less the ball's), so near a
+    /// ball almost as large as the wall's curvature the plain steps overshoot and swing.
+    SeamMeasured(usize, &'a mt::Edge),
 }
 
 /// The seam's point nearest `x` and its unit tangent there.
@@ -638,13 +643,28 @@ fn solve_from(
                 let m = d.cross(n).normalized()?;
                 (m, (q - on_seam).dot(m))
             }
+            Some(Extra::SeamMeasured(k, seam)) => {
+                let off = |x: Vec3| -> Option<f64> {
+                    let (q, n) = near(if k == 1 { f1 } else { f2 }, x)?;
+                    let (on_seam, d) = nearest_on_seam(seam, q)?;
+                    Some((q - on_seam).dot(d.cross(n).normalized()?))
+                };
+                let g3 = off(c)?;
+                let h = r * 1e-5;
+                let grad = Vec3::new((off(c + Vec3::X * h)? - g3) / h, (off(c + Vec3::Y * h)? - g3) / h, (off(c + Vec3::Z * h)? - g3) / h);
+                (grad, g3)
+            }
         };
         let a = [[n1.x, n1.y, n1.z], [n2.x, n2.y, n2.z], [row3.x, row3.y, row3.z]];
         let b = [-g1, -g2, -g3];
         let x = crate::polyhedron::solve3_pub(a, b)?;
         let dc = Vec3::new(x[0], x[1], x[2]);
         c += dc;
-        if dc.len() < tol * 1e-3 && g1.abs() < tol && g2.abs() < tol && g3.abs() < tol {
+        // A contact measured across a seam can settle a little to either side of it (the faces'
+        // nearest points there differ by the seam's own gap): steps within the solve's
+        // tolerance have settled.
+        let settled = if matches!(extra, Some(Extra::SeamMeasured(..))) { tol } else { tol * 1e-3 };
+        if dc.len() < settled && g1.abs() < tol && g2.abs() < tol && g3.abs() < tol {
             let (q1, _) = near(f1, c)?;
             let (q2, _) = near(f2, c)?;
             return Some(Section { c, q1, q2 });
@@ -844,6 +864,35 @@ fn nearest_on(surface: &mt::Surface, last: &std::cell::Cell<Option<(f64, f64)>>,
     last.set(Some(uv));
     let n = surface.normal(uv.0, uv.1);
     Some((from_p3(surface.subs(uv.0, uv.1)), Vec3::new(n.x, n.y, n.z).normalized()?, uv))
+}
+
+/// The faces `own` with those of `near` that meet one of them smoothly along their seam through
+/// the vertex each comes with ([`meet_smoothly`]).
+fn with_smooth_neighbours<'a>(own: Vec<&'a mt::Face>, near: Vec<(&'a mt::Face, mt::Vertex)>) -> Vec<&'a mt::Face> {
+    let mut out = own.clone();
+    for (f, v) in near {
+        if !out.iter().any(|g| g.id() == f.id()) && own.iter().any(|g| meet_smoothly(g, f, &v)) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// Whether two faces meet smoothly along their shared edge through vertex `v` (their normals
+/// agree, within a degree, at five points along it): pieces of one smooth wall, such as a loft's
+/// faces between tangent pieces of its sections. Faces that share no edge there don't.
+fn meet_smoothly(a: &mt::Face, b: &mt::Face, v: &mt::Vertex) -> bool {
+    use mt::{BoundedCurve, ParametricCurve};
+    let Some(e) = a.edge_iter().find(|e| (e.front() == v || e.back() == v) && b.edge_iter().any(|x| x.id() == e.id())) else { return false };
+    let c = e.curve();
+    let (t0, t1) = c.range_tuple();
+    (1..=5).all(|k| {
+        let m = from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 6.0));
+        match (project(a, m, None), project(b, m, None)) {
+            (Some((_, na, _)), Some((_, nb, _))) => na.dot(nb) > 1f64.to_radians().cos(),
+            _ => false,
+        }
+    })
 }
 
 /// The strip with parameters in proportion to its lengths across and along (the same surface).
@@ -1214,6 +1263,30 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
             vec![k - 1, k]
         }
     };
+    // Edge k's faces with those of its neighbours in the chain that run on smoothly from them
+    // (a lofted wall's pieces): a ball near the end of edge k whose contact lies past the seam on
+    // the next piece. Only where edge k's own faces leave the ball without a section.
+    let beside = |k: usize| -> (Vec<&mt::Face>, Vec<&mt::Face>) {
+        // Each neighbouring edge with the chain vertex it shares with edge k, where the seam
+        // between its faces and edge k's runs.
+        let mut next: Vec<(usize, mt::Vertex)> = Vec::new();
+        if let Some(e) = chain.get(k) {
+            if closed || k > 0 {
+                next.push(((k + n - 1) % n, e.front().clone()));
+            }
+            if closed || k + 1 < n {
+                next.push(((k + 1) % n, e.back().clone()));
+            }
+        }
+        let (own1, own2) = edge_sides(&[k]);
+        let (mut near1, mut near2) = (Vec::new(), Vec::new());
+        for (j, v) in next {
+            let (a1, a2) = edge_sides(&[j]);
+            near1.extend(a1.into_iter().map(|f| (f, v.clone())));
+            near2.extend(a2.into_iter().map(|f| (f, v.clone())));
+        }
+        (with_smooth_neighbours(own1, near1), with_smooth_neighbours(own2, near2))
+    };
     // Convex or concave, from the first edge as its side-1 face runs it.
     let e0 = chain.first().ok_or_else(|| KernelError::Failed("chain".into()))?;
     let f1 = s1.first().ok_or_else(|| KernelError::Failed("side".into()))?;
@@ -1506,7 +1579,29 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
         // longer is (a wall past the round at a corner, which a ball rolling round it pokes
         // through).
         let (a1, a2) = edge_sides(&[k.min(n - 1)]);
-        let (s, r) = sizer.section(&a1, &a2, p, t, law_s, sigma, cusp, extra).ok_or_else(|| sizer.refusal())?;
+        // A contact held on a curved seam lies on the boundary of that face, where its nearest
+        // point can stop at the edge of its parameters and the steps then swing from one side of
+        // the seam to the other: the faces on both sides of the seam, which meet smoothly there,
+        // carry it instead.
+        let across = |side: usize| {
+            let (b1, b2) = edge_sides(&vertex_edges(k));
+            if side == 1 { (b1, a2.clone()) } else { (a1.clone(), b2) }
+        };
+        let (s, r) = match (sizer.section(&a1, &a2, p, t, law_s, sigma, cusp, extra), extra) {
+            (Some(found), _) => Some(found),
+            (None, Some(Extra::Seam(side, seam))) => {
+                let (b1, b2) = across(side);
+                // Settled within the solve's tolerance to one side of the seam: the contact is put
+                // on the seam itself, which the seam's shortened edge then ends at too.
+                sizer.section(&b1, &b2, p, t, law_s, sigma, cusp, Some(Extra::SeamMeasured(side, seam))).and_then(|(mut found, r)| {
+                    let q = if side == 1 { &mut found.q1 } else { &mut found.q2 };
+                    *q = nearest_on_seam(seam, *q)?.0;
+                    Some((found, r))
+                })
+            }
+            (None, _) => None,
+        }
+        .ok_or_else(|| sizer.refusal())?;
         // A seam on the other side too must pass through that side's contact.
         if let Some((side, seam)) = here.get(1).filter(|_| !at_end) {
             let q = if *side == 1 { s.q1 } else { s.q2 };
@@ -1645,7 +1740,13 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
         let (start, end) = offsets.get(k).copied().ok_or_else(|| KernelError::Failed("section offset".into()))?;
         let anchor = p + t * (start * (1.0 - along) + end * along);
         let (a1, a2) = edge_sides(&[k]);
-        sizer.section(&a1, &a2, anchor, t, frac_at(k, along), sigma, cusp, None).ok_or_else(|| sizer.refusal())
+        sizer
+            .section(&a1, &a2, anchor, t, frac_at(k, along), sigma, cusp, None)
+            .or_else(|| {
+                let (b1, b2) = beside(k);
+                sizer.section(&b1, &b2, anchor, t, frac_at(k, along), sigma, cusp, None)
+            })
+            .ok_or_else(|| sizer.refusal())
     };
     let mut samples = SAMPLES.min(max_samples);
     let (esec, fits) = loop {
@@ -1705,6 +1806,10 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
             let (a1, a2) = edge_sides(&[k]);
             sizer
                 .section(&a1, &a2, anchor, tangent, law_s, sigma, cusp, None)
+                .or_else(|| {
+                    let (b1, b2) = beside(k);
+                    sizer.section(&b1, &b2, anchor, tangent, law_s, sigma, cusp, None)
+                })
                 .map(|(section, _)| section)
                 .ok_or_else(|| unsupported("the ball doesn't fit along the resampled spine"))
         };
