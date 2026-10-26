@@ -389,6 +389,10 @@ pub fn frames_across(face: &mt::Face, stations: &[(Vec3, Vec3)], length: f64, sh
     Ok(out)
 }
 
+/// How far (a share of each parameter's span) a one-sided line read at a corner of a support
+/// surface's parameter box may run past the box (see [`Support::station`]).
+const CORNER_OVERSHOOT: f64 = 0.02;
+
 /// A support surface read at stations: the surface, its parameter box, and how close a station
 /// must lie to it.
 struct Support {
@@ -493,6 +497,31 @@ impl Support {
             }
             h *= 0.25;
             chosen = pick(h);
+        }
+        if chosen.is_none() {
+            // A station at a corner of the parameter box, on a surface whose parameter lines do
+            // not cross its boundary at right angles (a loft between sections of different sizes
+            // or heights, a sheared sheet), leaves the box whichever way the line runs: one way
+            // across the boundary the station is on, the other past the boundary it ends at, and
+            // a shorter step does not change that. The one-sided line that overshoots least (a
+            // few steps' worth of parameter) is read at the full step instead: past its knots a
+            // B-spline goes on as its end span's own polynomial, as planes and surfaces of
+            // revolution go on exactly.
+            h = walk.step;
+            let span_u = (range_u.1 - range_u.0).max(1e-12);
+            let span_v = (range_v.1 - range_v.0).max(1e-12);
+            let outside = |x: f64, (lo, hi): (f64, f64)| (lo - x).max(x - hi).max(0.0);
+            let overshoot = |offsets: &[f64; 5]| {
+                offsets.iter().fold(0.0f64, |worst, t| {
+                    let (x, y) = (u + t * h * du, v + t * h * dv);
+                    worst.max(outside(x, range_u) / span_u).max(outside(y, range_v) / span_v)
+                })
+            };
+            let (ahead, behind) = (overshoot(&forward), overshoot(&backward));
+            let (best, by) = if ahead <= behind { (forward, ahead) } else { (backward, behind) };
+            if by <= CORNER_OVERSHOOT {
+                chosen = Some(best);
+            }
         }
         let Some(offsets) = chosen else {
             return Err(KernelError::Invalid("the support surface is too small around a picked edge to read its shape".into()));

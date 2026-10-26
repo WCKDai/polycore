@@ -380,3 +380,46 @@ fn a_blend_between_offset_tubes_reads_stations_on_the_walls_seams() {
         assert!(gap < 1e-3, "{orders:?}: {gap}");
     }
 }
+
+/// A flat sheet in the plane z = `z`, bounded by the edge from (0, y, z) to (10, y, z) and the
+/// edge `side` × 10 further on in y, but sheared: its parameter lines across run 4 mm along x
+/// for every 10 across, so they do not cross the edges at right angles (a loft between sections
+/// of different sizes is like this).
+fn sheared_sheet(y: f64, z: f64, side: f64) -> Body {
+    let corners = [Vec3::new(0.0, y, z), Vec3::new(10.0, y, z), Vec3::new(4.0, y + 10.0 * side, z), Vec3::new(14.0, y + 10.0 * side, z)];
+    let points: Vec<HPoint> = corners.iter().map(|p| HPoint::weighted(*p, 1.0)).collect();
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    let nurbs = NurbsSurface::from_homogeneous([1, 1], [knots.clone(), knots], points).unwrap();
+    surface_body(vec![crate::spline_conv::tensor_face(&nurbs).unwrap()])
+}
+
+#[test]
+fn a_blend_reads_sheared_sheets_at_the_corners_of_their_parameters() {
+    // The station at one end of each edge is at a corner of its sheet's parameters where the line
+    // across, read either way, runs past one of the box's sides: the shape is read there all the
+    // same (it was refused at every order, G1 too, as "too small to read its shape"). The sheets
+    // face each other 20 apart in y and 5 in z, leaving along ±y, so the G1 blend is the cubic
+    // Hermite strip of `a_blend_between_offset_strips_is_the_cubic_hermite_strip`.
+    let a = sheared_sheet(0.0, 0.0, -1.0);
+    let b = sheared_sheet(20.0, 5.0, 1.0);
+    let (pa, pb) = ([Vec3::new(5.0, 0.0, 0.0)], [Vec3::new(5.0, 20.0, 5.0)]);
+    for orders in [[Continuity::G1; 2], [Continuity::G2; 2], [Continuity::G3; 2]] {
+        let made = blend_between(&a, &pa, &b, &pb, orders, [0.0, 0.0], None, None, 9, false);
+        let (_, gap) = made.unwrap_or_else(|e| panic!("{orders:?}: {e:?}"));
+        assert!(gap < 1e-9, "{orders:?}: straight edges, the boundary is on them exactly: {gap}");
+    }
+    let (made, _) = blend_between(&a, &pa, &b, &pb, [Continuity::G1; 2], [0.0, 0.0], None, None, 9, false).unwrap();
+    let chord = 425f64.sqrt();
+    let control = [(0.0, 0.0), (chord / 9.0, 0.0), (20.0 - chord / 9.0, 5.0), (20.0, 5.0)];
+    let bezier = |t: f64| {
+        let w = [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
+        control.iter().zip(w).fold((0.0, 0.0), |(y, z), ((cy, cz), w)| (y + cy * w, z + cz * w))
+    };
+    let across = 11;
+    for row in sample_grid(&made, 9, across).unwrap() {
+        for (j, p) in row.iter().enumerate() {
+            let (y, z) = bezier(j as f64 / (across - 1) as f64);
+            assert!((p.y - y).abs() < 1e-6 && (p.z - z).abs() < 1e-6, "at v = {j}/{}: {p:?} vs the Hermite strip ({y}, {z})", across - 1);
+        }
+    }
+}
