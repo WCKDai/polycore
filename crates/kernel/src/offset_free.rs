@@ -235,13 +235,30 @@ impl Moved {
     }
 
     /// Where along the moved edge curve (see [`Moved::along`]) it passes nearest `q`, searched
-    /// within a quarter of the edge each way of `around`: (t, how far).
+    /// within a quarter of the edge each way of `around`, or half of it, or all of it where the
+    /// nearest point lies at the end of the narrower search (an edge shorter than the move, whose
+    /// ends slide far along it: a small chamfer moved in): (t, how far).
     fn nearest_along(&self, c: &mt::Curve, fs: &[usize], q: Vec3, around: f64) -> Option<(f64, f64)> {
+        let mut found = None;
+        for half in [0.25, 0.5, 1.0] {
+            let Some((t, dist, inside)) = self.nearest_within(c, fs, q, around, half) else { continue };
+            found = Some((t, dist));
+            if inside || dist <= self.tol {
+                break;
+            }
+        }
+        found
+    }
+
+    /// [`Moved::nearest_along`] within `half` of the edge each way of `around`: (t, how far,
+    /// whether the nearest point is inside the search rather than at its end).
+    fn nearest_within(&self, c: &mt::Curve, fs: &[usize], q: Vec3, around: f64, half: f64) -> Option<(f64, f64, bool)> {
         let d = |t: f64| self.along(c, fs, t).map_or(f64::INFINITY, |p| p.dist(q));
-        let n = 100;
+        let n = (400.0 * half) as usize;
+        let step = 2.0 * half / n as f64;
         let (mut best, mut bd) = (around, d(around));
         for k in 0..=n {
-            let t = around - 0.25 + 0.5 * k as f64 / n as f64;
+            let t = around - half + step * k as f64;
             let x = d(t);
             if x < bd {
                 (best, bd) = (t, x);
@@ -249,7 +266,7 @@ impl Moved {
         }
         // Golden section about the best sample.
         let g = (5f64.sqrt() - 1.0) / 2.0;
-        let (mut a, mut b) = (best - 0.5 / n as f64, best + 0.5 / n as f64);
+        let (mut a, mut b) = (best - step, best + step);
         let (mut x1, mut x2) = (b - g * (b - a), a + g * (b - a));
         let (mut f1, mut f2) = (d(x1), d(x2));
         for _ in 0..60 {
@@ -266,7 +283,8 @@ impl Moved {
         let t = (a + b) / 2.0;
         let dt = d(t);
         let found = if dt <= bd { (t, dt) } else { (best, bd) };
-        found.1.is_finite().then_some(found)
+        let inside = (found.0 - around).abs() < half - step;
+        found.1.is_finite().then_some((found.0, found.1, inside))
     }
 
     /// A corner whose faces fall into two smooth groups fixes only a curve; it goes where that
@@ -451,17 +469,20 @@ pub(crate) fn moved_parts(b: &Body, shift: impl Fn(usize) -> f64, tolerance: f64
             let (pa, pc) = (from_p3(a.point()), from_p3(c.point()));
             let closed = e.absolute_front().id() == e.absolute_back().id();
             let kind = if exact(fs) && !closed { arc_mid(&e, size * 1e-6) } else { None };
+            // Where the edge is, for a refusal.
+            let (t0, t1) = e.curve().range_tuple();
+            let em = from_p3(e.curve().subs(0.5 * (t0 + t1)));
+            let bad = || fail(&format!("an edge whose faces don't meet the same way after the move (near [{:.2}, {:.2}, {:.2}])", em.x, em.y, em.z));
             let ne = match kind {
                 Some(None) if planes(fs) => builder::line(a, c),
                 Some(Some(mid)) => {
-                    let m2 = m.point(mid, fs).ok_or_else(|| fail("an edge whose faces don't meet the same way after the move"))?;
+                    let m2 = m.point(mid, fs).ok_or_else(bad)?;
                     builder::circle_arc(a, c, p3(m2))
                 }
                 _ => {
                     // The moved curve between the moved ends, which may have slid along it
                     // (a wall's edge moved in past the floor moved up): where it passes them.
                     let cv = e.curve();
-                    let bad = || fail("an edge whose faces don't meet the same way after the move");
                     // A free edge's ends may lie off its moved curve by up to half its move (a
                     // corner fixed by a neighbour's moved free edge).
                     let free = match fs.as_slice() {
@@ -584,21 +605,47 @@ pub(crate) fn shell_free(b: &Body, opened: &[usize], thickness: f64) -> Result<O
         return Ok(None);
     }
     let tolerance = shell_tolerance(b);
-    let cavity = offset_free(b, |i| if opened.contains(&i) { 0.0 } else { -thickness }, tolerance)?;
-    if let Some(p) = too_thin(b, &cavity, opened, thickness, tolerance)? {
-        return Err(KernelError::Failed(format!(
-            "not supported yet: the shell's walls would meet near [{:.2}, {:.2}, {:.2}] (the body is thinner there than twice the wall)",
-            p.x, p.y, p.z
-        )));
+    // A hole within two walls of another loop of its face: straight through the body with its
+    // holes filled (`shell_holes`), without first fitting the cavity it would refuse.
+    if crate::shell_holes::hole_near_rim(b, thickness, 2.0)
+        && let Ok(Some(shell)) = crate::shell_holes::shell_round_holes(b, opened, thickness, tolerance)
+    {
+        return Ok(Some(shell));
     }
-    crate::polyhedron::sew_cavity(b, &cavity, opened).map(Some)
+    let direct = || -> Result<Body> {
+        let cavity = offset_free(b, |i| if opened.contains(&i) { 0.0 } else { -thickness }, tolerance)?;
+        if let Some(p) = too_thin(b, &cavity, opened, thickness, tolerance)? {
+            return Err(KernelError::Failed(format!(
+                "not supported yet: the shell's walls would meet near [{:.2}, {:.2}, {:.2}] (the body is thinner there than twice the wall)",
+                p.x, p.y, p.z
+            )));
+        }
+        crate::polyhedron::sew_cavity(b, &cavity, opened)
+    };
+    match direct() {
+        Ok(shell) => Ok(Some(shell)),
+        // A hole closer to another wall than the wall is thick: through the body with its holes
+        // filled (`shell_holes`), else the first refusal.
+        Err(e @ (KernelError::Failed(_) | KernelError::Invalid(_))) => match crate::shell_holes::shell_round_holes(b, opened, thickness, tolerance) {
+            Ok(Some(shell)) => Ok(Some(shell)),
+            _ => Err(e),
+        },
+        Err(e) => Err(e),
+    }
 }
 
 /// A point of the cavity's walls closer than the wall to the body's faces (other than the open
 /// ones): the cavity's mesh points measured to the body's mesh, both at a chord well under the
 /// wall, so trimmed faces count only where they are.
-fn too_thin(b: &Body, cavity: &Body, opened: &[usize], thickness: f64, tolerance: f64) -> Result<Option<Vec3>> {
-    let chord = (b.size() * 1e-3).clamp(1e-4, thickness * 0.05);
+pub(crate) fn too_thin(b: &Body, cavity: &Body, opened: &[usize], thickness: f64, tolerance: f64) -> Result<Option<Vec3>> {
+    // A wall within ten times the fit's tolerance of nothing can't be told from the fit's own
+    // error: nothing to check (and no mesh fine enough to check it with).
+    let slack = (tolerance * 10.0).max(thickness * 0.01);
+    if thickness <= slack {
+        return Ok(None);
+    }
+    // At most a twentieth of the wall.
+    let chord = (b.size() * 1e-3).max(1e-4).min(thickness * 0.05);
     let (outer, inner) = (b.tessellate(chord)?, cavity.tessellate(chord)?);
     let open = |f: &u32| opened.contains(&(*f as usize));
     // The outer triangles by cell (a cell at least as wide as the wall, so the cells round a
@@ -625,7 +672,7 @@ fn too_thin(b: &Body, cavity: &Body, opened: &[usize], thickness: f64, tolerance
             }
         }
     }
-    let limit = thickness - (tolerance * 10.0).max(thickness * 0.01) - chord;
+    let limit = thickness - slack - chord;
     let mut seen = std::collections::HashSet::new();
     for (t, f) in inner.triangles.iter().zip(&inner.tri_face) {
         if open(f) {

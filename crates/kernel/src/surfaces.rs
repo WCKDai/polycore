@@ -1124,7 +1124,8 @@ pub fn thicken(body: &Body, thickness: f64, symmetric: bool) -> Result<Body> {
         // Sharp edges: where the two faces' copies of an edge part on a side, a wall closes the
         // gap; where they would cross (an inside corner on that side), the whole side is moved
         // as one instead (`offset_free`): each face onto its offset, cut back to its
-        // neighbours', so that the copies meet along their moved edges.
+        // neighbours', so that the copies meet along their moved edges. On such a side an
+        // outside corner is mitred too (its faces' offsets extended to meet), not walled.
         let mut sharp = Vec::new();
         let mut inside = [false, false];
         for (id, fs) in &users {
@@ -1745,6 +1746,26 @@ mod tests {
         let want = 150.0 + 3.75 + 0.125 / 6.0 + 1000.0 - 9.5f64.powi(3);
         let v = measure(&both).unwrap().volume;
         assert!(rel(v, want) < 1e-9, "{v} vs {want}");
+    }
+
+    /// A stepped sheet (a Z profile 10 + 10 + 10 long, extruded 10) thickened by 1 either way:
+    /// on each side one crease is an inside corner and the other an outside one, so the side is
+    /// moved as one and its faces' offsets meet at both, mitred (the outside corner's faces
+    /// extended to meet, not a wedge between them): the band is 30·1 (the inside corner loses
+    /// 1², the outside one's mitre adds it) by 10, 300 exactly.
+    #[test]
+    fn thicken_a_stepped_sheet_mitres_its_outside_corner_beside_an_inside_one() {
+        let xz = Plane { origin: Vec3::ZERO, x: Vec3::X, y: Vec3::Z };
+        let line = |a: (f64, f64), b: (f64, f64)| Seg2::Line { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1) };
+        let chain = vec![line((0.0, 0.0), (10.0, 0.0)), line((10.0, 0.0), (10.0, 10.0)), line((10.0, 10.0), (20.0, 10.0))];
+        let sheet = extrude_sheet(&xz, &[chain], 0.0, 10.0).unwrap();
+        assert_eq!(sheet.face_count(), 3);
+        for t in [1.0, -1.0] {
+            let thick = thicken(&sheet, t, false).unwrap();
+            assert!(Body::new(thick.solid.as_ref().clone()).is_ok());
+            let v = measure(&thick).unwrap().volume;
+            assert!(rel(v, 300.0) < 1e-9, "{t}: {v} vs 300");
+        }
     }
 
     /// A saddle B-spline patch thickened by 1.5 holds the volume its offsets sweep: by Steiner,
