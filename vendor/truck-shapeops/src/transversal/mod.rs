@@ -1,3 +1,5 @@
+// SolidCraft: exact intersections of face pairs with closed forms.
+mod analytic;
 // SolidCraft: which face pairs a set operation intersects.
 mod broad_phase;
 mod divide_face;

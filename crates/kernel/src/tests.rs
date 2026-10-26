@@ -3334,3 +3334,69 @@ fn a_split_with_no_face_in_the_plane_skips_the_direct_split() {
     half_space(&stepped, &at_step, true).unwrap();
     assert_eq!(count(), before + 1, "the plane holds the step's face");
 }
+
+/// Two planar faces bounded by straight edges are intersected exactly, not by colliding their
+/// meshes (#125): booleans of boxes and plates in general position (turned about a skew axis, a
+/// plate with a hole, a tool touching a corner) give what the mesh collision gave: the same face,
+/// edge and vertex counts, volume and area to 1e-9 relative.
+#[test]
+fn plane_pairs_intersect_exactly_as_the_mesh_collision_did() {
+    use truck_shapeops::broad_phase_test_hooks::{exact_pairs, mesh_only};
+    let turned = |b: &Body, deg: f64| {
+        crate::transform(b, Vec3::new(0.3, -0.2, 0.1), Vec3::new(5.0, 5.0, 5.0), Vec3::new(0.3, 0.5, 0.8), deg.to_radians()).unwrap()
+    };
+    let plate = extrude(
+        &Plane::XY,
+        &[Region2 {
+            outer: Loop2::polygon(&[
+                Vec2::new(0.0, 0.0),
+                Vec2::new(30.0, 0.0),
+                Vec2::new(30.0, 20.0),
+                Vec2::new(12.0, 20.0),
+                Vec2::new(12.0, 12.0),
+                Vec2::new(0.0, 12.0),
+            ]),
+            holes: vec![Loop2::polygon(&[Vec2::new(18.0, 4.0), Vec2::new(24.0, 4.0), Vec2::new(24.0, 9.0), Vec2::new(18.0, 9.0)])],
+        }],
+        0.0,
+        6.0,
+    )
+    .unwrap()
+    .pop()
+    .unwrap();
+    let block = box_solid(Vec3::new(4.0, 3.0, 2.0), Vec3::new(22.0, 16.0, 14.0)).unwrap();
+    let corner = box_solid(Vec3::new(30.0, 0.0, 6.0), Vec3::new(36.0, 8.0, 12.0)).unwrap();
+    let tol = 0.05;
+    // Far from the origin (the line is solved relative to a point on the face), and turned by a
+    // hair, so pairs of nearly parallel planes go to the mesh collision while the rest are exact.
+    let far = |b: &Body| crate::transform(b, Vec3::new(1.0e5, -2.0e5, 3.0e4), Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.0).unwrap();
+    for (name, a, b) in [
+        ("turned block", plate.clone(), turned(&block, 23.0)),
+        ("turned plate", turned(&plate, 11.0), block.clone()),
+        ("corner", plate.clone(), turned(&corner, 7.0)),
+        ("far from the origin", far(&plate), far(&turned(&block, 23.0))),
+        ("nearly parallel", plate.clone(), turned(&block, 1e-5)),
+    ] {
+        for (and, invert) in [(true, false), (true, true), (false, false)] {
+            let run = || {
+                let (sa, mut sb) = (a.deep_copy(), b.deep_copy());
+                if invert {
+                    sb.not();
+                }
+                guard("t", || Ok(if and { truck_shapeops::and(&sa, &sb, tol) } else { truck_shapeops::or(&sa, &sb, tol) })).unwrap()
+            };
+            let ((exact, pairs), mesh) = (exact_pairs(run), mesh_only(run));
+            assert!(pairs > 0, "{name} and {and} invert {invert}: no pair was intersected exactly");
+            let (Some(exact), Some(mesh)) = (exact, mesh) else { panic!("{name} and {and} invert {invert}: no result") };
+            if exact.boundaries().is_empty() || mesh.boundaries().is_empty() {
+                assert_eq!(exact.boundaries().len(), mesh.boundaries().len(), "{name} and {and} invert {invert}");
+                continue;
+            }
+            let (me, mm) = (measure(&Body::new(exact).unwrap()).unwrap(), measure(&Body::new(mesh).unwrap()).unwrap());
+            let what = format!("{name} and {and} invert {invert}");
+            assert_eq!((me.faces, me.edges, me.vertices), (mm.faces, mm.edges, mm.vertices), "{what}");
+            assert!(rel(me.volume, mm.volume) < 1e-9, "{what}: volume {} vs {}", me.volume, mm.volume);
+            assert!(rel(me.area, mm.area) < 1e-9, "{what}: area {} vs {}", me.area, mm.area);
+        }
+    }
+}

@@ -583,8 +583,9 @@ where
     C: SearchNearestParameter<D1, Point = Point3>
         + SearchParameter<D1, Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
-        + From<IntersectionCurve<PolylineCurve, S>>,
-    S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>,
+        + From<IntersectionCurve<PolylineCurve, S>>
+        + 'static,
+    S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3> + 'static,
 {
     let pairs = broad_phase::face_pairs(poly_shell0, poly_shell1, tol);
     create_loops_stores_for(geom_shell0, poly_shell0, geom_shell1, poly_shell1, &pairs, tol, lineage)
@@ -605,8 +606,9 @@ where
     C: SearchNearestParameter<D1, Point = Point3>
         + SearchParameter<D1, Point = Point3>
         + Cut<Point = Point3, Vector = Vector3>
-        + From<IntersectionCurve<PolylineCurve, S>>,
-    S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>,
+        + From<IntersectionCurve<PolylineCurve, S>>
+        + 'static,
+    S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3> + 'static,
 {
     let mut geom_loops_store0: LoopsStore<_, _> = geom_shell0.face_iter().collect();
     let mut poly_loops_store0: LoopsStore<_, _> = poly_shell0.face_iter().collect();
@@ -627,15 +629,23 @@ where
             let surface0 = geom_shell0[face_index0].surface();
             let surface1 = geom_shell1[face_index1].surface();
             let meeting = [geom_shell0[face_index0].id(), geom_shell1[face_index1].id()];
-            let polygon0 = crate::tr!(poly_shell0[face_index0].surface(), "polygon0");
-            let polygon1 = crate::tr!(poly_shell1[face_index1].surface(), "polygon1");
-            intersection_curve::intersection_curves(
-                surface0.clone(),
-                &polygon0,
-                surface1.clone(),
-                &polygon1,
-                tol,
-            )
+            // SolidCraft: a pair with a closed form is intersected exactly (#125), the rest by
+            // their meshes' collision.
+            let curves = match analytic::exact_intersection(&geom_shell0[face_index0], &geom_shell1[face_index1]) {
+                Some(polylines) => polylines
+                    .into_iter()
+                    .map(|polyline| {
+                        let curve = IntersectionCurveWithParameters::try_new(surface0.clone(), surface1.clone(), polyline.clone(), tol);
+                        (polyline, curve)
+                    })
+                    .collect(),
+                None => {
+                    let polygon0 = crate::tr!(poly_shell0[face_index0].surface(), "polygon0");
+                    let polygon1 = crate::tr!(poly_shell1[face_index1].surface(), "polygon1");
+                    intersection_curve::intersection_curves(surface0.clone(), &polygon0, surface1.clone(), &polygon1, tol)
+                }
+            };
+            curves
             .into_iter()
             .try_for_each(|(polyline, intersection_curve)| {
                 let mut intersection_curve = crate::tr!(intersection_curve, "intersection curve").into();

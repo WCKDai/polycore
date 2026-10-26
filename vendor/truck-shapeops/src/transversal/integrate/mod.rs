@@ -12,7 +12,8 @@ pub trait ShapeOpsSurface:
     + SearchNearestParameter<D2, Point = Point3>
     + Invertible
     + Send
-    + Sync {
+    + Sync
+    + 'static {
 }
 impl<S> ShapeOpsSurface for S where S: ParametricSurface3D
         + ParameterDivision2D
@@ -21,6 +22,7 @@ impl<S> ShapeOpsSurface for S where S: ParametricSurface3D
         + Invertible
         + Send
         + Sync
+        + 'static
 {
 }
 
@@ -35,7 +37,8 @@ pub trait ShapeOpsCurve<S: ShapeOpsSurface>:
     + SearchParameter<D1, Point = Point3>
     + SearchNearestParameter<D1, Point = Point3>
     + Send
-    + Sync {
+    + Sync
+    + 'static {
 }
 impl<C, S: ShapeOpsSurface> ShapeOpsCurve<S> for C where C: ParametricCurve3D
         + TrySubs
@@ -47,6 +50,7 @@ impl<C, S: ShapeOpsSurface> ShapeOpsCurve<S> for C where C: ParametricCurve3D
         + SearchNearestParameter<D1, Point = Point3>
         + Send
         + Sync
+        + 'static
 {
 }
 
@@ -273,6 +277,22 @@ pub mod test_hooks {
     pub fn pairs_of_boxes(boxes0: &[Option<[[f64; 2]; 3]>], boxes1: &[Option<[[f64; 2]; 3]>]) -> Vec<(usize, usize)> {
         let boxed = |b: &[Option<[[f64; 2]; 3]>]| b.iter().map(|x| x.map(broad_phase::Aabb::new)).collect::<Vec<_>>();
         broad_phase::overlapping_pairs(&boxed(boxes0), &boxed(boxes1))
+    }
+
+    /// `f` with every face pair intersected by the mesh collision, as before the exact
+    /// intersections of #125 (on this thread).
+    pub fn mesh_only<R>(f: impl FnOnce() -> R) -> R {
+        let before = analytic::MESH_ONLY.with(|c| c.replace(true));
+        let r = f();
+        analytic::MESH_ONLY.with(|c| c.set(before));
+        r
+    }
+
+    /// `f`, and how many face pairs it intersected exactly (on this thread).
+    pub fn exact_pairs<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        let before = analytic::EXACT.with(|c| c.replace(0));
+        let r = f();
+        (r, analytic::EXACT.with(|c| c.replace(before)))
     }
 
     /// How many face pairs of the solids' first shells the broad phase keeps, and how many

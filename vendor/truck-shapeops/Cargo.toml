@@ -60,14 +60,16 @@ optional = true
 [dependencies.truck-topology]
 version = "0.6.0"
 
+# SolidCraft: the analytic intersections read the surface and curve types of truck-modeling.
+[dependencies.truck-modeling]
+version = "0.6.0"
+
 [dev-dependencies.rand]
 version = "0.8.5"
 
 [dev-dependencies.serde_json]
 version = "1.0.128"
 
-[dev-dependencies.truck-modeling]
-version = "0.6.0"
 
 [features]
 default = ["step-test"]

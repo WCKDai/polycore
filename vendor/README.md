@@ -63,6 +63,15 @@ Changes:
   truck's intersection of it was empty: the result is the same, without the cost of meshing
   the pair's triangles again and sorting them for every pair (#125). The `test-hooks` feature
   keeps the boolean that intersects every pair, for the kernel's equivalence tests.
+- `transversal/analytic.rs` (new), `loops_store/mod.rs`, `integrate/mod.rs`: face pairs whose
+  intersection has a closed form are intersected exactly, not by colliding their meshes and
+  projecting the collision's points back onto both surfaces (#125). So far two planar faces
+  bounded by straight edges: the planes' line, inside both faces between alternate crossings of
+  their edges with the other plane. A pair it cannot decide (another surface or edge, coinciding
+  planes, an edge lying in the other plane) goes to the mesh collision as before. The surfaces and
+  edge curves are read as truck-modeling's (now a dependency, no longer a dev-dependency); the
+  shape-op traits ask `'static` for that. The `test-hooks` feature can turn it off
+  (`mesh_only`) and count the pairs it took (`exact_pairs`).
 
 ## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
