@@ -3581,3 +3581,31 @@ fn shell_of_a_loft_deeper_than_its_corner_radius_is_refused() {
     let e = shell(&body, &[Vec3::new(0.0, 0.0, 60.0)], 5.0).unwrap_err().to_string();
     assert!(e.contains("radius") && e.contains("fold"), "{e}");
 }
+
+/// A dumbbell-shaped section: the chord from (−30, 0) to (30, 0) and, over it, two cubic lobes
+/// about 8 high meeting `neck` above the chord's middle.
+fn dumbbell_section(neck: f64) -> Loop2 {
+    Loop2 {
+        segs: vec![
+            Seg2::Line { a: Vec2::new(-30.0, 0.0), b: Vec2::new(30.0, 0.0) },
+            Seg2::Cubic { p0: Vec2::new(30.0, 0.0), p1: Vec2::new(32.0, 16.0), p2: Vec2::new(6.0, neck), p3: Vec2::new(0.0, neck) },
+            Seg2::Cubic { p0: Vec2::new(0.0, neck), p1: Vec2::new(-6.0, neck), p2: Vec2::new(-32.0, 16.0), p3: Vec2::new(-30.0, 0.0) },
+        ],
+    }
+}
+
+/// A loft of dumbbell sections (a flat wall, and free-form lobes that come down to 4 above it in
+/// the middle) shelled open at one end: 1.5 makes a valid shell; at 2.5 the lobes' inner wall
+/// would pass the flat wall's in the neck, though every corner and edge still moves as it should,
+/// and is refused: the wall check measures to analytic faces too (#207).
+#[test]
+fn shell_whose_free_form_wall_would_cross_a_flat_one_is_refused() {
+    let body =
+        loft(&[(plane_at_z(0.0), dumbbell_section(4.0)), (plane_at_z(30.0), dumbbell_section(4.5)), (plane_at_z(60.0), dumbbell_section(4.0))])
+            .unwrap();
+    let open = [Vec3::new(-15.0, 3.0, 60.0)];
+    let s = shell(&body, &open, 1.5).unwrap();
+    assert!(s.validity().is_empty(), "{:?}", s.validity());
+    let e = shell(&body, &open, 2.5).unwrap_err().to_string();
+    assert!(e.contains("walls would meet"), "{e}");
+}
