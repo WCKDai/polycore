@@ -365,6 +365,21 @@ fn a_picked_seam_sets_where_a_closed_blend_starts() {
 }
 
 #[test]
+fn a_stitched_blend_closes_two_capped_tubes_into_one_cylinder() {
+    // A tube capped at the bottom, open at z = 30, and one turned a quarter round, open at z = 40
+    // and capped at z = 70: each rim is two edges (the halves of the wall), the blend's boundary
+    // one curve. Stitched, the blend's boundary is split at the rims' corners and sewn on: one
+    // closed cylinder of radius 10 from z = 0 to 70.
+    let low = open_tube(0.0, 0.0, 30.0);
+    let high = open_tube(40.0, std::f64::consts::FRAC_PI_2, 40.0);
+    let (made, gap) = blend_between(&low, &rim_at(30.0), &high, &rim_at(40.0), [Continuity::G1; 2], [0.0, 0.0], None, None, 65, true).unwrap();
+    assert!(!made.is_surface(), "the blend sews both tubes into one closed body (gap {gap})");
+    let v = crate::measure(&made).unwrap().volume;
+    let want = std::f64::consts::PI * 100.0 * 70.0;
+    assert!((v - want).abs() < want * 1e-3, "{v} vs {want}");
+}
+
+#[test]
 fn a_blend_between_offset_tubes_reads_stations_on_the_walls_seams() {
     // A radius-10 tube and a radius-6 one standing 8 off its axis: the blend leaves each rim at an
     // angle, so a station on the vertex where a wall's two halves meet is at a corner of one

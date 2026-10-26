@@ -1023,8 +1023,10 @@ pub fn blend_between(
         return Ok((blend, gap));
     }
     // Sewing up a boundary the blend only approximates: the stitch is given what the boundary
-    // actually strays, so that a real gap between the bodies is still refused.
-    let out = crate::surfaces::stitch(&[a, b, &blend], gap * 1.05 + 1e-9)?;
+    // actually strays, so that a real gap between the bodies is still refused. The stray is
+    // sampled; between the samples a rim's corner, where the stitch splits the boundary, can sit
+    // a little farther off it, so it is given twice that.
+    let out = crate::surfaces::stitch(&[a, b, &blend], gap * 2.0 + 1e-9)?;
     Ok((out, gap))
 }
 
