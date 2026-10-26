@@ -378,6 +378,17 @@ pub(crate) fn offset_free(b: &Body, shift: impl Fn(usize) -> f64, tolerance: f64
             return Err(fail("not supported yet: the move is larger than a wall or step is thick (faces would cross)"));
         }
     }
+    // A plane's loops crossing after the move (a rim or ledge narrower than the move), though
+    // no edge turns round.
+    let planes: Vec<Option<Vec3>> =
+        m.movers.iter().map(|mv| if let Mover::Exact { old: Surf::Plane { n, .. }, .. } = mv { Some(*n) } else { None }).collect();
+    let end_pos = |v: &mt::Vertex, _: &mt::Edge| newpos.get(&v.id()).copied();
+    if let Some(at) = crate::offset::crossed_loops(&faces, &planes, &end_pos, &|_| false, size) {
+        return Err(fail(&format!(
+            "not supported yet: the move is larger than a rim or ledge near [{:.1}, {:.1}, {:.1}] is wide (a face would turn inside out)",
+            at.x, at.y, at.z
+        )));
+    }
     let planes = |fs: &[usize]| fs.iter().all(|i| matches!(m.movers.get(*i), Some(Mover::Exact { old: Surf::Plane { .. }, .. })));
     let exact = |fs: &[usize]| fs.iter().all(|i| matches!(m.movers.get(*i), Some(Mover::Exact { .. })));
     guard("offset", || {
@@ -503,15 +514,15 @@ pub(crate) fn shell_tolerance(b: &Body) -> f64 {
 /// Shell of a body with free-form faces: every face but the open ones moved in by
 /// `thickness` (the open ones stay, so the cavity's copies of them lie on them), sewn to the
 /// body (see `polyhedron::sew_cavity`). `None` for a body without free-form faces, which the
-/// analytic shell takes. Refused where an inner wall comes closer than the wall to the outer
-/// free-form faces (a part thinner than twice the wall).
+/// analytic shell takes. Refused where an inner wall comes closer than the wall to the body's
+/// faces (a part thinner than twice the wall).
 pub(crate) fn shell_free(b: &Body, opened: &[usize], thickness: f64) -> Result<Option<Body>> {
     if b.solid.boundaries().len() != 1 || !has_free_faces(b) {
         return Ok(None);
     }
     let tolerance = shell_tolerance(b);
     let cavity = offset_free(b, |i| if opened.contains(&i) { 0.0 } else { -thickness }, tolerance)?;
-    if let Some(p) = too_thin(b, &cavity, opened, thickness, tolerance) {
+    if let Some(p) = too_thin(b, &cavity, opened, thickness, tolerance)? {
         return Err(KernelError::Failed(format!(
             "not supported yet: the shell's walls would meet near [{:.2}, {:.2}, {:.2}] (the body is thinner there than twice the wall)",
             p.x, p.y, p.z
@@ -520,45 +531,61 @@ pub(crate) fn shell_free(b: &Body, opened: &[usize], thickness: f64) -> Result<O
     crate::polyhedron::sew_cavity(b, &cavity, opened).map(Some)
 }
 
-/// A point of the cavity's walls closer than the wall to one of the body's free-form faces
-/// (other than the open ones), sampled over each wall's span.
-fn too_thin(b: &Body, cavity: &Body, opened: &[usize], thickness: f64, tolerance: f64) -> Option<Vec3> {
-    let size = b.size();
-    let outer: Vec<Free> = b
-        .solid
-        .face_iter()
-        .enumerate()
-        .filter(|(i, f)| !opened.contains(i) && surf_of(f, (size * 1e-7).max(1e-9) * 100.0).is_none())
-        .filter_map(|(_, f)| Free::new(f, 0.0, size).ok())
-        .collect();
-    let limit = thickness - (tolerance * 10.0).max(thickness * 0.01);
-    let rec_tol = (size * 1e-7).max(1e-9) * 100.0;
-    let free: Vec<bool> = b.solid.face_iter().map(|f| surf_of(f, rec_tol).is_none()).collect();
-    for (i, f) in cavity.solid.face_iter().enumerate() {
-        // The inner walls of free-form faces (their spans are the walls; a plane's would reach
-        // past its trimmed region).
-        if opened.contains(&i) || !free.get(i).copied().unwrap_or(false) {
-            continue;
-        }
-        let s = f.surface();
-        let samples: Vec<Vec3> = match Free::new(f, 0.0, size) {
-            Ok(fr) => {
-                let [u0, u1, v0, v1] = fr.own;
-                (0..=6)
-                    .flat_map(|k| (0..=6).map(move |l| (u0 + (u1 - u0) * k as f64 / 6.0, v0 + (v1 - v0) * l as f64 / 6.0)))
-                    .map(|(u, v)| from_p3(mt::ParametricSurface::subs(&s, u, v)))
-                    .collect()
-            }
-            Err(_) => continue,
-        };
-        for q in samples {
-            for o in &outer {
-                let Some((u, v)) = o.foot(q, o.own) else { continue };
-                if o.base.jet(u, v).p.dist(q) < limit {
-                    return Some(q);
+/// A point of the cavity's walls closer than the wall to the body's faces (other than the open
+/// ones): the cavity's mesh points measured to the body's mesh, both at a chord well under the
+/// wall, so trimmed faces count only where they are.
+fn too_thin(b: &Body, cavity: &Body, opened: &[usize], thickness: f64, tolerance: f64) -> Result<Option<Vec3>> {
+    let chord = (b.size() * 1e-3).clamp(1e-4, thickness * 0.05);
+    let (outer, inner) = (b.tessellate(chord)?, cavity.tessellate(chord)?);
+    let open = |f: &u32| opened.contains(&(*f as usize));
+    // The outer triangles by cell (a cell at least as wide as the wall, so the cells round a
+    // point's own hold everything within a wall of it).
+    let cell = thickness.max(b.size() / 64.0);
+    let key = |p: Vec3| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64, (p.z / cell).floor() as i64);
+    let mut grid: HashMap<(i64, i64, i64), Vec<[Vec3; 3]>> = HashMap::new();
+    let mut filed = 0usize;
+    for (t, f) in outer.triangles.iter().zip(&outer.tri_face) {
+        let Some(tri) = outer.tri(t).filter(|_| !open(f)) else { continue };
+        let (lo, hi) = tri.iter().fold((key(tri[0]), key(tri[0])), |(l, h), p| {
+            let k = key(*p);
+            ((l.0.min(k.0), l.1.min(k.1), l.2.min(k.2)), (h.0.max(k.0), h.1.max(k.1), h.2.max(k.2)))
+        });
+        for i in lo.0..=hi.0 {
+            for j in lo.1..=hi.1 {
+                for k in lo.2..=hi.2 {
+                    filed += 1;
+                    if filed > 20_000_000 {
+                        return Err(KernelError::TooLarge("shell: the wall check".into()));
+                    }
+                    grid.entry((i, j, k)).or_default().push(tri);
                 }
             }
         }
     }
-    None
+    let limit = thickness - (tolerance * 10.0).max(thickness * 0.01) - chord;
+    let mut seen = std::collections::HashSet::new();
+    for (t, f) in inner.triangles.iter().zip(&inner.tri_face) {
+        if open(f) {
+            continue;
+        }
+        for &vi in t {
+            if !seen.insert(vi) {
+                continue;
+            }
+            let Some(&p) = inner.positions.get(vi as usize) else { continue };
+            let c = key(p);
+            for i in c.0 - 1..=c.0 + 1 {
+                for j in c.1 - 1..=c.1 + 1 {
+                    for k in c.2 - 1..=c.2 + 1 {
+                        for [x, y, z] in grid.get(&(i, j, k)).into_iter().flatten() {
+                            if crate::polyhedron::point_tri(p, *x, *y, *z) < limit {
+                                return Ok(Some(p));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
 }

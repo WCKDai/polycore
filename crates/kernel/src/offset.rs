@@ -623,18 +623,18 @@ fn split_path(nodes: &[(Vec3, Vec<usize>)], face: usize, from: usize, to: usize)
 /// Maximum straight edges per face checked pairwise for crossings.
 const MAX_CROSSING_EDGES: usize = 2000;
 
-/// Where the moved straight edges of a planar face cross each other (or a loop of straight
-/// edges turns round), if they do. Faces next to a collapsed round are left to the other checks.
-fn crossed_loops(
+/// Where the moved straight edges of a planar face (`planes`: each face's outward normal where
+/// it is a plane) cross each other (or a loop of straight edges turns round), if they do. Faces next to a collapsed round are left to the other checks.
+pub(crate) fn crossed_loops(
     faces: &[mt::Face],
-    old: &[Surf],
+    planes: &[Option<Vec3>],
     pos: &dyn Fn(&mt::Vertex, &mt::Edge) -> Option<Vec3>,
     edge_collapsed: &dyn Fn(&mt::Edge) -> bool,
     size: f64,
 ) -> Option<Vec3> {
     let eps = size * 1e-9;
-    for (f, sf) in faces.iter().zip(old) {
-        let Surf::Plane { n, .. } = *sf else { continue };
+    for (f, plane) in faces.iter().zip(planes) {
+        let Some(n) = *plane else { continue };
         if f.edge_iter().any(|e| edge_collapsed(&e)) {
             continue;
         }
@@ -951,7 +951,8 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
     // A plane's loops crossing after the move: a rim or ledge narrower than the move (the hole
     // in a top face sliding past its outer edge) turns part of the face inside out, though no
     // edge turns round.
-    if let Some(at) = crossed_loops(&faces, &old, &end_pos, &edge_collapsed, size) {
+    let planes: Vec<Option<Vec3>> = old.iter().map(|sf| if let Surf::Plane { n, .. } = *sf { Some(n) } else { None }).collect();
+    if let Some(at) = crossed_loops(&faces, &planes, &end_pos, &edge_collapsed, size) {
         return Err(fail(&format!(
             "not supported yet: the move is larger than a rim or ledge near [{:.1}, {:.1}, {:.1}] is wide (a face would turn inside out)",
             at.x, at.y, at.z
