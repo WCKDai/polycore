@@ -51,7 +51,7 @@ Measured on `wckdboy/polykrom` `main` at `0489d63e` (2026-10-26) unless stated.
 | `crates/geom` (`solidcraft-geom`) | About 15,700 lines: vectors, planes, B-splines, meshes, BVH, profiles, and the native B-rep schema. No dependencies but serde and thiserror. The kernel, the sketch solver and the renderer use it. |
 | Vendored truck (`vendor/`) | truck-geometry 10,065 lines, truck-shapeops 6,664, truck-meshalgo 6,253, truck-stepio 4,974, with Polykrom's fixes listed in `vendor/README.md`, wired in by `[patch.crates-io]`. truck-topology and truck-modeling come from crates.io. Apache-2.0. |
 | Native B-rep schema 3 | `solidcraft_geom::brep` ([native-brep.md](https://github.com/wckdboy/polykrom/blob/main/docs/native-brep.md)). Exact, kernel-neutral, already the cache format inside designs. |
-| [kernel-cases](https://github.com/wckdboy/polykrom/blob/main/docs/kernel-cases.md) | **288 / 382 pass.** Booleans 64/89, crashes 6/10, fillets 38/50, import 19/23, sheet metal 57/57, shell 9/20, surfaces 0/8, sweeps 62/83, tessellation 12/14, threads 21/28. Cases are design recipes run by `polykrom-cli` (`cargo xtask kernel-cases`). |
+| [kernel-cases](https://github.com/wckdboy/polykrom/blob/main/docs/kernel-cases.md) | **288 / 382 pass** (the generated report at `0489d63e`; ENGINES.md's earlier 372 predates ten added cases, and SMLib's 317 below is on those 372). Booleans 64/89, crashes 6/10, fillets 38/50, import 19/23, sheet metal 57/57, shell 9/20, surfaces 0/8, sweeps 62/83, tessellation 12/14, threads 21/28. Cases are design recipes run by `polykrom-cli` (`cargo xtask kernel-cases`). |
 | [Kernel ladder](https://github.com/wckdboy/polykrom/blob/main/docs/kernel-ladder.md) | **102 / 116 pass**, with a timing golden (`tests/kernel-cases/ladder/golden.json`). |
 | [Reference tests](https://github.com/wckdboy/polykrom/blob/main/docs/oracle.md) | **83 / 83 pass** (62 analytic, 21 FreeCAD run as a separate program). |
 | Recent kernel work | 18 merged kernel PRs since 2026-10-19, among them PRs #189 to #236: K2 broad phase, mesh reuse, direct split, exact plane–plane SSI, presearch grids; K4 rolling-ball fillets across loft seams and vertex blends (`loopblend.rs`, `curveblend.rs`, `blend_corner.rs`); K5 NURBS offset fitting, free-form shell and thicken (`offset_fit.rs`, `offset_free.rs`). Several are still open (#224 to #236). |
@@ -142,7 +142,9 @@ Polykrom crate.
 ```
 polycore/
   crates/
-    polycore/            the public API: the Kernel trait, types, re-exports
+    polycore/            the facade: the Kernel trait, types, re-exports (package
+                         solidcraft-kernel until Polykrom's second rename stage)
+    solidcraft-geom/     Polykrom's geom crate, moved whole; split up in Phase 1
     polycore-math/       vectors, tolerances, predicates, B-splines and NURBS
     polycore-geom/       curves, surfaces, SSI, procedural intersection curves
     polycore-topo/       the B-rep arena, tolerant entities, p-curves, validity checker
@@ -164,9 +166,19 @@ Dependencies point one way: math ← geom ← topo ← (ops, mesh, naming, props
 
 ### How Polykrom consumes it
 
-- **Pinned by revision.** Polykrom's workspace `Cargo.toml` names
-  `polycore = { git = "https://github.com/wckdboy/polycore", rev = "<sha>" }`. Polykrom crates
-  depend on `polycore` only, never on a `polycore-*` crate directly.
+- **Pinned by revision.** Polykrom's workspace `Cargo.toml` names PolyCore's public crates by
+  git and revision, for example
+  `solidcraft-kernel = { git = "https://github.com/wckdboy/polycore", rev = "<sha>" }`.
+- **Two public crates, then one.** Until Phase 1 splits it, `solidcraft-geom` is a second public
+  crate: Polykrom's sketch solver and renderer use it directly. After the split they use the
+  facade's re-exports (`polycore::math`, `polycore::mesh`), and Polykrom depends on the facade
+  only, never on a `polycore-*` crate directly.
+- **Names keep Polykrom's staged rename.** Polykrom's AGENTS.md keeps internal `solidcraft-*`
+  names until its second rename stage and forbids renaming them piecemeal. So Phase 0 moves
+  `solidcraft-kernel` and `solidcraft-geom` under their current package names; the facade
+  becomes `polycore` in one atomic change (both repositories, every use, and the AGENTS.md
+  naming section) at that stage. Crates that are new in PolyCore (`polycore-math`,
+  `polycore-topo`, …) are not renames and take `polycore-*` names from the start.
 - **Joint development.** A developer working on both checks them out side by side and adds an
   untracked override, so CI always builds the pinned revision:
 
@@ -202,8 +214,8 @@ run stays as the end-to-end check.
 
 | Today (Polykrom) | Becomes | When and how |
 |---|---|---|
-| `crates/kernel` | `polycore` | Phase 0: moved with its history (`git filter-repo` of its paths), the package renamed, the `Kernel` trait extracted; no behaviour change. Its modules then move out to the crates above, one area per PR. |
-| `crates/geom` | `polycore-math`, `polycore-mesh`, `polycore-io` (schema 3) | Phase 0 moves it whole, since the kernel, the schema and the sketch solver all use it; Polykrom's sketch and render crates then depend on PolyCore's. Phase 1 splits it. |
+| `crates/kernel` | the facade (`solidcraft-kernel`, later `polycore`) | Phase 0: moved with its history (`git filter-repo` of its paths) under its current package name, the `Kernel` trait extracted; no behaviour change. The rename to `polycore` follows Polykrom's staged rename. Its modules then move out to the crates above, one area per PR. |
+| `crates/geom` | `polycore-math`, `polycore-mesh`, `polycore-io` (schema 3) | Phase 0 moves it whole under its current name, since the kernel, the schema and the sketch solver all use it; Polykrom's sketch and render crates then depend on it from PolyCore by git. Phase 1 splits it, and they move to the facade's re-exports. |
 | `vendor/truck-*`, `vendor/matext4cgmath`, truck-topology, truck-modeling | `vendor/polycore-truck-*` | Phase 0, renamed so no downstream patch is needed. Then replaced: geometry and tessellation in Phase 1, topology in Phases 1–2, booleans in Phase 2. Deleted in Phase 6. |
 | `tests/kernel-cases/` (cases and ladder), `xtask` kernel-cases | `tests/kernel-cases/`, `xtask` | Phase 0. Polykrom's xtask keeps a `--cases DIR` option for its smoke subset. |
 | `nightfall-math` (archived Nightfall) | `polycore-math` | Phase 1: copied with its tests and probes. Where it overlaps `bspline.rs`, the faster one that passes both test sets stays. |
@@ -244,7 +256,12 @@ pub trait Kernel: Send + Sync {
 /// A result with its history and evidence, or a refusal that says why.
 pub type Outcome<T> = Result<Done<T>, Refusal>;
 pub struct Done<T> { pub value: T, pub history: History, pub evidence: Evidence }
-pub enum Refusal { Unsupported, InvalidInput, Failed, OutOfBudget, Cancelled, Internal }
+pub struct Refusal {
+    pub kind: RefusalKind,        // Unsupported, InvalidInput, Failed, OutOfBudget, Cancelled, Internal
+    pub stage: &'static str,      // where it stopped, e.g. "ssi", "classify", "blend.corner"
+    pub entities: Vec<EntityRef>, // the operand faces, edges or vertices involved
+    pub message: String,
+}
 
 /// Model resolution, time and attempt budget, thread budget, progress and cancellation.
 pub struct Cx { /* … */ }
@@ -253,7 +270,8 @@ pub struct Cx { /* … */ }
 - `Body` is immutable, `Send + Sync`, shared by `Arc`, and carries a content hash.
 - `Evidence` says how a result was checked: tolerance achieved, fit errors, validity, time.
   No caller gets a bare number (ENGINES.md principle 4).
-- Every refusal carries the stage and the entities involved. No operation returns a partial body.
+- Every refusal carries its kind, the stage where it stopped and the entities involved. No
+  operation returns a partial body.
 - Today's 70 entry points map onto these methods with typed specs. App-level features built
   from them (emboss, lips, threads, sheet metal) stay in Polykrom unless they need kernel internals.
 - The trait is semver-versioned. It is stable from the end of Phase 2; before that it may
@@ -297,8 +315,20 @@ closing PR:
 | **G-determinism** | The determinism check passes on the whole corpus. |
 | **G-bakeoff** | The weighted score against OCCT is not lower than the phase before, and meets the phase's target. |
 | **G-tinyrex** | TinyRex rebuilt from scratch by the agent, results at least as good ([below](#tinyrex-the-flagship-test)). |
-| **G-machines** | The printer and the dog evaluate from their saved designs with no feature errors, the same body and face counts, and mass properties within 1e-6 relative of the phase before (or a recorded reason, backed by an analytic check, where a better kernel changes the shape); the dog's `sim.mujoco` walk is `ok`. |
+| **G-machines** | The printer and the dog evaluate from their saved designs with no feature errors, the same body and face counts, and mass properties within the [comparison tolerance](#comparison-tolerance) of the phase before (or a recorded reason, backed by an analytic check, where a better kernel changes the shape); the dog's `sim.mujoco` walk is `ok`. |
 | **G-ci** | PolyCore's and Polykrom's CI green at the pinned revision, including Polykrom's wasm32 build. |
+
+### Comparison tolerance
+
+Wherever a gate or score says a measured value matches, it means
+
+|measured − expected| ≤ 1e-6 · max(|expected|, scale)
+
+with the scale taken from the part's bounding-box diagonal *d* (mm) and, for mass, its density ρ:
+*d* for lengths and coordinates (centre of mass, bounding box), *d²* for areas, *d³* for volumes,
+ρ·*d³* for masses and ρ·*d⁵* for inertia-tensor entries. A value expected to be zero, such as a
+product of inertia of a symmetric part, is then held to 1e-6 of its natural scale instead of to
+an undefined relative error. A case may state a tighter or looser tolerance with its reason.
 
 ### TinyRex, the flagship test
 
@@ -336,7 +366,7 @@ score against the bar. OCCT 7.9.3 runs as a separate program; its results are ne
 | Metric | Weight | Change from Nightfall's RFC 0001 |
 |---|---|---|
 | Operation success | 30 % | Unchanged: valid closed solids ÷ operations attempted. |
-| Correctness | 20 % | Graded against analytic or invariant answers only, within 1e-6 relative. Cases without one are reported, not scored. |
+| Correctness | 20 % | Graded against analytic or invariant answers only, within the [comparison tolerance](#comparison-tolerance). Cases without one are reported, not scored. |
 | Operation history | 20 % | Measured by a probe that traces every result face and edge. |
 | Fillet and blend quality | 10 % | Unchanged. |
 | Performance | 10 % | Unchanged: median time over shared successes, release build. |
