@@ -3457,7 +3457,12 @@ fn inner_wall_points(shell: &Body, outer: &Body, skip: &[usize], gap: f64) -> Ve
     for (t, f) in mesh.triangles.iter().zip(&mesh.tri_face) {
         by_face.entry(*f).or_default().extend(mesh.tri(t).unwrap());
     }
-    by_face.into_values().filter(|pts| pts.iter().step_by(7).all(|p| distance_to_faces(outer, skip, *p) > gap)).flatten().collect()
+    // Every seventh point of a face, or every point of a small one (a flat wall's two triangles).
+    by_face
+        .into_values()
+        .filter(|pts| pts.iter().step_by(if pts.len() < 64 { 1 } else { 7 }).all(|p| distance_to_faces(outer, skip, *p) > gap))
+        .flatten()
+        .collect()
 }
 
 /// A loft through three rounded rectangles (free-form sides), shelled 2.5 open at the top: a
@@ -3566,6 +3571,74 @@ fn thicken_of_a_five_sided_patch_keeps_its_thickness() {
     let m = measure(&thick).unwrap();
     let area = measure(&patch).unwrap().area;
     assert!(rel(m.volume, area * t) < 0.05, "{} vs {}", m.volume, area * t);
+}
+
+/// A section of the creased loft: a chord `2w` wide, sides rising to `0.8h` and a top arching to
+/// about `0.9h`, each a cubic, meeting at creases (sharp corners). #195.
+fn creased_section(x: f64, w: f64, h: f64) -> (Plane, Vec<Seg2>) {
+    let p = |a: f64, b: f64| Vec2::new(a * w, b * h);
+    let plane = Plane::new(Vec3::new(x, 0.0, 0.0), Vec3::Y, Vec3::Z).unwrap();
+    let segs = vec![
+        Seg2::Cubic { p0: p(-1.0, 0.0), p1: p(-1.08, 0.35), p2: p(-0.95, 0.65), p3: p(-0.8, 0.8) },
+        Seg2::Cubic { p0: p(-0.8, 0.8), p1: p(-0.4, 0.9), p2: p(0.4, 0.9), p3: p(0.8, 0.8) },
+        Seg2::Cubic { p0: p(0.8, 0.8), p1: p(0.95, 0.65), p2: p(1.08, 0.35), p3: p(1.0, 0.0) },
+        Seg2::Line { a: p(1.0, 0.0), b: p(-1.0, 0.0) },
+    ];
+    (plane, segs)
+}
+
+/// A loft through creased sections (a skull's, #195: open at both ends, its four faces meeting
+/// at sharp edges) thickened 2 against its normals: the creases are inside corners on that side,
+/// where the faces' offsets are cut back to meet. A valid closed solid of the sheet, its offset
+/// (four faces sharing their moved edges) and eight walls round the open ends; every mesh point
+/// of the offset 2 from the sheet, to within the fit's 0.01 mm and the mesh.
+#[test]
+fn thicken_of_a_creased_loft_into_its_inside_corners() {
+    let sections: Vec<(Plane, Vec<Seg2>)> = [(15.0, 10.0, 14.0), (45.0, 16.0, 22.0), (75.0, 24.0, 34.0), (105.0, 32.0, 40.0), (130.0, 34.0, 36.0)]
+        .iter()
+        .map(|&(x, w, h)| creased_section(x, w, h))
+        .collect();
+    let sheet = loft_sheet(&sections).unwrap();
+    assert_eq!(sheet.face_count(), 4);
+    let t = 2.0;
+    let thick = thicken(&sheet, -t, false).unwrap();
+    assert!(thick.validity().is_empty(), "{:?}", thick.validity());
+    assert_eq!(thick.face_count(), 16);
+    let far = inner_wall_points(&thick, &sheet, &[], t * 0.9);
+    assert!(far.len() > 100, "{} points", far.len());
+    for p in far {
+        let d = distance_to_faces(&sheet, &[], p);
+        assert!((d - t).abs() < 0.02, "thickness {d} at {p:?}");
+    }
+}
+
+/// A revolved sheet (a bottle's wall) with two holes trimmed through it, thickened 2 inwards:
+/// the walls round the holes' rims run along closed edges, which truck's ruled face can't take
+/// (its wire would not be simple: a panic). A valid closed solid, the inner copy 2 from the
+/// sheet. #195.
+#[test]
+fn thicken_of_a_revolved_sheet_with_trimmed_holes() {
+    let xz = Plane::new(Vec3::ZERO, Vec3::X, Vec3::Z).unwrap();
+    let profile = vec![
+        Seg2::Cubic { p0: Vec2::new(30.0, 0.0), p1: Vec2::new(32.5, 20.0), p2: Vec2::new(32.5, 40.0), p3: Vec2::new(30.0, 60.0) },
+        Seg2::Cubic { p0: Vec2::new(30.0, 60.0), p1: Vec2::new(28.75, 70.0), p2: Vec2::new(12.0, 90.0), p3: Vec2::new(12.0, 100.0) },
+        Seg2::Cubic { p0: Vec2::new(12.0, 100.0), p1: Vec2::new(12.0, 105.0), p2: Vec2::new(12.0, 110.0), p3: Vec2::new(12.0, 115.0) },
+    ];
+    let bottle = revolve_sheet(&xz, &[profile], Vec2::ZERO, Vec2::new(0.0, 1.0), 0.0, 2.0 * PI).unwrap();
+    let yz = Plane::new(Vec3::ZERO, Vec3::Y, Vec3::Z).unwrap();
+    let holes = vec![Loop2::circle(Vec2::new(0.0, 25.0), 7.0).segs, Loop2::circle(Vec2::new(0.0, 75.0), 7.0).segs];
+    let tool = SplitTool::Curves { plane: yz, curves: holes, along: None };
+    let sheet = trim_keep(&bottle, &tool, TrimKeep::Regions(&[Vec3::new(-31.0, 0.0, 40.0)])).unwrap();
+    let t = 2.0;
+    let thick = thicken(&sheet, -t, false).unwrap();
+    assert!(thick.validity().is_empty(), "{:?}", thick.validity());
+    assert_eq!(thick.solid.boundaries().len(), 1);
+    let far = inner_wall_points(&thick, &sheet, &[], t * 0.9);
+    assert!(far.len() > 100, "{} points", far.len());
+    for p in far.iter().step_by(5) {
+        let d = distance_to_faces(&sheet, &[], *p);
+        assert!((d - t).abs() < 0.02, "thickness {d} at {p:?}");
+    }
 }
 
 /// A loft whose rounded corners (radius 3 to 4) are tighter than the wall: shelling it 5 would

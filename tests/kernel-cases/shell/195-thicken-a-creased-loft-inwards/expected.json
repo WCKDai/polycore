@@ -4,6 +4,6 @@
  ],
  "what": "surface.thicken 2 mm inwards of a loft through creased sections (a T-rex skull): refused as 'not supported yet: thickening into an inside corner across a sharp edge'",
  "source": "invariants",
- "method": "the skull loft of 195-g2-patch-on-a-creased-loft (open at both ends), thickened 2 mm against its normals: the creases turn into inside corners on that side, where the offset faces must be cut back to meet; every section is far larger than 2 mm, so the wall is one closed, valid solid. No closed form for its volume: only the outcome and validity are graded.",
+ "method": "the skull loft of 195-g2-patch-on-a-creased-loft (open at both ends), thickened 2 mm against its normals: the creases turn into inside corners on that side, where the offset faces must be cut back to meet; every section is far larger than 2 mm, so the wall is one closed, valid solid. No closed form for its volume: only the outcome and validity are graded. Thicken keeps the sheet it thickens, so the recipe removes the sheet afterwards (as 194-thicken-five-sided-patch does) and the one body graded is the thickened solid.",
  "body_count": 1
 }

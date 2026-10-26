@@ -178,25 +178,45 @@ impl Moved {
         lv.iter().all(|(d, _)| d.abs() < self.tol * 0.1).then_some(q)
     }
 
+    /// The point nearest `q` on face `i` moved (a few Newton steps along its normal).
+    fn onto(&self, i: usize, q: Vec3) -> Option<Vec3> {
+        let mut q = q;
+        for _ in 0..8 {
+            let (d, g) = self.level(i, q)?;
+            if d.abs() < self.tol * 1e-3 {
+                return Some(q);
+            }
+            q -= g * d;
+        }
+        self.level(i, q).filter(|(d, _)| d.abs() < self.tol * 0.1).map(|_| q)
+    }
+
     /// The faces `fs` at `p` in groups meeting smoothly there: (normal, shift, a face of the
     /// group). Faces are one group where moving along their mean normal keeps the point within
     /// a quarter of the tolerance of each moved face; `None` where smooth neighbours move by
-    /// different distances (they part, with no common point).
+    /// different distances (they part, with no common point). A group's normal is its faces'
+    /// mean, and its shift the move along it that puts the point on each face's moved tangent
+    /// plane (`s / cos(α/2)` for two faces α apart), so that a point moves the same way whether
+    /// its faces are one group or two.
     fn groups(&self, p: Vec3, fs: &[usize]) -> Option<Vec<(Vec3, f64, usize)>> {
-        let mut groups: Vec<(Vec3, f64, usize)> = Vec::new();
+        // (sum of normals, shift, a face, how many faces)
+        let mut groups: Vec<(Vec3, f64, usize, f64)> = Vec::new();
         for &i in fs {
             let (n, s) = (self.normal(i, p)?, *self.shifts.get(i)?);
             // Moved along the mean of normals α apart, a point is off each moved face by about
             // |s|·α²/8 = |s|·(1 − cos α)/4: at most a quarter of the tolerance.
             let smooth = (self.tol / s.abs().max(1e-12)).clamp(SMOOTH, SMOOTH * 100.0);
-            match groups.iter().find(|g| g.0.dot(n) > 1.0 - smooth) {
+            match groups.iter_mut().find(|g| g.0.normalized().is_some_and(|m| m.dot(n) > 1.0 - smooth)) {
                 // Smooth neighbours moving by different distances part: no common point.
                 Some(g) if (g.1 - s).abs() > 1e-9 => return None,
-                Some(_) => {}
-                None => groups.push((n, s, i)),
+                Some(g) => {
+                    g.0 += n;
+                    g.3 += 1.0;
+                }
+                None => groups.push((n, s, i, 1.0)),
             }
         }
-        Some(groups)
+        groups.into_iter().map(|(sum, s, i, k)| Some((sum.normalized()?, s * k / sum.len(), i))).collect()
     }
 
     /// The point at `t` of edge curve `c` (t over [0, 1] for the curve itself, continued along
@@ -284,6 +304,33 @@ pub(crate) fn has_free_faces(b: &Body) -> bool {
 /// The result's history is over `[b]`: each face is the face it was moved from, each edge the
 /// edge it was moved from.
 pub(crate) fn offset_free(b: &Body, shift: impl Fn(usize) -> f64, tolerance: f64) -> Result<Body> {
+    let Parts { faces, rec, .. } = moved_parts(b, shift, tolerance)?;
+    guard("offset", || {
+        let mut shells: Vec<mt::Shell> = Vec::new();
+        let mut it = faces.into_iter();
+        for sh in b.solid.boundaries() {
+            shells.push(it.by_ref().take(sh.len()).collect::<Vec<_>>().into());
+        }
+        let solid = Solid::try_new(shells).map_err(|e| fail(&e.to_string()))?;
+        crate::record::rebuilt(solid, &[&b.solid], &rec)
+    })
+}
+
+/// A body's faces moved as [`offset_free`] moves them, before they are made into a solid (or,
+/// for a surface body, a sheet): each face in order, each moved edge by the id of the edge it
+/// was moved from (running its absolute way), and each moved vertex by the old one's id.
+pub(crate) struct Parts {
+    pub(crate) faces: Vec<mt::Face>,
+    pub(crate) edges: HashMap<mt::EdgeID, mt::Edge>,
+    pub(crate) verts: HashMap<mt::VertexID, mt::Vertex>,
+    rec: crate::record::Rebuild,
+}
+
+/// The faces, edges and vertices of `b` moved (see [`offset_free`]). An edge that bounds one face
+/// only (a surface body's free edge) runs between its moved ends though they lie off the moved
+/// curve (a corner where two faces' moved surfaces meet that edge's offset short of its end, or
+/// past it): the gap is spread along the edge and the points put back onto the moved face.
+pub(crate) fn moved_parts(b: &Body, shift: impl Fn(usize) -> f64, tolerance: f64) -> Result<Parts> {
     let faces: Vec<mt::Face> = b.solid.face_iter().cloned().collect();
     if faces.len() > MAX_FACES {
         return Err(fail(&format!("not supported yet: free-form offsets of bodies with more than {MAX_FACES} faces")));
@@ -415,17 +462,35 @@ pub(crate) fn offset_free(b: &Body, shift: impl Fn(usize) -> f64, tolerance: f64
                     // (a wall's edge moved in past the floor moved up): where it passes them.
                     let cv = e.curve();
                     let bad = || fail("an edge whose faces don't meet the same way after the move");
+                    // A free edge's ends may lie off its moved curve by up to half its move (a
+                    // corner fixed by a neighbour's moved free edge).
+                    let free = match fs.as_slice() {
+                        [i] if !closed => Some((*i, (m.shifts.get(*i).copied().unwrap_or(0.0).abs() * 0.5).max(tolerance))),
+                        _ => None,
+                    };
+                    let slack = free.map_or(tolerance, |f| f.1);
                     let (ta, tc) = if closed {
                         (0.0, 1.0)
                     } else {
                         let (Some((ta, da)), Some((tc, dc))) = (m.nearest_along(&cv, fs, pa, 0.0), m.nearest_along(&cv, fs, pc, 1.0)) else {
                             return Err(bad());
                         };
-                        if da > tolerance || dc > tolerance || tc <= ta {
+                        if da > slack || dc > slack || tc <= ta {
                             return Err(bad());
                         }
                         (ta, tc)
                     };
+                    // How far each end is off the moved curve, spread along the edge (only where
+                    // it is more than a hundredth of the tolerance: a solid's edges are left as
+                    // they were).
+                    let (ga, gc) = match free {
+                        Some(_) if !closed => {
+                            let (Some(qa), Some(qc)) = (m.along(&cv, fs, ta), m.along(&cv, fs, tc)) else { return Err(bad()) };
+                            (pa - qa, pc - qc)
+                        }
+                        _ => (Vec3::ZERO, Vec3::ZERO),
+                    };
+                    let spread = free.filter(|_| ga.len().max(gc.len()) > tolerance * 0.01).map(|f| f.0);
                     let at = |t: f64| -> Result<Vec3> {
                         if t <= 0.0 {
                             return Ok(pa);
@@ -433,7 +498,11 @@ pub(crate) fn offset_free(b: &Body, shift: impl Fn(usize) -> f64, tolerance: f64
                         if t >= 1.0 {
                             return Ok(pc);
                         }
-                        m.along(&cv, fs, ta + (tc - ta) * t).ok_or_else(bad)
+                        let q = m.along(&cv, fs, ta + (tc - ta) * t).ok_or_else(bad)?;
+                        match spread {
+                            Some(i) => m.onto(i, q + ga * (1.0 - t) + gc * t).ok_or_else(bad),
+                            None => Ok(q),
+                        }
                     };
                     mt::Edge::new(a, c, mt::Curve::BSplineCurve(fit_curve(at, tolerance)?))
                 }
@@ -470,13 +539,7 @@ pub(crate) fn offset_free(b: &Body, shift: impl Fn(usize) -> f64, tolerance: f64
             rec.face(&nf, f);
             out.push(nf);
         }
-        let mut shells: Vec<mt::Shell> = Vec::new();
-        let mut it = out.into_iter();
-        for sh in b.solid.boundaries() {
-            shells.push(it.by_ref().take(sh.len()).collect::<Vec<_>>().into());
-        }
-        let solid = Solid::try_new(shells).map_err(|e| fail(&e.to_string()))?;
-        crate::record::rebuilt(solid, &[&b.solid], &rec)
+        Ok(Parts { faces: out, edges, verts, rec })
     })
 }
 
