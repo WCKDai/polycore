@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#194",
+  "wckdboy/polykrom#184"
+ ],
+ "what": "the TinyRex torso: a smooth loft through four rounded rectangles (z 210 to 288), shelled 2.5 mm open at the top; its eight sides are free-form B-splines, which the analytic offset refused",
+ "source": "invariants",
+ "method": "no closed form for the volume of a free-form loft's offset. The shell succeeds and is one valid closed solid: 8 outer sides, 8 inner sides (their offsets), the bottom, the inner floor and the rim at the top = 19 faces. The wall itself (2.5 mm everywhere, within the 0.01 mm fit) is sampled by the kernel's tests on a loft of the same kind",
+ "body_count": 1,
+ "faces": 19
+}

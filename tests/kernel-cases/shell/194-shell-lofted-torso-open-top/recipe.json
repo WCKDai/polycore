@@ -1,0 +1,265 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "name": "Sec0",
+    "offset": 210
+   }
+  },
+  {
+   "command": "sketch.rectangle.two_point",
+   "params": {
+    "p0": [
+     -36,
+     -39
+    ],
+    "p1": [
+     32,
+     39
+    ]
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l1",
+    "b": "l2",
+    "radius": 9
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l2",
+    "b": "l3",
+    "radius": 9
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l3",
+    "b": "l4",
+    "radius": 9
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l4",
+    "b": "l1",
+    "radius": 9
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "name": "Sec1",
+    "offset": 224
+   }
+  },
+  {
+   "command": "sketch.rectangle.two_point",
+   "params": {
+    "p0": [
+     -52,
+     -45
+    ],
+    "p1": [
+     52,
+     45
+    ]
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l1",
+    "b": "l2",
+    "radius": 24
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l2",
+    "b": "l3",
+    "radius": 24
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l3",
+    "b": "l4",
+    "radius": 20
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l4",
+    "b": "l1",
+    "radius": 20
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "name": "Sec2",
+    "offset": 254
+   }
+  },
+  {
+   "command": "sketch.rectangle.two_point",
+   "params": {
+    "p0": [
+     -63,
+     -46
+    ],
+    "p1": [
+     64,
+     46
+    ]
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l1",
+    "b": "l2",
+    "radius": 28
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l2",
+    "b": "l3",
+    "radius": 28
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l3",
+    "b": "l4",
+    "radius": 22
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l4",
+    "b": "l1",
+    "radius": 22
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "name": "Sec3",
+    "offset": 288
+   }
+  },
+  {
+   "command": "sketch.rectangle.two_point",
+   "params": {
+    "p0": [
+     -65,
+     -46
+    ],
+    "p1": [
+     65,
+     46
+    ]
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l1",
+    "b": "l2",
+    "radius": 28
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l2",
+    "b": "l3",
+    "radius": 28
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l3",
+    "b": "l4",
+    "radius": 22
+   }
+  },
+  {
+   "command": "sketch.fillet",
+   "params": {
+    "a": "l4",
+    "b": "l1",
+    "radius": 22
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.loft",
+   "params": {
+    "sections": [
+     {
+      "sketch": "Sec0"
+     },
+     {
+      "sketch": "Sec1"
+     },
+     {
+      "sketch": "Sec2"
+     },
+     {
+      "sketch": "Sec3"
+     }
+    ],
+    "operation": "new"
+   }
+  },
+  {
+   "command": "solid.shell",
+   "params": {
+    "faces": [
+     [
+      0,
+      0,
+      288
+     ]
+    ],
+    "thickness": 2.5
+   }
+  }
+ ]
+}

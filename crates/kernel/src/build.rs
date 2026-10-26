@@ -2420,7 +2420,7 @@ fn full_circle(path: &[PathSeg]) -> Option<(Vec3, Vec3, f64)> {
 }
 
 /// Cox–de Boor basis values N_{j,3}(u) for all j.
-fn cubic_basis(knots: &[f64], n_ctrl: usize, u: f64) -> Vec<f64> {
+pub(crate) fn cubic_basis(knots: &[f64], n_ctrl: usize, u: f64) -> Vec<f64> {
     let p = 3;
     let m = knots.len();
     let mut n = vec![0.0; m.saturating_sub(1)];

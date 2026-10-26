@@ -9,27 +9,21 @@
 
 use std::collections::HashMap;
 
-use mt::{BoundedCurve, InnerSpace, ParametricCurve, ParametricSurface, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::{Grid, Vec3};
+use mt::{BoundedCurve, ParametricCurve, SearchNearestParameter};
+use solidcraft_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
-use crate::build::interpolate_net;
 use crate::history::FaceOrigin;
 use crate::surfaces::{Offset, map_curve, map_surface, surface_body};
 use crate::{KernelError, Result, guard};
-
-/// Grid samples a side of a fitted offset starts with, and the most it is refined to.
-const START_GRID: usize = 12;
-const MAX_GRID: usize = 96;
-/// Samples along an edge of a fitted offset.
-const EDGE_SAMPLES: usize = 33;
 
 /// How one face moves along its normals: exactly (a plane, a circular cylinder) or onto
 /// surfaces fitted for the distances it was made for. Shared by Offset Surface and Thicken.
 pub(crate) struct FaceMover {
     face: mt::Face,
     how: How,
+    tolerance: f64,
 }
 
 enum How {
@@ -65,7 +59,7 @@ impl FaceMover {
                 How::Fitted { surfaces, sign: if face.orientation() { 1.0 } else { -1.0 } }
             }
         };
-        Ok(FaceMover { face: face.clone(), how })
+        Ok(FaceMover { face: face.clone(), how, tolerance })
     }
 
     /// Where the point `p` of the face goes at distance `d`.
@@ -77,18 +71,17 @@ impl FaceMover {
         }
     }
 
-    /// An edge curve of the face moved by `d` (exact, or a cubic through moved samples).
+    /// An edge curve of the face moved by `d` (exact, or a cubic through moved samples within
+    /// the tolerance). An intersection curve becomes such a cubic even where it stays, so a wall
+    /// can be ruled from it.
     pub(crate) fn curve(&self, c: &mt::Curve, d: f64) -> Result<mt::Curve> {
+        let (t0, t1) = c.range_tuple();
+        let at = |t: f64| from_p3(c.subs(t0 + (t1 - t0) * t));
         match &self.how {
             How::Exact(off) => map_curve(off, c, d),
-            How::Fitted { .. } if d == 0.0 => Ok(c.clone()),
-            How::Fitted { .. } => {
-                let (t0, t1) = c.range_tuple();
-                let pts: Vec<Vec3> = (0..EDGE_SAMPLES)
-                    .map(|k| self.point(from_p3(c.subs(t0 + (t1 - t0) * k as f64 / (EDGE_SAMPLES - 1) as f64)), d))
-                    .collect::<Result<_>>()?;
-                Ok(mt::Curve::BSplineCurve(crate::build::interpolate_cubic(&pts).ok_or_else(|| KernelError::Failed("offset edge".into()))?))
-            }
+            How::Fitted { .. } if d == 0.0 && !matches!(c, mt::Curve::IntersectionCurve(_)) => Ok(c.clone()),
+            How::Fitted { .. } if d == 0.0 => Ok(mt::Curve::BSplineCurve(crate::offset_fit::fit_curve(|t| Ok(at(t)), self.tolerance)?)),
+            How::Fitted { .. } => Ok(mt::Curve::BSplineCurve(crate::offset_fit::fit_curve(|t| self.point(at(t), d), self.tolerance)?)),
         }
     }
 
@@ -210,13 +203,16 @@ pub fn offset_surface(body: &Body, faces: &[usize], distance: f64, tolerance: f6
     })
 }
 
-/// The point `p` on `s` (absolute) moved by `d` along the surface's own normal there.
+/// The point `p` on `s` (absolute) moved by `d` along the surface's own normal there: its
+/// nearest point found, then settled by Newton so that nearby points move smoothly.
 fn offset_point(s: &mt::Surface, p: Vec3, d: f64) -> Result<Vec3> {
     let (u, v) = s.search_nearest_parameter(p3(p), None, 100).ok_or_else(|| KernelError::Failed("offset: a point off its face".into()))?;
-    let n = from_p3(mt::Point3::new(0.0, 0.0, 0.0) + s.normal(u, v));
-    let n =
-        n.normalized().ok_or_else(|| KernelError::Invalid("the face has a point with no normal (a pole or a crease): not supported yet".into()))?;
-    Ok(from_p3(s.subs(u, v)) + n * d)
+    let base = crate::offset_fit::Extended::new(s.clone());
+    let far = 1e300;
+    let (u, v) = base.foot(p, (u, v), [-far, far, -far, far]).unwrap_or((u, v));
+    let j = base.jet(u, v);
+    let n = j.normal().ok_or_else(|| KernelError::Invalid("the face has a point with no normal (a pole or a crease): not supported yet".into()))?;
+    Ok(j.p + n * d)
 }
 
 /// The fitted offset of a face that is not a plane or a circular cylinder.
@@ -239,95 +235,16 @@ fn fit(f: &mt::Face, distance: f64, tolerance: f64) -> Result<mt::BSplineSurface
     if !(u0.is_finite() && u1 > u0 && v0.is_finite() && v1 > v0) {
         return Err(KernelError::Failed("offset: the face's span on its surface".into()));
     }
-    let at = |a: f64, b: f64| -> Result<Vec3> {
-        let (u, v) = (u0 + (u1 - u0) * a, v0 + (v1 - v0) * b);
-        let n = from_p3(mt::Point3::new(0.0, 0.0, 0.0) + s.normal(u, v));
-        let n = n
-            .normalized()
-            .ok_or_else(|| KernelError::Invalid("the face has a point with no normal (a pole or a crease): not supported yet".into()))?;
-        Ok(from_p3(s.subs(u, v)) + n * d)
-    };
-    // Folding over: moving a point by d along its normal shrinks lengths along a principal
-    // direction by 1 - d·k (k > 0 where the surface bends toward its normal); at zero the
-    // offset reaches the centre of curvature and folds. Refused with a margin, naming the
-    // tightest radius on that side.
-    let mut tightest: Option<f64> = None;
-    for i in 0..=START_GRID {
-        for j in 0..=START_GRID {
-            let (u, v) = (u0 + (u1 - u0) * i as f64 / START_GRID as f64, v0 + (v1 - v0) * j as f64 / START_GRID as f64);
-            let Some((k1, k2)) = principal_curvatures(&s, u, v) else { continue };
-            for k in [k1, k2] {
-                if d * k > 0.0 && 1.0 - d * k <= 0.05 {
-                    let r = 1.0 / k.abs();
-                    tightest = Some(tightest.map_or(r, |t: f64| t.min(r)));
-                }
-            }
-        }
-    }
-    if let Some(r) = tightest {
-        return Err(KernelError::Invalid(format!(
-            "the offset is as deep as the face's smallest concave radius on that side ({r:.4} mm): it would fold the face over"
-        )));
-    }
-    let mut n = START_GRID;
-    loop {
-        let grid = Grid::from_fn([n + 1, n + 1], |i, j| at(i as f64 / n as f64, j as f64 / n as f64))
-            .ok_or_else(|| KernelError::TooLarge("offset: the sample grid".into()))?
-            .try_map(|p| p)?;
-        let surface = interpolate_net(&grid).map(|fit| fit.surface).ok_or_else(|| KernelError::Failed("offset: fitting the surface".into()))?;
-        // Checked between the samples, where a fit strays most.
-        let mut worst = 0.0f64;
-        for i in 0..n {
-            for j in 0..n {
-                let (a, b) = ((i as f64 + 0.5) / n as f64, (j as f64 + 0.5) / n as f64);
-                worst = worst.max(from_p3(surface.subs(a, b)).dist(at(a, b)?));
-            }
-        }
-        if worst <= tolerance {
-            // Re-parameterised to the face's own surface span, so boundary points found on the
-            // old surface map onto it.
-            return Ok(reparameterised(surface, (u0, u1), (v0, v1)));
-        }
-        if n >= MAX_GRID {
-            return Err(KernelError::Invalid(format!(
-                "the offset can't be fitted within {tolerance} mm (off by up to {worst:.4} mm): try a larger tolerance"
-            )));
-        }
-        n = (n * 2).min(MAX_GRID);
-    }
-}
-
-/// The principal curvatures of `s` at (u, v), signed: positive where the surface bends toward
-/// its normal there. `None` where it has no normal.
-fn principal_curvatures(s: &mt::Surface, u: f64, v: f64) -> Option<(f64, f64)> {
-    let (su, sv) = (s.uder(u, v), s.vder(u, v));
-    let n = s.normal(u, v);
-    if !(n.magnitude2() > 0.5) {
-        return None;
-    }
-    let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
-    let (l, m, nn) = (s.uuder(u, v).dot(n), s.uvder(u, v).dot(n), s.vvder(u, v).dot(n));
-    let det = e * g - f * f;
-    if det.abs() < 1e-18 {
-        return None;
-    }
-    let k = (l * nn - m * m) / det;
-    let h = (e * nn - 2.0 * f * m + g * l) / (2.0 * det);
-    let disc = (h * h - k).max(0.0).sqrt();
-    Some((h + disc, h - disc))
-}
-
-/// `s` (on [0, 1]²) with its knots stretched onto `u` × `v`.
-fn reparameterised(s: mt::BSplineSurface<mt::Point3>, u: (f64, f64), v: (f64, f64)) -> mt::BSplineSurface<mt::Point3> {
-    let stretch = |kv: &mt::KnotVec, (a, b): (f64, f64)| mt::KnotVec::from(kv.iter().map(|k| a + (b - a) * k).collect::<Vec<_>>());
-    let (ku, kv) = (stretch(s.uknot_vec(), u), stretch(s.vknot_vec(), v));
-    mt::BSplineSurface::new((ku, kv), s.control_points().clone())
+    // The same parameters as the face's own surface, so boundary points found on the old
+    // surface map onto it.
+    crate::offset_fit::fit_offset(&crate::offset_fit::Extended::new(s), [u0, u1, v0, v1], d, tolerance)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{box_solid, cylinder, measure, sphere};
+    use mt::ParametricSurface;
 
     fn rel(a: f64, b: f64) -> f64 {
         (a - b).abs() / b.abs().max(1e-9)

@@ -3400,3 +3400,71 @@ fn plane_pairs_intersect_exactly_as_the_mesh_collision_did() {
         }
     }
 }
+
+/// The distance from `p` to the nearest point of `b`'s faces other than `skip`, each face's
+/// surface read on its own parameter range and a tenth past it (planes everywhere).
+fn distance_to_faces(b: &Body, skip: &[usize], p: Vec3) -> f64 {
+    use std::ops::Bound::Included;
+    use truck_modeling::{ParametricSurface, SearchNearestParameter};
+    let mut best = f64::INFINITY;
+    for (i, f) in b.solid.face_iter().enumerate() {
+        if skip.contains(&i) {
+            continue;
+        }
+        let s = f.surface();
+        let Some(start) = s.search_nearest_parameter(crate::body::p3(p), None, 100) else { continue };
+        // Continued a little past its range (along its tangents): the wall at the rim of an
+        // opening is measured square to the wall, though the outer face ends there.
+        let span = match s.parameter_range() {
+            ((Included(a), Included(b)), (Included(c), Included(d))) => [a - (b - a) * 0.1, b + (b - a) * 0.1, c - (d - c) * 0.1, d + (d - c) * 0.1],
+            _ => [-1e300, 1e300, -1e300, 1e300],
+        };
+        let base = crate::offset_fit::Extended::new(s);
+        let (u, v) = base.foot(p, start, span).unwrap_or(start);
+        best = best.min(base.jet(u, v).p.dist(p));
+    }
+    best
+}
+
+/// The points of the faces of `shell` that lie wholly off `outer` (its inner walls, or the far
+/// copy of a thickened surface), sampled over their meshes.
+fn inner_wall_points(shell: &Body, outer: &Body, skip: &[usize], gap: f64) -> Vec<Vec3> {
+    let mesh = shell.tessellate(0.05).unwrap();
+    let mut by_face: std::collections::BTreeMap<u32, Vec<Vec3>> = Default::default();
+    for (t, f) in mesh.triangles.iter().zip(&mesh.tri_face) {
+        by_face.entry(*f).or_default().extend(mesh.tri(t).unwrap());
+    }
+    by_face.into_values().filter(|pts| pts.iter().step_by(7).all(|p| distance_to_faces(outer, skip, *p) > gap)).flatten().collect()
+}
+
+/// An N-sided patch (five sides on the cylinder that cut a pentagonal prism's top), thickened
+/// by 2: a valid closed solid of the two copies and five walls, the far copy 2 from the patch
+/// at every mesh point, to within the fit's 0.01 mm. #194.
+#[test]
+fn thicken_of_a_five_sided_patch_keeps_its_thickness() {
+    let pent: Vec<Vec2> = (0..5).map(|k| PI / 2.0 + 2.0 * PI * k as f64 / 5.0).map(|a| Vec2::new(15.0 * a.cos(), 15.0 * a.sin())).collect();
+    let prism = extrude(&Plane::XY, &[Region2 { outer: Loop2::polygon(&pent), holes: vec![] }], 0.0, 20.0).unwrap().pop().unwrap();
+    let tool = cylinder(Vec3::new(0.0, -60.0, 55.0), Vec3::Y, 40.0, 120.0).unwrap();
+    let cup = boolean(&prism, &tool, BoolOp::Cut).unwrap().unwrap();
+    let rim: Vec<Vec3> = (0..5)
+        .map(|k| {
+            let a = PI / 2.0 + PI / 5.0 + 2.0 * PI * k as f64 / 5.0;
+            let (x, y) = (15.0 * (PI / 5.0).cos() * a.cos(), 15.0 * (PI / 5.0).cos() * a.sin());
+            Vec3::new(x, y, 55.0 - (1600.0 - x * x).sqrt())
+        })
+        .collect();
+    let patch = patch_edges(&cup, &rim).unwrap();
+    let t = 2.0;
+    let thick = thicken(&patch, t, false).unwrap();
+    assert!(thick.validity().is_empty(), "{:?}", thick.validity());
+    assert_eq!(thick.face_count(), 7);
+    let far = inner_wall_points(&thick, &patch, &[], t * 0.9);
+    assert!(far.len() > 100, "{} points", far.len());
+    for p in far {
+        let d = distance_to_faces(&patch, &[], p);
+        assert!((d - t).abs() < 0.02, "thickness {d} at {p:?}");
+    }
+    let m = measure(&thick).unwrap();
+    let area = measure(&patch).unwrap().area;
+    assert!(rel(m.volume, area * t) < 0.05, "{} vs {}", m.volume, area * t);
+}

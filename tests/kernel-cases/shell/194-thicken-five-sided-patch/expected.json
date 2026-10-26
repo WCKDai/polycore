@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#194"
+ ],
+ "what": "an N-sided patch: a smooth B-spline surface on the five edges where a cylinder r 40 (axis along Y at z 55) cut a pentagonal prism (circumradius 15, 20 tall), thickened 2 mm; the patch's edges are intersection curves, which a thickened wall could not be ruled from (a panic, caught)",
+ "source": "invariants",
+ "method": "the patch is a fitted surface with no closed-form offset. Thicken succeeds and gives one valid closed solid: the patch, its copy 2 mm out and a wall along each of the five edges = 7 faces. The thickness (2 mm everywhere, within the 0.01 mm fit) is sampled by the kernel's tests on the same patch",
+ "body_count": 1,
+ "faces": 7
+}
