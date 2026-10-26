@@ -126,6 +126,11 @@ Changes:
 ## truck-meshalgo 0.4.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
 Changes:
+- `tessellation/triangulation.rs` (`nearest_projection`): with a hint, the hinted nearest search
+  goes before the unhinted exact search, which presearches the whole control net. A boundary
+  point that lies on its surface only within the chord tolerance (a thickened face's fitted
+  offset) has no exact parameter, and measuring a thickened lofted part spent 97 % of its time
+  presearching (#195).
 - `tessellation/triangulation.rs`: a boundary segment that crosses constraints already added
   is split where it crosses by `add_split_constraint` (a vertex at each crossing, the pieces
   added where they can be), not by spade's `add_constraint_and_split`, which asserts when a

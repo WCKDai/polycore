@@ -133,12 +133,27 @@ pub(super) fn nearest_projection<S: RobustMeshableSurface>(surface: &S, point: P
         (uv.0.is_finite() && uv.1.is_finite() && error.is_finite()).then_some((uv, error))
     };
     let fits = |&(uv, error): &((f64, f64), f64)| in_domain(surface, uv) && error <= accept * accept;
-    let exact = surface.search_parameter(point, hint, trials)
-        .or_else(|| surface.search_parameter(point, None, trials)).and_then(candidate);
-    if let Some((uv, _)) = exact.filter(fits) { return Some(uv); }
-    let hinted = surface.search_nearest_parameter(point, hint, trials).and_then(candidate);
+    // SolidCraft: with a hint, the hinted nearest search before the unhinted exact one. A
+    // boundary point that lies on its surface only within the chord tolerance (an edge fitted to
+    // a thickened face's offset) has no exact parameter, and the unhinted exact search starts by
+    // presearching the whole control net for every such point: 97 % of the 4 minutes measuring
+    // a thickened lofted skull took (#195). On the surface, both searches find the same point.
+    let (exact, hinted) = if hint.is_some() {
+        let exact = surface.search_parameter(point, hint, trials).and_then(candidate);
+        if let Some((uv, _)) = exact.filter(fits) { return Some(uv); }
+        let hinted = surface.search_nearest_parameter(point, hint, trials).and_then(candidate);
+        if let Some((uv, _)) = hinted.filter(fits) { return Some(uv); }
+        let exact = exact.or_else(|| surface.search_parameter(point, None, trials).and_then(candidate));
+        if let Some((uv, _)) = exact.filter(fits) { return Some(uv); }
+        (exact, hinted)
+    } else {
+        let exact = surface.search_parameter(point, None, trials).and_then(candidate);
+        if let Some((uv, _)) = exact.filter(fits) { return Some(uv); }
+        (exact, surface.search_nearest_parameter(point, None, trials).and_then(candidate))
+    };
     if let Some((uv, _)) = hinted.filter(fits) { return Some(uv); }
-    let fresh = surface.search_nearest_parameter(point, None, trials).and_then(candidate);
+    // Without a hint the nearest search above already was the fresh one.
+    let fresh = if hint.is_some() { surface.search_nearest_parameter(point, None, trials).and_then(candidate) } else { hinted };
     if let Some((uv, _)) = fresh.filter(fits) { return Some(uv); }
     let best = [exact, hinted, fresh].into_iter().flatten().min_by(|a, b| a.1.total_cmp(&b.1));
     if let Some(uv) = best.map(|x| x.0).or(hint) {
