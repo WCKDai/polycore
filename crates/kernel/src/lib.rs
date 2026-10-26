@@ -98,6 +98,7 @@ mod native;
 mod numbered;
 mod offset;
 mod offset_fit;
+mod offset_free;
 mod ops;
 mod outline;
 #[cfg(test)]

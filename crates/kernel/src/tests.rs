@@ -3401,6 +3401,29 @@ fn plane_pairs_intersect_exactly_as_the_mesh_collision_did() {
     }
 }
 
+/// A rounded rectangle, counter-clockwise from its bottom edge, its corners of radius `r`.
+fn rounded_rect(x0: f64, y0: f64, x1: f64, y1: f64, r: f64) -> Loop2 {
+    use std::f64::consts::FRAC_PI_2 as Q;
+    let line = |a: Vec2, b: Vec2| Seg2::Line { a, b };
+    let arc = |center: Vec2, start: f64| Seg2::Arc { center, radius: r, start, sweep: Q };
+    Loop2 {
+        segs: vec![
+            line(Vec2::new(x0 + r, y0), Vec2::new(x1 - r, y0)),
+            arc(Vec2::new(x1 - r, y0 + r), -Q),
+            line(Vec2::new(x1, y0 + r), Vec2::new(x1, y1 - r)),
+            arc(Vec2::new(x1 - r, y1 - r), 0.0),
+            line(Vec2::new(x1 - r, y1), Vec2::new(x0 + r, y1)),
+            arc(Vec2::new(x0 + r, y1 - r), Q),
+            line(Vec2::new(x0, y1 - r), Vec2::new(x0, y0 + r)),
+            arc(Vec2::new(x0 + r, y0 + r), 2.0 * Q),
+        ],
+    }
+}
+
+fn plane_at_z(z: f64) -> Plane {
+    Plane::new(Vec3::new(0.0, 0.0, z), Vec3::X, Vec3::Y).unwrap()
+}
+
 /// The distance from `p` to the nearest point of `b`'s faces other than `skip`, each face's
 /// surface read on its own parameter range and a tenth past it (planes everywhere).
 fn distance_to_faces(b: &Body, skip: &[usize], p: Vec3) -> f64 {
@@ -3437,6 +3460,82 @@ fn inner_wall_points(shell: &Body, outer: &Body, skip: &[usize], gap: f64) -> Ve
     by_face.into_values().filter(|pts| pts.iter().step_by(7).all(|p| distance_to_faces(outer, skip, *p) > gap)).flatten().collect()
 }
 
+/// A loft through three rounded rectangles (free-form sides), shelled 2.5 open at the top: a
+/// valid closed solid whose every face but the top has an inner copy (8 sides and the floor),
+/// the top a rim; every point of the inner walls lies 2.5 from the outer faces, to within the
+/// fit's 0.01 mm and the mesh's chord. #194.
+#[test]
+fn shell_of_a_loft_keeps_its_wall_thickness() {
+    let body = loft(&[
+        (plane_at_z(0.0), rounded_rect(-30.0, -25.0, 30.0, 25.0, 10.0)),
+        (plane_at_z(30.0), rounded_rect(-40.0, -30.0, 40.0, 30.0, 20.0)),
+        (plane_at_z(60.0), rounded_rect(-36.0, -28.0, 36.0, 28.0, 18.0)),
+    ])
+    .unwrap();
+    let t = 2.5;
+    let s = shell(&body, &[Vec3::new(0.0, 0.0, 60.0)], t).unwrap();
+    assert!(s.validity().is_empty(), "{:?}", s.validity());
+    assert_eq!(s.face_count(), 2 * body.face_count() - 1);
+    let top = crate::surfaces::nearest_face(&body, Vec3::new(0.0, 0.0, 60.0)).unwrap();
+    let pts = inner_wall_points(&s, &body, &[top], t / 2.0);
+    assert!(pts.len() > 500, "{} points", pts.len());
+    for p in pts {
+        let d = distance_to_faces(&body, &[top], p);
+        assert!((d - t).abs() < 0.02, "wall {d} at {p:?}");
+    }
+    let (outer, hollow) = (measure(&body).unwrap().volume, measure(&s).unwrap().volume);
+    assert!(hollow > 0.0 && hollow < outer * 0.3, "{hollow} of {outer}");
+}
+
+/// A loft through three circles (a barrel, its sides free-form B-splines), shelled 2 open at
+/// the top. Its sides are a surface of revolution, so the cavity is the revolution of the
+/// meridian moved in by 2 along its normals: volume π∫r² dz from the floor (z = 2) to the
+/// open top, integrated over the meridian read off the outer surface. #194.
+#[test]
+fn shell_of_a_barrel_loft_has_the_volume_of_its_offset_meridian() {
+    use truck_modeling::{ParametricSurface, ParametricSurface3D, SearchNearestParameter};
+    let body = loft(&[
+        (plane_at_z(0.0), Loop2::circle(Vec2::ZERO, 20.0)),
+        (plane_at_z(30.0), Loop2::circle(Vec2::ZERO, 26.0)),
+        (plane_at_z(60.0), Loop2::circle(Vec2::ZERO, 21.0)),
+    ])
+    .unwrap();
+    let t = 2.0;
+    let s = shell(&body, &[Vec3::new(0.0, 0.0, 60.0)], t).unwrap();
+    assert!(s.validity().is_empty(), "{:?}", s.validity());
+    // The meridian at y = 0, x > 0, and its inner offset (r, z), from the side face there.
+    let side = body.solid.face_iter().find(|f| {
+        f.oriented_surface()
+            .search_nearest_parameter(crate::body::p3(Vec3::new(30.0, 0.0, 30.0)), None, 100)
+            .is_some_and(|(u, v)| crate::body::from_p3(f.oriented_surface().subs(u, v)).dist(Vec3::new(26.0, 0.0, 30.0)) < 0.5)
+    });
+    let surf = side.unwrap().oriented_surface();
+    let mut meridian: Vec<(f64, f64)> = Vec::new();
+    for k in 0..=4000 {
+        let q = Vec3::new(40.0, 0.0, -10.0 + 80.0 * k as f64 / 4000.0);
+        let (u, v) = surf.search_nearest_parameter(crate::body::p3(q), None, 100).unwrap();
+        let (p, n) = (crate::body::from_p3(surf.subs(u, v)), surf.normal(u, v));
+        assert!(p.y.abs() < 0.5 && p.x > 0.0, "{p:?}");
+        let q = p - Vec3::new(n.x, n.y, n.z) * t;
+        meridian.push(((q.x * q.x + q.y * q.y).sqrt(), q.z));
+    }
+    meridian.sort_by(|a, b| a.1.total_cmp(&b.1));
+    meridian.dedup_by(|a, b| (a.1 - b.1).abs() < 1e-9);
+    let mut cavity = 0.0;
+    for w in meridian.windows(2) {
+        let ((r0, z0), (r1, z1)) = (w[0], w[1]);
+        let (lo, hi) = (z0.max(t), z1.min(60.0));
+        if hi > lo {
+            let r = |z: f64| r0 + (r1 - r0) * (z - z0) / (z1 - z0);
+            let (a, b) = (r(lo), r(hi));
+            cavity += PI * (hi - lo) * (a * a + a * b + b * b) / 3.0;
+        }
+    }
+    let want = measure(&body).unwrap().volume - cavity;
+    let got = measure(&s).unwrap().volume;
+    assert!(rel(got, want) < 1e-3, "{got} vs {want}"); // (measured on meshes)
+}
+
 /// An N-sided patch (five sides on the cylinder that cut a pentagonal prism's top), thickened
 /// by 2: a valid closed solid of the two copies and five walls, the far copy 2 from the patch
 /// at every mesh point, to within the fit's 0.01 mm. #194.
@@ -3467,4 +3566,18 @@ fn thicken_of_a_five_sided_patch_keeps_its_thickness() {
     let m = measure(&thick).unwrap();
     let area = measure(&patch).unwrap().area;
     assert!(rel(m.volume, area * t) < 0.05, "{} vs {}", m.volume, area * t);
+}
+
+/// A loft whose rounded corners (radius 3 to 4) are tighter than the wall: shelling it 5 would
+/// fold the inner corners over, which is refused, naming the radius. #194.
+#[test]
+fn shell_of_a_loft_deeper_than_its_corner_radius_is_refused() {
+    let body = loft(&[
+        (plane_at_z(0.0), rounded_rect(-30.0, -25.0, 30.0, 25.0, 3.0)),
+        (plane_at_z(30.0), rounded_rect(-34.0, -27.0, 34.0, 27.0, 4.0)),
+        (plane_at_z(60.0), rounded_rect(-32.0, -26.0, 32.0, 26.0, 3.5)),
+    ])
+    .unwrap();
+    let e = shell(&body, &[Vec3::new(0.0, 0.0, 60.0)], 5.0).unwrap_err().to_string();
+    assert!(e.contains("radius") && e.contains("fold"), "{e}");
 }

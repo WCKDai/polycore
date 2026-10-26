@@ -493,6 +493,11 @@ fn shell_planar(b: &Body, open: &[Vec3], thickness: f64) -> Result<Body> {
     if let Some(shell) = shell_barrel(&healed, &opened, thickness)? {
         return Ok(record::after(shell, &healed, &record::counts(&[b])));
     }
+    // Free-form faces (lofts, sweeps, revolved splines): their offsets are fitted, and the
+    // shell is sewn from the body and its cavity.
+    if let Some(shell) = crate::offset_free::shell_free(&healed, &opened, thickness)? {
+        return Ok(record::after(shell, &healed, &record::counts(&[b])));
+    }
     let margin = thickness + size * 0.05;
     shell_opened(b, &healed, open, &opened, thickness, margin).map_err(|e| match rim_without_thickness(&healed, &opened, thickness, false) {
         Some(r) => unsupported_shell(&format!(
@@ -547,19 +552,28 @@ fn shell_barrel(b: &Body, opened: &[usize], thickness: f64) -> Result<Option<Bod
         return Err(KernelError::Invalid("shell thickness leaves no barrel cavity".into()));
     }
     let cavity = offset_planar(b, |i, _| if opened.contains(&i) { 0.0 } else { -thickness })?;
-    let history = cavity.history().ok_or_else(|| unsupported_shell("the barrel cavity has no face history"))?;
+    sew_cavity(b, &cavity, opened).map(Some)
+}
+
+/// A shell sewn from `b` and `cavity` (`b` with every face but the open ones moved in by the
+/// wall, the same faces in the same order): the outer walls as they are, the cavity's walls
+/// turned inside out, and each open face a rim between its own loops and the cavity's copy of
+/// them (which lie on it, the open faces having stayed put).
+pub(crate) fn sew_cavity(b: &Body, cavity: &Body, opened: &[usize]) -> Result<Body> {
+    let faces: Vec<mt::Face> = b.solid.face_iter().cloned().collect();
+    let history = cavity.history().ok_or_else(|| unsupported_shell("the cavity has no face history"))?;
     // Every wall must still be the one offset of its source, in source order. No collapsed
     // faces or changed topology can be sewn by this construction.
     if cavity.face_count() != faces.len()
         || history.faces.iter().enumerate().any(|(i, f)| f.origins.as_slice() != [FaceOrigin::Face { operand: 0, face: i }])
     {
-        return Err(unsupported_shell("the barrel cavity changed topology"));
+        return Err(unsupported_shell("the cavity changed topology (a wall thinner than the shell, or faces that would meet differently)"));
     }
     let inner: Vec<mt::Face> = cavity.solid.face_iter().cloned().collect();
     let mut out = Vec::new();
     let mut provenance = Vec::new();
     for (i, outer) in faces.iter().enumerate() {
-        let inset = inner.get(i).ok_or_else(|| unsupported_shell("the barrel cavity lost a face"))?;
+        let inset = inner.get(i).ok_or_else(|| unsupported_shell("the cavity lost a face"))?;
         if opened.contains(&i) {
             let mut wires = outer.absolute_boundaries().to_vec();
             wires.extend(inset.absolute_boundaries().iter().map(|w| w.inverse()));
@@ -574,9 +588,9 @@ fn shell_barrel(b: &Body, opened: &[usize], thickness: f64) -> Result<Option<Bod
             provenance.extend([record::from_face(0, i, Change::Kept), record::generated(vec![FaceOrigin::Offset { operand: 0, face: i }])]);
         }
     }
-    let solid = Solid::try_new(vec![out.into()]).map_err(|e| KernelError::Failed(format!("shell barrel: {e}")))?;
-    let copies = record::edges_by_identity(&cavity, history).filter_map(|(id, origins)| origins.into_iter().next().map(|o| (id, o))).collect();
-    record::attach(Body::new(solid)?, &[record::Operand::new(b)], Some(provenance), copies).map(Some)
+    let solid = Solid::try_new(vec![out.into()]).map_err(|e| KernelError::Failed(format!("shell: {e}")))?;
+    let copies = record::edges_by_identity(cavity, history).filter_map(|(id, origins)| origins.into_iter().next().map(|o| (id, o))).collect();
+    record::attach(Body::new(solid)?, &[record::Operand::new(b)], Some(provenance), copies)
 }
 
 /// The radius of a convex round (cylinder or torus) that meets an open face tangentially and
