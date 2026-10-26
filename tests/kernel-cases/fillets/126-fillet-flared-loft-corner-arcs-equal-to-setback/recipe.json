@@ -1,0 +1,341 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Floor"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -18,
+      -15
+     ],
+     [
+      18,
+      -15
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     18,
+     -13
+    ],
+    "start": [
+     18,
+     -15
+    ],
+    "end": [
+     20,
+     -13
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      20,
+      -13
+     ],
+     [
+      20,
+      13
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     18,
+     13
+    ],
+    "start": [
+     20,
+     13
+    ],
+    "end": [
+     18,
+     15
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      18,
+      15
+     ],
+     [
+      -18,
+      15
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -18,
+     13
+    ],
+    "start": [
+     -18,
+     15
+    ],
+    "end": [
+     -20,
+     13
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -20,
+      13
+     ],
+     [
+      -20,
+      -13
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -18,
+     -13
+    ],
+    "start": [
+     -20,
+     -13
+    ],
+    "end": [
+     -18,
+     -15
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      20
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Top"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -18,
+      -35
+     ],
+     [
+      18,
+      -35
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     18,
+     -13
+    ],
+    "start": [
+     18,
+     -35
+    ],
+    "end": [
+     40,
+     -13
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      40,
+      -13
+     ],
+     [
+      40,
+      13
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     18,
+     13
+    ],
+    "start": [
+     40,
+     13
+    ],
+    "end": [
+     18,
+     35
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      18,
+      35
+     ],
+     [
+      -18,
+      35
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -18,
+     13
+    ],
+    "start": [
+     -18,
+     35
+    ],
+    "end": [
+     -40,
+     13
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -40,
+      13
+     ],
+     [
+      -40,
+      -13
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -18,
+     -13
+    ],
+    "start": [
+     -40,
+     -13
+    ],
+    "end": [
+     -18,
+     -35
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.loft",
+   "params": {
+    "sections": [
+     {
+      "sketch": "Floor"
+     },
+     {
+      "sketch": "Top"
+     }
+    ],
+    "body_name": "Tray"
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      0,
+      -15,
+      0
+     ]
+    ],
+    "radius": 4.82842712474619
+   }
+  }
+ ]
+}

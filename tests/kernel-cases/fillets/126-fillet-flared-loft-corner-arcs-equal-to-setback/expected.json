@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126",
+  "wckdboy/polykrom#213"
+ ],
+ "what": "R4.828427 (2 + 2 sqrt 2) on the bottom chain of a loft whose walls all lean out at 45 deg, its floor corners r2 arcs: the ball touches the floor exactly 2 in from the edge, so at each corner its centre stays on the arc's axis and the round there is a piece of the ball (a vertex patch)",
+ "source": "analytic",
+ "method": "two sections, the outline offset out by 20 over 20: planes and 45 deg cones. Loft: section area A0 + L0 z + pi z^2, A0 = 1200 - 4(4 - pi), L0 = 124 + 4 pi, V = 20 A0 + 200 L0 + 8000 pi/3 = 59622.1819. The round's section in the 135 deg corner: setback t = r tan(22.5 deg) = 2.000000 (the arcs' radius), area a = t r - r^2 (pi - phi)/2 = 0.501582, centroid 0.120330 in from the edge. Swept square to the convex outline (its offsets stay convex up to t), it removes a (L0 - 2 pi x) = 68.1201: V = 59554.0619",
+ "body_count": 1,
+ "volume_mm3": 59554.06189177335
+}
