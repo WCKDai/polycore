@@ -1350,6 +1350,11 @@ impl Body {
         } else {
             Deflection { display: true, ..Deflection::chord(tol) }
         };
+        // Two corners of a triangle at one point (a patch's collapsed side, where its parameters
+        // all map to one pole): the triangle has no area, and its other two sides would each be a
+        // third use of a side its neighbours share. Such triangles are left out.
+        let pinch = self.size() * 1e-9;
+        let pinched = |a: Vec3, b: Vec3, c: Vec3| a.dist(b) <= pinch || b.dist(c) <= pinch || c.dist(a) <= pinch;
         guard("tessellate", || {
             let meshed = mesh_shells_within(&self.solid, deflection);
             let mut out = Mesh::default();
@@ -1370,6 +1375,11 @@ impl Body {
                 if let Some(tris) = refinement {
                     let fid = u32::try_from(fi).unwrap_or(u32::MAX);
                     for t in tris {
+                        if let [(a, _), (b, _), (c, _)] = t
+                            && pinched(a, b, c)
+                        {
+                            continue;
+                        }
                         let mut idx = [0u32; 3];
                         for (slot, (p, n)) in idx.iter_mut().zip(t) {
                             out.positions.push(p);
@@ -1385,6 +1395,12 @@ impl Body {
                 let nor = pm.normals();
                 // Expand to per-corner vertices so normals stay per face (crisp edges).
                 for tri in pm.faces().triangle_iter() {
+                    let corner = |k: usize| tri.get(k).and_then(|v| pos.get(v.pos)).map(|p| Vec3::new(p.x, p.y, p.z));
+                    if let (Some(a), Some(b), Some(c)) = (corner(0), corner(1), corner(2))
+                        && pinched(a, b, c)
+                    {
+                        continue;
+                    }
                     let mut idx = [0u32; 3];
                     for (k, v) in tri.iter().enumerate() {
                         let Some(p) = pos.get(v.pos) else { continue };

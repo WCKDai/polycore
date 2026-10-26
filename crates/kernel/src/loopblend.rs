@@ -593,16 +593,18 @@ fn build(
                 continue;
             }
             // The round touches the face its setback in from the edge, from the angle the wall
-            // meets the face at along the arc: r beside a square wall, less beside one that leans
-            // out (a flared lofted wall), the largest of its ends and middle. (Never more than r
-            // here: a sharper wall is left to the corners.)
-            let reach = [s.start(), mid, s.end()]
-                .iter()
-                .filter_map(|p| frame(i, *p).map(|x| x.2))
-                .fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x))))
-                .map_or(r, |x| x.min(r));
-            if toward && (a.dist(c) - r).abs() <= tol * 10.0 && !mitre.get(i).copied().unwrap_or(true) && !mitre.get(nxt(i)).copied().unwrap_or(true)
-            {
+            // meets the face at along the arc (its ends and middle): r beside a square wall, less
+            // beside one that leans out (a flared lofted wall), more beside one that leans in.
+            let setbacks: Vec<f64> = [s.start(), mid, s.end()].iter().filter_map(|p| frame(i, *p).map(|x| x.2)).collect();
+            let held = if setbacks.is_empty() { vec![r] } else { setbacks };
+            let reach = held.iter().copied().fold(0.0, f64::max);
+            // An arc as large as the setback all along it: the ball turns on the spot there, and
+            // the piece is a patch of its sphere (beside a square wall, an arc of the blend's
+            // radius). Where the wall's angle to the face changes along the arc (a lofted wall),
+            // so does the setback, and the ball doesn't stay put: no sphere. An arc short of the
+            // setback anywhere along it would turn the contacts inside out: too large.
+            let on_the_spot = held.iter().all(|x| (a.dist(c) - x).abs() <= tol * 10.0);
+            if toward && on_the_spot && !mitre.get(i).copied().unwrap_or(true) && !mitre.get(nxt(i)).copied().unwrap_or(true) {
                 if let Some(x) = collapsed.get_mut(i) {
                     *x = true;
                 }

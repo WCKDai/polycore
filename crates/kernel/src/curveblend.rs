@@ -1413,9 +1413,8 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
             }
             // The ball touches this side its setback in from the edge, where its section at the
             // arc's middle puts the contact: r beside a side square to it, less beside one that
-            // leans out (a flared lofted wall). The contacts run round the arc's centre at its
-            // radius less that; less than nothing is too large. (Never more than r here: a
-            // sharper edge is left to the sections.)
+            // leans out (a flared lofted wall), more beside one that leans in. The contacts run
+            // round the arc's centre at its radius less that; less than nothing is too large.
             let setback = {
                 let (a1, a2) = edge_sides(&[k]);
                 // As the sections are: on the edge's own faces, else with the neighbouring faces
@@ -1427,7 +1426,7 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
                     })
                     .map(|s| (if side == 1 { s.q1 } else { s.q2 } - pm).dot(np.cross(tm)))
                     .filter(|d| d.is_finite() && *d > 0.0)
-                    .map_or(r, |d| d.min(r))
+                    .unwrap_or(r)
             };
             if rho < setback - tol * 1e3 {
                 return Err(too_large("the blend is larger than a corner radius (site 1257)"));
