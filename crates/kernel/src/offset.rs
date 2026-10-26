@@ -68,7 +68,7 @@ impl Surf {
         }
     }
     /// The gradient of [`Surf::dist`] (the normal before orientation).
-    fn grad(&self, p: Vec3) -> Option<Vec3> {
+    pub(crate) fn grad(&self, p: Vec3) -> Option<Vec3> {
         match *self {
             Surf::Plane { n, .. } => Some(n),
             Surf::Cylinder { convex, .. } | Surf::Sphere { convex, .. } | Surf::Cone { convex, .. } | Surf::Torus { convex, .. } => {
@@ -76,7 +76,7 @@ impl Surf {
             }
         }
     }
-    fn moved(&self, s: f64) -> Option<Surf> {
+    pub(crate) fn moved(&self, s: f64) -> Option<Surf> {
         match *self {
             Surf::Plane { n, d } => Some(Surf::Plane { n, d: d + s }),
             Surf::Cylinder { o, a, r, convex } => {
@@ -99,7 +99,7 @@ impl Surf {
             }
         }
     }
-    fn dist(&self, p: Vec3) -> f64 {
+    pub(crate) fn dist(&self, p: Vec3) -> f64 {
         match *self {
             Surf::Plane { n, d } => n.dot(p) - d,
             Surf::Cylinder { o, a, r, .. } => {
@@ -389,7 +389,7 @@ fn move_point(p: Vec3, old: &[Surf], shifts: &[f64], new: &[Surf], tol: f64) -> 
 }
 
 /// The smallest move `v` (in the span of `ns`) with `n_i · v = s_i` (least squares).
-fn span_step(ns: &[Vec3], s: &[f64]) -> Option<Vec3> {
+pub(crate) fn span_step(ns: &[Vec3], s: &[f64]) -> Option<Vec3> {
     // Orthonormal basis of the normals' span (tangent faces share a normal).
     let mut basis: Vec<Vec3> = Vec::new();
     for n in ns {
@@ -623,18 +623,18 @@ fn split_path(nodes: &[(Vec3, Vec<usize>)], face: usize, from: usize, to: usize)
 /// Maximum straight edges per face checked pairwise for crossings.
 const MAX_CROSSING_EDGES: usize = 2000;
 
-/// Where the moved straight edges of a planar face cross each other (or a loop of straight
-/// edges turns round), if they do. Faces next to a collapsed round are left to the other checks.
-fn crossed_loops(
+/// Where the moved straight edges of a planar face (`planes`: each face's outward normal where
+/// it is a plane) cross each other (or a loop of straight edges turns round), if they do. Faces next to a collapsed round are left to the other checks.
+pub(crate) fn crossed_loops(
     faces: &[mt::Face],
-    old: &[Surf],
+    planes: &[Option<Vec3>],
     pos: &dyn Fn(&mt::Vertex, &mt::Edge) -> Option<Vec3>,
     edge_collapsed: &dyn Fn(&mt::Edge) -> bool,
     size: f64,
 ) -> Option<Vec3> {
     let eps = size * 1e-9;
-    for (f, sf) in faces.iter().zip(old) {
-        let Surf::Plane { n, .. } = *sf else { continue };
+    for (f, plane) in faces.iter().zip(planes) {
+        let Some(n) = *plane else { continue };
         if f.edge_iter().any(|e| edge_collapsed(&e)) {
             continue;
         }
@@ -951,7 +951,8 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
     // A plane's loops crossing after the move: a rim or ledge narrower than the move (the hole
     // in a top face sliding past its outer edge) turns part of the face inside out, though no
     // edge turns round.
-    if let Some(at) = crossed_loops(&faces, &old, &end_pos, &edge_collapsed, size) {
+    let planes: Vec<Option<Vec3>> = old.iter().map(|sf| if let Surf::Plane { n, .. } = *sf { Some(n) } else { None }).collect();
+    if let Some(at) = crossed_loops(&faces, &planes, &end_pos, &edge_collapsed, size) {
         return Err(fail(&format!(
             "not supported yet: the move is larger than a rim or ledge near [{:.1}, {:.1}, {:.1}] is wide (a face would turn inside out)",
             at.x, at.y, at.z
@@ -1140,28 +1141,7 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
                 wires.push(wire.into());
             }
             let (Some(o), Some(n)) = (old.get(i), new.get(i)) else { return Err(fail("face")) };
-            let surface = match (o.map_to(n), *o, *n) {
-                (Some(mat), _, _) => mt::Transformed::transformed(&f.surface(), mat),
-                // A torus: its tube's circle scaled about the tube's centre, revolved again.
-                (None, Surf::Torus { o: to, a, big, h, r, .. }, Surf::Torus { r: r2, .. }) => {
-                    use mt::{BoundedCurve, ParametricCurve};
-                    let mt::Surface::RevolutedCurve(rc) = f.surface() else { return Err(fail("torus surface")) };
-                    let curve = rc.entity().entity_curve().clone();
-                    let (t0, t1) = curve.range_tuple();
-                    let q = from_p3(curve.subs((t0 + t1) / 2.0));
-                    let c = tube_centre(to, a, big, h, q).ok_or_else(|| fail("torus"))?;
-                    let k = r2 / r;
-                    let t = c * (1.0 - k);
-                    let mat = mt::Matrix4::from_translation(mt::Vector3::new(t.x, t.y, t.z)) * mt::Matrix4::from_scale(k);
-                    let moved = mt::Transformed::transformed(&curve, mat);
-                    let mut p = mt::Processor::new(mt::RevolutedCurve::by_revolution(moved, rc.entity().origin(), rc.entity().axis()));
-                    if !rc.orientation() {
-                        mt::Invertible::invert(&mut p);
-                    }
-                    mt::Surface::RevolutedCurve(p)
-                }
-                _ => return Err(fail("surface")),
-            };
+            let surface = moved_surface(f, o, n)?;
             let mut nf = mt::Face::try_new(wires, surface).map_err(|e| fail(&e.to_string()))?;
             if !f.orientation() {
                 nf.invert();
@@ -1180,6 +1160,34 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
         }
         let solid = Solid::try_new(shells).map_err(|e| fail(&e.to_string()))?;
         crate::record::rebuilt(solid, &[&b.solid], &rec)
+    })
+}
+
+/// The surface of face `f`, on `o`, moved onto `n` (the same kind of surface, moved along its
+/// normal): mapped by the affine map between them, or for a torus its tube's circle scaled
+/// about the tube's centre and revolved again.
+pub(crate) fn moved_surface(f: &mt::Face, o: &Surf, n: &Surf) -> Result<mt::Surface> {
+    Ok(match (o.map_to(n), *o, *n) {
+        (Some(mat), _, _) => mt::Transformed::transformed(&f.surface(), mat),
+        // A torus: its tube's circle scaled about the tube's centre, revolved again.
+        (None, Surf::Torus { o: to, a, big, h, r, .. }, Surf::Torus { r: r2, .. }) => {
+            use mt::{BoundedCurve, ParametricCurve};
+            let mt::Surface::RevolutedCurve(rc) = f.surface() else { return Err(fail("torus surface")) };
+            let curve = rc.entity().entity_curve().clone();
+            let (t0, t1) = curve.range_tuple();
+            let q = from_p3(curve.subs((t0 + t1) / 2.0));
+            let c = tube_centre(to, a, big, h, q).ok_or_else(|| fail("torus"))?;
+            let k = r2 / r;
+            let t = c * (1.0 - k);
+            let mat = mt::Matrix4::from_translation(mt::Vector3::new(t.x, t.y, t.z)) * mt::Matrix4::from_scale(k);
+            let moved = mt::Transformed::transformed(&curve, mat);
+            let mut p = mt::Processor::new(mt::RevolutedCurve::by_revolution(moved, rc.entity().origin(), rc.entity().axis()));
+            if !rc.orientation() {
+                mt::Invertible::invert(&mut p);
+            }
+            mt::Surface::RevolutedCurve(p)
+        }
+        _ => return Err(fail("surface")),
     })
 }
 
