@@ -126,7 +126,22 @@ pub struct FillSpec<'a> {
     pub crown: f64,
     /// Points the surface passes through.
     pub points: &'a [Vec3],
+    /// How fast the surface leaves its G1/G2 stations, as a multiple of the boundary's own speed
+    /// there (the weak Hermite rows' target): [`LEGACY_FILL_SPEED`] leaves a cap over a round
+    /// rim half as high as the rim is wide and curling tightly at it, [`FILL_SPEED`] about as high
+    /// as a hemisphere, fair to the rim.
+    pub speed: f64,
 }
+
+/// The leaving speed patches were filled with before it was saved with them (see
+/// [`FillSpec::speed`]): a cap over a tube's rim of radius 10 rises 5 and curls to a radius of
+/// 2.6 at the rim.
+pub const LEGACY_FILL_SPEED: f64 = 1.0;
+/// The leaving speed new patches are filled with: the same cap rises 10, a hemisphere's height,
+/// and its smallest radius is 7.
+pub const FILL_SPEED: f64 = 2.0;
+/// The leaving speeds a fill may be asked for.
+pub const FILL_SPEED_RANGE: std::ops::RangeInclusive<f64> = 0.25..=4.0;
 
 /// The fill and what it achieved.
 #[derive(Clone, Debug, PartialEq)]
@@ -167,6 +182,9 @@ pub fn fill_general(
         return invalid("the fill tolerances must be positive");
     }
     // A range test also throws out NaN.
+    if !FILL_SPEED_RANGE.contains(&spec.speed) {
+        return invalid(format!("the leaving speed must be between {} and {}", FILL_SPEED_RANGE.start(), FILL_SPEED_RANGE.end()));
+    }
     if !(crate::fill::MIN_CROWN..=crate::fill::MAX_CROWN).contains(&spec.crown) {
         return invalid("the crown must be between -0.9 and 3");
     }
@@ -794,7 +812,7 @@ fn fit_grid<'a>(
             hermite: full && !near.rough(k),
             weight,
             curvature: bend.map(|b| across.normal.dot(b)),
-            speed,
+            speed: speed * spec.speed,
         });
     }
     // The fitted stations (every other one), then the points where they were last found.

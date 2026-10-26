@@ -41,11 +41,22 @@ pub struct PatchSpec {
     /// G1/G2 neighbours' normals face) on control points clear of the loop, so the loop and the
     /// conditions across it do not move. A general fill needs a G1 or G2 edge to crown.
     pub crown: f64,
+    /// How fast the patch leaves its G1/G2 edges, a multiple of the loop's own speed
+    /// (`solidcraft_geom::fill_general::FillSpec::speed`): the default is what patches were
+    /// filled with before it was saved with them; new patches ask for
+    /// `solidcraft_geom::fill_general::FILL_SPEED`.
+    pub speed: f64,
 }
 
 impl Default for PatchSpec {
     fn default() -> PatchSpec {
-        PatchSpec { continuity: Continuity::G0, edges: Vec::new(), points: Vec::new(), crown: 0.0 }
+        PatchSpec {
+            continuity: Continuity::G0,
+            edges: Vec::new(),
+            points: Vec::new(),
+            crown: 0.0,
+            speed: solidcraft_geom::fill_general::LEGACY_FILL_SPEED,
+        }
     }
 }
 
@@ -121,7 +132,7 @@ pub fn patch_edges_report(body: &Body, at: &[Vec3], spec: &PatchSpec) -> Result<
         if spec.crown != 0.0 && orders.iter().all(|g| *g == Continuity::G0) {
             return Err(KernelError::Invalid("not supported yet: a crown on a patch through points with no g1 or g2 edge".into()));
         }
-        general_fill(body, &chain, &orders, &spec.points, spec.crown)
+        general_fill(body, &chain, &orders, &spec.points, spec.crown, spec.speed)
     })
 }
 
@@ -163,7 +174,14 @@ impl Side {
 /// The general fill of the closed loop `chain` of `body`'s edges, edge `k` meeting the face beside
 /// it with `orders[k]`, passing through `points`, its middle made fuller by `crown` (see
 /// [`PatchSpec::crown`]). Call it under [`crate::guard`].
-pub(crate) fn general_fill(body: &Body, chain: &[mt::Edge], orders: &[Continuity], points: &[Vec3], crown: f64) -> Result<(Body, PatchReport)> {
+pub(crate) fn general_fill(
+    body: &Body,
+    chain: &[mt::Edge],
+    orders: &[Continuity],
+    points: &[Vec3],
+    crown: f64,
+    speed: f64,
+) -> Result<(Body, PatchReport)> {
     let tol = face_tolerance(body);
     let size = body.size().max(solidcraft_geom::LINEAR_TOL);
     let mut sides: Vec<Side> = Vec::with_capacity(chain.len());
@@ -232,8 +250,24 @@ pub(crate) fn general_fill(body: &Body, chain: &[mt::Edge], orders: &[Continuity
         }
         Ok(out)
     };
-    let spec = FillSpec { tol, angle_tol: PATCH_ANGLE_TOL_DEG.to_radians(), crown, points };
-    let fill = solidcraft_geom::fill_general::fill_general(chain.len(), &mut stations, &spec).map_err(spline_error)?;
+    // A faster leaving speed asks more of the fit: where no grid holds the loop at it (a G2 edge
+    // among G0 ones can leave it 0.042 µm off a 0.036 µm tolerance), the
+    // fill tries halfway to the loop's own speed, then that speed, which always held before.
+    let legacy = solidcraft_geom::fill_general::LEGACY_FILL_SPEED;
+    let mut fit = |speed: f64| {
+        let spec = FillSpec { tol, angle_tol: PATCH_ANGLE_TOL_DEG.to_radians(), crown, points, speed };
+        solidcraft_geom::fill_general::fill_general(chain.len(), &mut stations, &spec)
+    };
+    let mut fill = fit(speed);
+    if speed > legacy {
+        for slower in [0.5 * (speed + legacy), legacy] {
+            if !matches!(fill, Err(SplineError::Unsupported(_))) {
+                break;
+            }
+            fill = fit(slower);
+        }
+    }
+    let fill = fill.map_err(spline_error)?;
     // The wire runs counter-clockwise about the surface's normal.
     let wire: mt::Wire =
         if fill.counter_clockwise { chain.to_vec().into() } else { chain.iter().rev().map(mt::Edge::inverse).collect::<Vec<_>>().into() };
@@ -283,7 +317,7 @@ pub(crate) fn fill_loop_crowned(body: &Body, chain: &[mt::Edge], crown: f64) -> 
         // from the loop itself, when no crown asks for the height field's bump.
         Err(SplineError::Unsupported(_)) if crown == 0.0 => {
             let orders = vec![Continuity::G0; chain.len()];
-            return general_fill(body, chain, &orders, &[], 0.0).map(|(b, _)| b);
+            return general_fill(body, chain, &orders, &[], 0.0, solidcraft_geom::fill_general::LEGACY_FILL_SPEED).map(|(b, _)| b);
         }
         Err(e) => return Err(spline_error(e)),
     };

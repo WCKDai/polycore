@@ -11,7 +11,7 @@ fn at(s: &NurbsSurface, x: f64, y: f64) -> Vec3 {
 }
 
 fn spec(points: &[Vec3]) -> FillSpec<'_> {
-    FillSpec { tol: TOL, angle_tol: ANGLE, crown: 0.0, points }
+    FillSpec { tol: TOL, angle_tol: ANGLE, crown: 0.0, points, speed: LEGACY_FILL_SPEED }
 }
 
 /// The radial and tangential unit vectors of a cylinder about z at angle `a`.
@@ -145,7 +145,7 @@ fn hostile_loops_and_specs_are_refused() {
     for (tol, angle, crown) in
         [(0.0, ANGLE, 0.0), (f64::NAN, ANGLE, 0.0), (TOL, -1.0, 0.0), (TOL, ANGLE, f64::NAN), (TOL, ANGLE, -0.95), (TOL, ANGLE, 1e300)]
     {
-        assert!(ok(&FillSpec { tol, angle_tol: angle, crown, points: &[] }).is_err(), "{tol} {angle} {crown}");
+        assert!(ok(&FillSpec { tol, angle_tol: angle, crown, points: &[], speed: LEGACY_FILL_SPEED }).is_err(), "{tol} {angle} {crown}");
     }
     assert!(ok(&spec(&[Vec3::new(f64::NAN, 0.0, 0.0)])).is_err());
     assert!(ok(&spec(&vec![Vec3::ZERO; MAX_FILL_POINTS + 1])).is_err());
@@ -187,5 +187,81 @@ fn hostile_loops_and_specs_are_refused() {
             Ok(ts.iter().map(|t| Station { p: radial(t * TAU) * scale, up: Vec3::Z, across: None, corner: false, clash: false }).collect())
         };
         let _ = fill_general(1, &mut s, &spec(&[]));
+    }
+}
+
+/// The smallest radius of curvature over the surface, by finite differences of its first and
+/// second derivatives on a 61 × 61 grid just inside its domain.
+fn min_radius(s: &NurbsSurface) -> f64 {
+    let [du, dv] = s.domain();
+    let (hu, hv) = ((du[1] - du[0]) * 1e-4, (dv[1] - dv[0]) * 1e-4);
+    let e = |a: f64, b: f64| s.eval(a, b).unwrap();
+    let mut least = f64::INFINITY;
+    for i in 0..=60 {
+        for j in 0..=60 {
+            let u = du[0] + (du[1] - du[0]) * (0.002 + 0.996 * i as f64 / 60.0);
+            let v = dv[0] + (dv[1] - dv[0]) * (0.002 + 0.996 * j as f64 / 60.0);
+            let p = e(u, v);
+            let su = (e(u + hu, v) - e(u - hu, v)) * (0.5 / hu);
+            let sv = (e(u, v + hv) - e(u, v - hv)) * (0.5 / hv);
+            let suu = (e(u + hu, v) - p * 2.0 + e(u - hu, v)) * (1.0 / (hu * hu));
+            let svv = (e(u, v + hv) - p * 2.0 + e(u, v - hv)) * (1.0 / (hv * hv));
+            let suv = (e(u + hu, v + hv) - e(u + hu, v - hv) - e(u - hu, v + hv) + e(u - hu, v - hv)) * (0.25 / (hu * hv));
+            let Some(n) = su.cross(sv).normalized() else { continue };
+            let (ee, ff, gg) = (su.dot(su), su.dot(sv), sv.dot(sv));
+            let (l, m, nn) = (suu.dot(n), suv.dot(n), svv.dot(n));
+            let det = ee * gg - ff * ff;
+            let (h, k) = ((ee * nn - 2.0 * ff * m + gg * l) / (2.0 * det), (l * nn - m * m) / det);
+            let most = h.abs() + (h * h - k).max(0.0).sqrt();
+            if most > 0.0 {
+                least = least.min(1.0 / most);
+            }
+        }
+    }
+    least
+}
+
+/// The open end of an elliptical tube about z (half-axes `a`, `b`, its wall below z = 0): G1 to
+/// the wall, which leaves straight up. Its rim is tightest at the ends of the long axis, b²/a.
+fn ellipse_end(a: f64, b: f64) -> impl FnMut(usize, &[f64]) -> Result<Vec<Station>, String> {
+    move |_, ts| {
+        Ok(ts
+            .iter()
+            .map(|t| {
+                let th = t * TAU;
+                let tangent = Vec3::new(-a * th.sin(), b * th.cos(), 0.0).normalized().unwrap_or(Vec3::X);
+                let out = tangent.cross(Vec3::Z);
+                let across = Across { leave: Vec3::Z, normal: out, bend: None };
+                Station { p: Vec3::new(a * th.cos(), b * th.sin(), 0.0), up: out, across: Some(across), corner: false, clash: false }
+            })
+            .collect())
+    }
+}
+
+#[test]
+fn a_cap_leaving_at_twice_the_rims_speed_is_fair() {
+    // A G1 cap on a tube of radius 10: at the boundary's own speed (patches saved before the
+    // speed was) it rises only 5, half a hemisphere, and curls to a radius of 2.6 at the rim; at
+    // twice that speed (new patches) it rises 10 and its tightest radius is 7 (a hemisphere's is
+    // 10, which a bicubic does not reach).
+    let legacy = fill_general(1, &mut tube_end(10.0, false), &spec(&[])).unwrap();
+    let fair = fill_general(1, &mut tube_end(10.0, false), &FillSpec { speed: FILL_SPEED, ..spec(&[]) }).unwrap();
+    let (r0, r1) = (min_radius(&legacy.surface), min_radius(&fair.surface));
+    let (z0, z1) = (at(&legacy.surface, 0.5, 0.5).z, at(&fair.surface, 0.5, 0.5).z);
+    eprintln!("tube cap: legacy rises {z0:.3}, smallest radius {r0:.3}; fair rises {z1:.3}, smallest radius {r1:.3}");
+    assert!((z0 - 5.0).abs() < 0.2 && r0 < 3.0, "{z0} {r0}");
+    assert!((z1 - 10.0).abs() < 0.5 && r1 > 6.5, "{z1} {r1}");
+    assert!(fair.deviation <= TOL && fair.normal_deviation <= ANGLE);
+    // An elliptical rim 20 × 10, its ends' radius 2.5 (a snout's tight corner): the legacy cap
+    // curls to 0.92 there, the fair one to 1.63.
+    let loose = |speed| FillSpec { tol: 1e-4, speed, ..spec(&[]) };
+    let legacy = fill_general(1, &mut ellipse_end(10.0, 5.0), &loose(LEGACY_FILL_SPEED)).unwrap();
+    let fair = fill_general(1, &mut ellipse_end(10.0, 5.0), &loose(FILL_SPEED)).unwrap();
+    let (r0, r1) = (min_radius(&legacy.surface), min_radius(&fair.surface));
+    eprintln!("ellipse cap: smallest radius legacy {r0:.3}, fair {r1:.3}");
+    assert!(r0 < 1.0 && r1 > 1.5, "{r0} {r1}");
+    // Speeds out of range are refused.
+    for bad in [0.0, 5.0, f64::NAN] {
+        assert!(fill_general(1, &mut tube_end(10.0, false), &FillSpec { speed: bad, ..spec(&[]) }).is_err(), "{bad}");
     }
 }
