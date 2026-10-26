@@ -1,0 +1,621 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      15.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      0,
+      1,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "X15"
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -10,
+      0
+     ],
+     [
+      -10.8,
+      6.3
+     ],
+     [
+      -8.0,
+      11.200000000000001
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -8.0,
+      11.200000000000001
+     ],
+     [
+      -5.0,
+      12.88
+     ],
+     [
+      0,
+      14
+     ],
+     [
+      5.0,
+      12.88
+     ],
+     [
+      8.0,
+      11.200000000000001
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      8.0,
+      11.200000000000001
+     ],
+     [
+      10.8,
+      6.3
+     ],
+     [
+      10,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      10,
+      0
+     ],
+     [
+      -10,
+      0
+     ]
+    ],
+    "infer": false
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      45.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      0,
+      1,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "X45"
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -16,
+      0
+     ],
+     [
+      -17.28,
+      9.9
+     ],
+     [
+      -12.8,
+      17.6
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -12.8,
+      17.6
+     ],
+     [
+      -8.0,
+      20.740000000000002
+     ],
+     [
+      0,
+      22
+     ],
+     [
+      8.0,
+      20.740000000000002
+     ],
+     [
+      12.8,
+      17.6
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      12.8,
+      17.6
+     ],
+     [
+      17.28,
+      9.9
+     ],
+     [
+      16,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      16,
+      0
+     ],
+     [
+      -16,
+      0
+     ]
+    ],
+    "infer": false
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      75.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      0,
+      1,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "X75"
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -24,
+      0
+     ],
+     [
+      -25.92,
+      15.3
+     ],
+     [
+      -19.200000000000003,
+      27.200000000000003
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -19.200000000000003,
+      27.200000000000003
+     ],
+     [
+      -12.0,
+      34.28
+     ],
+     [
+      0,
+      34
+     ],
+     [
+      12.0,
+      34.28
+     ],
+     [
+      19.200000000000003,
+      27.200000000000003
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      19.200000000000003,
+      27.200000000000003
+     ],
+     [
+      25.92,
+      15.3
+     ],
+     [
+      24,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      24,
+      0
+     ],
+     [
+      -24,
+      0
+     ]
+    ],
+    "infer": false
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      105.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      0,
+      1,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "X105"
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -32,
+      0
+     ],
+     [
+      -34.56,
+      18.0
+     ],
+     [
+      -25.6,
+      32.0
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -25.6,
+      32.0
+     ],
+     [
+      -16.0,
+      40.800000000000004
+     ],
+     [
+      0,
+      40
+     ],
+     [
+      16.0,
+      40.800000000000004
+     ],
+     [
+      25.6,
+      32.0
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      25.6,
+      32.0
+     ],
+     [
+      34.56,
+      18.0
+     ],
+     [
+      32,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      32,
+      0
+     ],
+     [
+      -32,
+      0
+     ]
+    ],
+    "infer": false
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      130.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      0,
+      1,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "X130"
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -34,
+      0
+     ],
+     [
+      -36.72,
+      16.2
+     ],
+     [
+      -27.200000000000003,
+      28.8
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      -27.200000000000003,
+      28.8
+     ],
+     [
+      -17.0,
+      34.120000000000005
+     ],
+     [
+      0,
+      36
+     ],
+     [
+      17.0,
+      34.120000000000005
+     ],
+     [
+      27.200000000000003,
+      28.8
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      27.200000000000003,
+      28.8
+     ],
+     [
+      36.72,
+      16.2
+     ],
+     [
+      34,
+      0
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      34,
+      0
+     ],
+     [
+      -34,
+      0
+     ]
+    ],
+    "infer": false
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "surface.loft",
+   "params": {
+    "sections": [
+     {
+      "sketch": "X15"
+     },
+     {
+      "sketch": "X45"
+     },
+     {
+      "sketch": "X75"
+     },
+     {
+      "sketch": "X105"
+     },
+     {
+      "sketch": "X130"
+     }
+    ],
+    "body_name": "Skull"
+   }
+  },
+  {
+   "command": "surface.patch",
+   "params": {
+    "body": "Skull",
+    "edges": [
+     [
+      15.0,
+      0.0,
+      0.0
+     ],
+     [
+      15.000000000000002,
+      10.762201867111662,
+      3.105738961934521
+     ],
+     [
+      15.000000000000002,
+      9.651769996584397,
+      8.892625348799859
+     ],
+     [
+      15.0,
+      6.5,
+      12.040000000000001
+     ],
+     [
+      15.0,
+      2.5,
+      13.440000000000001
+     ],
+     [
+      15.0,
+      -2.5,
+      13.440000000000001
+     ],
+     [
+      15.0,
+      -6.5,
+      12.040000000000001
+     ],
+     [
+      15.000000000000002,
+      -9.651769996584399,
+      8.892625348799859
+     ],
+     [
+      15.000000000000002,
+      -10.762201867111662,
+      3.1057389619345206
+     ]
+    ],
+    "continuity": "g2"
+   }
+  }
+ ]
+}

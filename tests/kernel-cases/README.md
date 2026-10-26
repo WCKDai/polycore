@@ -34,6 +34,7 @@ One directory per area, one per case: `tests/kernel-cases/<area>/<id>/`.
 | `import` (STEP and IGES geometry) | booleans/shell/import/crash rig |
 | `crashes` (crashes and hangs inside kernel operations) | booleans/shell/import/crash rig |
 | `fillets`, `sweeps`, `threads`, `sheet-metal`, `tessellation` | history rig |
+| `surfaces` (patch, blend, match, stitch: surface modelling, docs/surface-audit.md) | surface audit (#195) |
 
 `<id>` is `<source number>-<short-name>`, such as `1894-prism-cut-touching-walls`.
 

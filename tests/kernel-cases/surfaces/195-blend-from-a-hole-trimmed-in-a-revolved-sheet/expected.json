@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#195"
+ ],
+ "what": "a G1 surface.blend from a tube's rim to a hole trimmed into a revolved sheet (a bottle's handle meeting its body): refused as 'no face of the body holds a picked edge'",
+ "source": "invariants",
+ "method": "the bottle sheet revolved from a spline profile about Z, a radius-7 hole cut through its near side along X (sketch curves swept onto it), a radius-5 tube along X from x = 45 to 55; the closed G1 blend from the tube's rim at x = 45 to the hole's rim, stitched onto both: one open sheet (valid false).",
+ "valid": false,
+ "body_count": 1
+}

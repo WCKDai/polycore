@@ -1,0 +1,9 @@
+{
+ "sources": [
+  "wckdboy/polykrom#195"
+ ],
+ "what": "surface.thicken of a revolved sheet with two holes trimmed into it (a bottle's wall where a handle joins): truck panics with 'This wire is not simple', reported as a kernel internal error (with one hole the thicken gives two bodies and a shell that is not closed)",
+ "source": "invariants",
+ "method": "the bottle sheet of 195-blend-from-a-hole-trimmed-in-a-revolved-sheet with radius-7 holes at z = 25 and z = 75, thickened 2 mm inwards: the profile's smallest radius of curvature is far larger than 2 mm, so the wall is one closed, valid solid; its volume is the thickened sheet's own (no closed form for the spline profile), so only the outcome and validity are graded.",
+ "body_count": 1
+}

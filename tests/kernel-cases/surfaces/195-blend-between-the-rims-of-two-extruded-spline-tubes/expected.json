@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#195"
+ ],
+ "what": "a G1 surface.blend between the rims of two tubes extruded from closed splines: the blend's boundary strays up to 5.27 mm from the rims (only a warning), because some of a rim's edges run against the chain and were sampled the wrong way, so the stitch leaves it open",
+ "source": "invariants",
+ "method": "the mouse outline extruded from z = -3 to 18, and the outline scaled 0.8 extruded from z = 28 to 36, both vertical; the closed G1 blend from the lower tube's top rim to the upper tube's bottom rim (both leave vertically: no slant), stitched onto both, then flat patches on the open rims at z = -3 and z = 36: one closed, valid solid. No closed form for its volume.",
+ "body_count": 1,
+ "watertight": true
+}

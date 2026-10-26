@@ -1,0 +1,258 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0.0,
+      0,
+      0.0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "A0"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      10,
+      0
+     ]
+    ],
+    "infer": false,
+    "ids": [
+     "a"
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0.0,
+      -10,
+      0.0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "A1"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      4,
+      0
+     ],
+     [
+      14,
+      0
+     ]
+    ],
+    "infer": false,
+    "ids": [
+     "b"
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0.0,
+      20,
+      0.0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "B0"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      0,
+      5
+     ],
+     [
+      10,
+      5
+     ]
+    ],
+    "infer": false,
+    "ids": [
+     "c"
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0.0,
+      30,
+      0.0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "B1"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      4,
+      5
+     ],
+     [
+      14,
+      5
+     ]
+    ],
+    "infer": false,
+    "ids": [
+     "d"
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "surface.loft",
+   "params": {
+    "sections": [
+     {
+      "sketch": "A0",
+      "curves": [
+       "a"
+      ]
+     },
+     {
+      "sketch": "A1",
+      "curves": [
+       "b"
+      ]
+     }
+    ],
+    "body_name": "A"
+   }
+  },
+  {
+   "command": "surface.loft",
+   "params": {
+    "sections": [
+     {
+      "sketch": "B0",
+      "curves": [
+       "c"
+      ]
+     },
+     {
+      "sketch": "B1",
+      "curves": [
+       "d"
+      ]
+     }
+    ],
+    "body_name": "B"
+   }
+  },
+  {
+   "command": "surface.blend",
+   "params": {
+    "from": {
+     "body": "A",
+     "edges": [
+      [
+       5,
+       0,
+       0
+      ]
+     ]
+    },
+    "to": {
+     "body": "B",
+     "edges": [
+      [
+       5,
+       20,
+       5
+      ]
+     ]
+    },
+    "continuity": [
+     "g2",
+     "g2"
+    ],
+    "stitch": true
+   }
+  }
+ ]
+}

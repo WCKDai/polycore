@@ -215,7 +215,10 @@ fn link(source: &str) -> String {
 fn source_kinds(dir: &Path, cited: &BTreeMap<String, Vec<String>>) -> Result<String, String> {
     let kinds = read(&dir.join("sources.json"));
     let Some(kinds) = kinds.as_object() else { return Ok(String::new()) };
-    let cited: std::collections::BTreeSet<u64> = cited.keys().map(|s| source_number(s)).collect();
+    // `sources.json` numbers SolidCraft's tracker; a case from Polykrom's own (wckdboy/polykrom#N)
+    // is not one of them, whatever its number.
+    let cited: std::collections::BTreeSet<u64> =
+        cited.keys().filter(|s| s.starts_with("tangency-labs/solidcraft#")).map(|s| source_number(s)).collect();
     let mut table: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for (n, kind) in kinds {
         let row = table.entry(kind.as_str().unwrap_or("?").to_string()).or_default();

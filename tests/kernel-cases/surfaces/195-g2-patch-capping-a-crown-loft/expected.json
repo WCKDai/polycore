@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#195"
+ ],
+ "what": "a G2 surface.patch capping a loft between two closed splines of different sizes (the crown of a computer mouse): refused as 'the support surface is too small around a picked edge to read its shape', because the loft's rulings cross its rims at a slant",
+ "source": "invariants",
+ "method": "the loft between the outline scaled 0.8 at z = 28 and 0.45 at z = 36, a G2 patch on its upper rim and a flat patch on its lower rim, stitched: one closed, valid solid. The cap's shape is the fill's own, so only the outcome and validity are graded.",
+ "body_count": 1,
+ "watertight": true
+}

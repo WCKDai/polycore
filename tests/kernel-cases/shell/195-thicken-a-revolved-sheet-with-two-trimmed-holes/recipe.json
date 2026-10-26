@@ -1,0 +1,145 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Profile"
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      30,
+      0
+     ],
+     [
+      32,
+      30
+     ],
+     [
+      30,
+      60
+     ],
+     [
+      20,
+      85
+     ],
+     [
+      12,
+      100
+     ],
+     [
+      12,
+      115
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "surface.revolve",
+   "params": {
+    "sketch": "Profile",
+    "curves": [
+     "s1"
+    ],
+    "axis": "Z",
+    "body_name": "Bottle"
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      0,
+      1,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Hole"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     25
+    ],
+    "radius": 7
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     75
+    ],
+    "radius": 7
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "surface.trim",
+   "params": {
+    "body": "Bottle",
+    "curves": {
+     "sketch": "Hole"
+    },
+    "keep": [
+     [
+      -30,
+      0,
+      40
+     ]
+    ]
+   }
+  },
+  {
+   "command": "surface.thicken",
+   "params": {
+    "bodies": [
+     "Bottle"
+    ],
+    "thickness": -2
+   }
+  }
+ ]
+}

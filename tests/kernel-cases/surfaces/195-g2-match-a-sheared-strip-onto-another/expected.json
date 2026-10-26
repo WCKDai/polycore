@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#195"
+ ],
+ "what": "surface.match (G2) of a lofted strip onto the edge of another whose parameter lines do not cross its edges at right angles (a fender matched to a hood): refused as 'the support surface is too small around a picked edge to read its shape'",
+ "source": "invariants",
+ "method": "the strips of 195-g1-blend-between-sheared-strips; B's face rebuilt so that its boundary nearest A lies on A's edge at y = 0 and repeats A (a plane) up to its curvature, its far boundary kept; stitched onto A along that edge: one open sheet of two faces (valid false).",
+ "valid": false,
+ "body_count": 1,
+ "faces": 2
+}
