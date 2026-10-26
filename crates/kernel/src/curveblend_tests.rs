@@ -830,8 +830,24 @@ fn rolling_ball_round_on_a_lofted_torso_bottom_chain() {
     assert!(angle < 0.5, "the round meets its neighbours at {angle} degrees");
     // The loft is its own interpolation: no volume to check here (the sloped loft below has one).
     assert!(crate::measure(&round).unwrap().volume < crate::measure(&body).unwrap().volume);
-    // #184 case 1: R11, larger than the floor's r9 arcs, is still refused as too large.
-    assert!(matches!(fillet(&body, &[Vec3::new(0.0, -39.0, 210.0)], 11.0), Err(crate::KernelError::TooLarge(_))));
+    // R30 is: its floor contact would lie past the centres of the r9 floor arcs.
+    assert!(matches!(fillet(&body, &[Vec3::new(0.0, -39.0, 210.0)], 30.0), Err(crate::KernelError::TooLarge(_))));
+}
+
+#[test]
+fn rolling_ball_rounds_larger_than_the_floor_arcs_of_a_flared_loft() {
+    // #184 case 1: R10 to R12 on the torso's bottom chain, larger than its r9 floor arcs. The wall
+    // leans out so far that the ball touches the floor only a few millimetres in from the edge,
+    // inside the arcs. R10 is picked where the report picked it, 6 mm off the edge.
+    let body = torso();
+    for (r, pick) in [(10.0, Vec3::new(38.0, 0.0, 210.0)), (11.0, Vec3::new(0.0, -39.0, 210.0)), (12.0, Vec3::new(0.0, -39.0, 210.0))] {
+        let round = fillet(&body, &[pick], r).unwrap_or_else(|e| panic!("R{r}: {e}"));
+        assert!(round.validity().is_empty(), "R{r}: {:?}", round.validity());
+        let (radius, angle, count, _) = round_errors(&body, &round, 210.0, r);
+        assert_eq!(count, 8, "R{r}: one blend face per edge of the chain");
+        assert!(radius < 1e-3, "R{r}: the ball's centre is {radius} mm off its radius from the floor or the walls");
+        assert!(angle < 0.5, "R{r}: the round meets its neighbours at {angle} degrees");
+    }
 }
 
 #[test]

@@ -1,0 +1,657 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      210
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Sec0"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -27,
+      -39
+     ],
+     [
+      23,
+      -39
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     23,
+     -30
+    ],
+    "start": [
+     23,
+     -39
+    ],
+    "end": [
+     32,
+     -30
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      32,
+      -30
+     ],
+     [
+      32,
+      30
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     23,
+     30
+    ],
+    "start": [
+     32,
+     30
+    ],
+    "end": [
+     23,
+     39
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      23,
+      39
+     ],
+     [
+      -27,
+      39
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -27,
+     30
+    ],
+    "start": [
+     -27,
+     39
+    ],
+    "end": [
+     -36,
+     30
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -36,
+      30
+     ],
+     [
+      -36,
+      -30
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -27,
+     -30
+    ],
+    "start": [
+     -36,
+     -30
+    ],
+    "end": [
+     -27,
+     -39
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      224
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Sec1"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -32,
+      -45
+     ],
+     [
+      28,
+      -45
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     28,
+     -21
+    ],
+    "start": [
+     28,
+     -45
+    ],
+    "end": [
+     52,
+     -21
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      52,
+      -21
+     ],
+     [
+      52,
+      21
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     28,
+     21
+    ],
+    "start": [
+     52,
+     21
+    ],
+    "end": [
+     28,
+     45
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      28,
+      45
+     ],
+     [
+      -32,
+      45
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -32,
+     25
+    ],
+    "start": [
+     -32,
+     45
+    ],
+    "end": [
+     -52,
+     25
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -52,
+      25
+     ],
+     [
+      -52,
+      -25
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -32,
+     -25
+    ],
+    "start": [
+     -52,
+     -25
+    ],
+    "end": [
+     -32,
+     -45
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      254
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Sec2"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -41,
+      -46
+     ],
+     [
+      36,
+      -46
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     36,
+     -18
+    ],
+    "start": [
+     36,
+     -46
+    ],
+    "end": [
+     64,
+     -18
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      64,
+      -18
+     ],
+     [
+      64,
+      18
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     36,
+     18
+    ],
+    "start": [
+     64,
+     18
+    ],
+    "end": [
+     36,
+     46
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      36,
+      46
+     ],
+     [
+      -41,
+      46
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -41,
+     24
+    ],
+    "start": [
+     -41,
+     46
+    ],
+    "end": [
+     -63,
+     24
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -63,
+      24
+     ],
+     [
+      -63,
+      -24
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -41,
+     -24
+    ],
+    "start": [
+     -63,
+     -24
+    ],
+    "end": [
+     -41,
+     -46
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      288
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Sec3"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -43,
+      -46
+     ],
+     [
+      37,
+      -46
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     37,
+     -18
+    ],
+    "start": [
+     37,
+     -46
+    ],
+    "end": [
+     65,
+     -18
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      65,
+      -18
+     ],
+     [
+      65,
+      18
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     37,
+     18
+    ],
+    "start": [
+     65,
+     18
+    ],
+    "end": [
+     37,
+     46
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      37,
+      46
+     ],
+     [
+      -43,
+      46
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -43,
+     24
+    ],
+    "start": [
+     -43,
+     46
+    ],
+    "end": [
+     -65,
+     24
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -65,
+      24
+     ],
+     [
+      -65,
+      -24
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.arc.center_point",
+   "params": {
+    "center": [
+     -43,
+     -24
+    ],
+    "start": [
+     -65,
+     -24
+    ],
+    "end": [
+     -43,
+     -46
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.loft",
+   "params": {
+    "sections": [
+     {
+      "sketch": "Sec0"
+     },
+     {
+      "sketch": "Sec1"
+     },
+     {
+      "sketch": "Sec2"
+     },
+     {
+      "sketch": "Sec3"
+     }
+    ],
+    "body_name": "Torso"
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      38,
+      0,
+      210
+     ]
+    ],
+    "radius": 10
+   }
+  }
+ ]
+}

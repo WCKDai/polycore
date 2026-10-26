@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#184",
+  "wckdboy/polykrom#126"
+ ],
+ "what": "an R10 round on the bottom edge chain of TinyRex's lofted torso, picked at (38, 0, 210) as the agent picked it, 6 mm off the x = 32 side: refused on main as larger than the r9 floor arcs (#184 case 1)",
+ "source": "invariants",
+ "method": "the pick is nearest the x = 32 side of the bottom chain. The wall leans out so far that the R10 ball touches the floor about r tan(theta/2) in from the edge (theta the angle between the floor's and the wall's normals), inside the r9 floor arcs: the round exists. One valid, watertight body",
+ "body_count": 1,
+ "watertight": true
+}

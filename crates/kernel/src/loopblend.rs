@@ -582,7 +582,7 @@ fn build(
     // to a point (a rounded corner rounded again: the blend there is a sphere).
     let mut collapsed = vec![false; k.max(nj)];
     for (i, s) in segs.iter().enumerate() {
-        if let Seg::Arc { a, c, .. } = *s {
+        if let Seg::Arc { a, c, mid, .. } = *s {
             let toward = into(s, a).dot(c - a) > 0.0;
             // An unequal chamfer's offset on the face; it never ends in a point (a cone's apex).
             if sides.is_some() {
@@ -592,12 +592,21 @@ fn build(
                 }
                 continue;
             }
+            // The round touches the face its setback in from the edge, from the angle the wall
+            // meets the face at along the arc: r beside a square wall, less beside one that leans
+            // out (a flared lofted wall), the largest of its ends and middle. (Never more than r
+            // here: a sharper wall is left to the corners.)
+            let reach = [s.start(), mid, s.end()]
+                .iter()
+                .filter_map(|p| frame(i, *p).map(|x| x.2))
+                .fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x))))
+                .map_or(r, |x| x.min(r));
             if toward && (a.dist(c) - r).abs() <= tol * 10.0 && !mitre.get(i).copied().unwrap_or(true) && !mitre.get(nxt(i)).copied().unwrap_or(true)
             {
                 if let Some(x) = collapsed.get_mut(i) {
                     *x = true;
                 }
-            } else if toward && a.dist(c) <= r + tol {
+            } else if toward && a.dist(c) <= reach + tol {
                 return Err(too_large("the blend is larger than a corner radius"));
             }
         }

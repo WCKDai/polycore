@@ -537,7 +537,7 @@ pub(crate) fn in_range(f: &mt::Face, uv: (f64, f64)) -> bool {
 /// along `cusp · n1 × t`, and the ball lies where the cusp has opened to its width), else 0.
 #[allow(clippy::too_many_arguments)]
 fn solve(f1: &[&mt::Face], f2: &[&mt::Face], p: Vec3, t: Vec3, r: f64, sigma: f64, cusp: f64, extra: Option<Extra<'_>>, tol: f64) -> Option<Section> {
-    solve_from(f1, f2, p, t, r, sigma, cusp, extra, tol, None)
+    solve_from(f1, f2, p, t, r, sigma, cusp, extra, tol, None, false)
 }
 
 /// [`solve`], started from the centre `start` when given (the corner builder's balls at a knife
@@ -554,11 +554,14 @@ fn solve_from(
     extra: Option<Extra<'_>>,
     tol: f64,
     start: Option<Vec3>,
+    within: bool,
 ) -> Option<Section> {
     // The nearest face of a side (several faces on one smooth surface group). Each face's
     // search starts from its last answer: the centre moves little between iterations. An
     // answer outside the surface's parameters, or farther than that last point (the search
-    // ran away or settled on the far side), is searched again cold.
+    // ran away or settled on the far side), is searched again cold. With `within`, a face's
+    // nearest point outside its parameters doesn't count (a lofted face's surface run on past
+    // its seam, where the next face carries the wall).
     let last = std::cell::RefCell::new(HashMap::<mt::FaceID, ((f64, f64), Vec3)>::new());
     let near = |fs: &[&mt::Face], c: Vec3| -> Option<(Vec3, Vec3)> {
         fs.iter()
@@ -571,7 +574,7 @@ fn solve_from(
                     None => project(f, c, None)?,
                 };
                 last.borrow_mut().insert(f.id(), (uv, q));
-                Some((q, n))
+                (!within || in_range(f, uv)).then_some((q, n))
             })
             .min_by(|a, b| a.0.dist(c).total_cmp(&b.0.dist(c)))
     };
@@ -727,6 +730,9 @@ struct Sizer<'a> {
     size: Size<'a>,
     /// The tolerance the section's equations are solved at.
     tol: f64,
+    /// Contacts only within their faces' parameters (see [`solve_from`]): for the retries that
+    /// take in a chain's neighbouring faces.
+    within: bool,
 }
 
 impl Sizer<'_> {
@@ -745,16 +751,31 @@ impl Sizer<'_> {
         extra: Option<Extra<'_>>,
     ) -> Option<(Section, f64)> {
         match self.size {
-            Size::Constant(r) => solve(f1, f2, p, t, r, sigma, cusp, extra, self.tol).map(|x| (x, r)),
+            Size::Constant(r) => solve_from(f1, f2, p, t, r, sigma, cusp, extra, self.tol, None, self.within).map(|x| (x, r)),
             Size::Chord(chord) => solve_chord(f1, f2, p, t, chord, sigma, cusp, extra, self.tol),
             Size::Law(law) => {
                 let r = law_beyond(law, s)?;
                 if !(r.is_finite() && (0.0..1e6).contains(&r)) {
                     return None;
                 }
-                solve(f1, f2, p, t, r, sigma, cusp, extra, self.tol).map(|x| (x, r))
+                solve_from(f1, f2, p, t, r, sigma, cusp, extra, self.tol, None, self.within).map(|x| (x, r))
             }
         }
+    }
+
+    /// [`Sizer::section`] in the plane square to `t` through `centre`, its steps started from that
+    /// centre (a guess of the ball's centre, not a point of the edge). A chord size has no such
+    /// start: none.
+    #[allow(clippy::too_many_arguments)]
+    fn section_from(&self, f1: &[&mt::Face], f2: &[&mt::Face], centre: Vec3, t: Vec3, s: f64, sigma: f64, cusp: f64) -> Option<(Section, f64)> {
+        let r = match self.size {
+            Size::Constant(r) => r,
+            Size::Law(law) => law_beyond(law, s).filter(|r| r.is_finite() && (0.0..1e6).contains(r))?,
+            Size::Chord(_) => return None,
+        };
+        // A centre the steps carried more than half the ball away from its guess is another
+        // answer (the ball wedged elsewhere between the faces' surfaces): none.
+        solve_from(f1, f2, centre, t, r, sigma, cusp, None, self.tol, Some(centre), true).filter(|x| x.c.dist(centre) < 0.5 * r).map(|x| (x, r))
     }
 
     /// What a station the ball does not fit at is refused with: a chord too large is about the
@@ -1363,7 +1384,8 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
         let s = sampled(table, along).unwrap_or(0.0);
         ((lo + s) / total).clamp(0.0, 1.0)
     };
-    let sizer = Sizer { size: size_law, tol: tol * 100.0 };
+    let sizer = Sizer { size: size_law, tol: tol * 100.0, within: false };
+    let near_sizer = Sizer { size: size_law, tol: tol * 100.0, within: true };
     // Arcs on a planar side that curve round the ball: its centre runs round them at their
     // radius less the blend's. Less than nothing is too large; nothing is a pivot.
     let mut pivots: Vec<Option<Pivot>> = vec![None; n];
@@ -1389,7 +1411,25 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
             if (o - pm).dot(np.cross(tm)) <= 0.0 {
                 continue;
             }
-            if rho < r - tol * 1e3 {
+            // The ball touches this side its setback in from the edge, where its section at the
+            // arc's middle puts the contact: r beside a side square to it, less beside one that
+            // leans out (a flared lofted wall). The contacts run round the arc's centre at its
+            // radius less that; less than nothing is too large. (Never more than r here: a
+            // sharper edge is left to the sections.)
+            let setback = {
+                let (a1, a2) = edge_sides(&[k]);
+                // As the sections are: on the edge's own faces, else with the neighbouring faces
+                // that run on smoothly from them (contacts within their faces).
+                solve(&a1, &a2, pm, tm, r, sigma, cusp, None, tol * 100.0)
+                    .or_else(|| {
+                        let (b1, b2) = beside(k);
+                        solve_from(&b1, &b2, pm, tm, r, sigma, cusp, None, tol * 100.0, None, true)
+                    })
+                    .map(|s| (if side == 1 { s.q1 } else { s.q2 } - pm).dot(np.cross(tm)))
+                    .filter(|d| d.is_finite() && *d > 0.0)
+                    .map_or(r, |d| d.min(r))
+            };
+            if rho < setback - tol * 1e3 {
                 return Err(too_large("the blend is larger than a corner radius (site 1257)"));
             }
             if (rho - r).abs() > tol * 1e3 {
@@ -1744,7 +1784,7 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
             .section(&a1, &a2, anchor, t, frac_at(k, along), sigma, cusp, None)
             .or_else(|| {
                 let (b1, b2) = beside(k);
-                sizer.section(&b1, &b2, anchor, t, frac_at(k, along), sigma, cusp, None)
+                near_sizer.section(&b1, &b2, anchor, t, frac_at(k, along), sigma, cusp, None)
             })
             .ok_or_else(|| sizer.refusal())
     };
@@ -1807,8 +1847,13 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
             sizer
                 .section(&a1, &a2, anchor, tangent, law_s, sigma, cusp, None)
                 .or_else(|| {
+                    // The anchor is an interpolated centre, not a point of the edge: started from it,
+                    // the steps begin a ball's width nearer the answer than from the edge's offset,
+                    // which beside a strongly flared wall throws the first step off the faces.
                     let (b1, b2) = beside(k);
-                    sizer.section(&b1, &b2, anchor, tangent, law_s, sigma, cusp, None)
+                    near_sizer
+                        .section(&b1, &b2, anchor, tangent, law_s, sigma, cusp, None)
+                        .or_else(|| near_sizer.section_from(&b1, &b2, anchor, tangent, law_s, sigma, cusp))
                 })
                 .map(|(section, _)| section)
                 .ok_or_else(|| unsupported("the ball doesn't fit along the resampled spine"))
