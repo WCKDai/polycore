@@ -56,7 +56,9 @@ pub struct ContinuityTolerances {
     pub curvature_per_mm: f64,
 }
 
-/// The worst value of one metric along an edge, with where it was found.
+/// The worst value of one metric along an edge, with where it was found, and how the metric is
+/// spread over the stations: a seam can be smooth everywhere but at a corner where its faces'
+/// own neighbours meet sharply, and the worst value alone would hide that.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct SeamWorst {
     pub value: f64,
@@ -64,6 +66,50 @@ pub struct SeamWorst {
     pub at: Vec3,
     /// How far along the edge it is: 0 at the edge's start, 1 at its end.
     pub edge_fraction: f64,
+    /// Whether the worst value is at one of the edge's two ends (a corner of the seam).
+    pub at_end: bool,
+    /// The mean over the stations.
+    pub mean: f64,
+    /// The 95th percentile over the stations (the nearest-rank value).
+    pub p95: f64,
+    /// The worst value away from the edge's two end stations (the worst value itself when the
+    /// edge has no other stations).
+    pub interior: f64,
+}
+
+/// The values of one metric at the stations of an edge, with where each was taken.
+#[derive(Default)]
+struct Spread {
+    values: Vec<(f64, Vec3, f64)>,
+}
+
+impl Spread {
+    fn push(&mut self, value: f64, at: Vec3, edge_fraction: f64) {
+        if value.is_finite() {
+            self.values.push((value, at, edge_fraction));
+        }
+    }
+
+    /// The worst value, where, and the spread; `None` with no stations.
+    fn summary(&self) -> Option<SeamWorst> {
+        let end = |f: f64| f <= 1e-12 || f >= 1.0 - 1e-12;
+        // The largest value, reported as it is (the verdict compares it with the tolerance); where
+        // several stations share it to rounding (a straight seam's constant angle), it is placed at
+        // the first one inside the edge, so that a corner is named only when it is worse.
+        let value = self.values.iter().map(|v| v.0).fold(f64::NEG_INFINITY, f64::max);
+        let tie = 1e-9 * value.abs().max(1.0);
+        let worst = |v: &&(f64, Vec3, f64)| v.0 >= value - tie;
+        let &(_, at, edge_fraction) = self.values.iter().filter(worst).find(|v| !end(v.2)).or_else(|| self.values.iter().find(worst))?;
+        let n = self.values.len();
+        let mean = self.values.iter().map(|v| v.0).sum::<f64>() / n as f64;
+        let mut sorted: Vec<f64> = self.values.iter().map(|v| v.0).collect();
+        sorted.sort_by(f64::total_cmp);
+        // Nearest rank: the smallest value with at least 95 % of the stations at or below it.
+        let rank = ((0.95 * n as f64).ceil() as usize).clamp(1, n);
+        let p95 = sorted.get(rank - 1).copied().unwrap_or(value);
+        let interior = self.values.iter().filter(|v| !end(v.2)).map(|v| v.0).fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))));
+        Some(SeamWorst { value, at, edge_fraction, at_end: end(edge_fraction), mean, p95, interior: interior.unwrap_or(value) })
+    }
 }
 
 /// Which test a seam fails, from the best continuity to the worst: [`SeamVerdict::Smooth`] is
@@ -256,9 +302,9 @@ fn seam(index: usize, edge: &mt::Edge, face_a: &mt::Face, face_b: &mt::Face, sam
     let fraction = |k: usize| k as f64 / steps as f64;
     let mut on_a = FaceSurface::new(face_a);
     let mut on_b = FaceSurface::new(face_b);
-    let mut gap = None;
-    let mut angle = None;
-    let mut jump = None;
+    let mut gap = Spread::default();
+    let mut angle = Spread::default();
+    let mut jump = Spread::default();
     let mut points = Vec::with_capacity(samples);
     for k in 0..samples {
         let f = fraction(k);
@@ -280,11 +326,11 @@ fn seam(index: usize, edge: &mt::Edge, face_a: &mt::Face, face_b: &mt::Face, sam
         // bending towards the other.
         let signed = if na.dot(nb) < 0.0 { ka + kb } else { ka - kb };
         points.push(at);
-        keep(&mut gap, qa.dist(qb), at, f);
-        keep(&mut angle, na.dot(nb).clamp(-1.0, 1.0).acos().to_degrees(), at, f);
-        keep(&mut jump, signed.abs(), at, f);
+        gap.push(qa.dist(qb), at, f);
+        angle.push(na.dot(nb).clamp(-1.0, 1.0).acos().to_degrees(), at, f);
+        jump.push(signed.abs(), at, f);
     }
-    let (gap, angle, jump) = (gap?, angle?, jump?);
+    let (gap, angle, jump) = (gap.summary()?, angle.summary()?, jump.summary()?);
     let verdict = if gap.value > tolerances.gap_mm {
         SeamVerdict::Gap
     } else if angle.value > tolerances.angle_deg {
@@ -312,13 +358,6 @@ fn seam(index: usize, edge: &mt::Edge, face_a: &mt::Face, face_b: &mt::Face, sam
 /// leaves that station unmeasured).
 fn across(normal: Vec3, tangent: Vec3) -> Vec3 {
     normal.cross(tangent)
-}
-
-/// Keep the largest value seen, with where it was found.
-fn keep(worst: &mut Option<SeamWorst>, value: f64, at: Vec3, edge_fraction: f64) {
-    if value.is_finite() && worst.is_none_or(|w| value > w.value) {
-        *worst = Some(SeamWorst { value, at, edge_fraction });
-    }
 }
 
 /// A face's surface, kept over the stations of one edge so each search can start at the last
@@ -432,6 +471,40 @@ mod tests {
             assert_eq!(seam.samples, 33);
             assert!((seam.length - 10.0).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn a_seam_reports_its_spread_and_whether_its_worst_is_a_corner() {
+        // A seam tangent along its length (0.01°) but turning 80° at its last station, where its
+        // faces' own neighbours meet sharply: the worst value is the corner's, and the spread and
+        // the interior's worst say the rest of the seam holds.
+        let mut s = Spread::default();
+        for k in 0..=32 {
+            let f = k as f64 / 32.0;
+            s.push(if k == 32 { 80.0 } else { 0.01 }, Vec3::new(f, 0.0, 0.0), f);
+        }
+        let w = s.summary().unwrap();
+        assert_eq!(w.value, 80.0);
+        assert!(w.at_end && w.edge_fraction == 1.0, "{w:?}");
+        assert!((w.interior - 0.01).abs() < 1e-12, "{w:?}");
+        assert!((w.mean - (32.0 * 0.01 + 80.0) / 33.0).abs() < 1e-12, "{w:?}");
+        // 95 % of 33 stations is 31.35: the 32nd value up, still the seam's own 0.01.
+        assert!((w.p95 - 0.01).abs() < 1e-12, "{w:?}");
+        // A constant value names a station inside the edge, not its start.
+        let mut flat = Spread::default();
+        for k in 0..=4 {
+            flat.push(90.0, Vec3::ZERO, k as f64 / 4.0);
+        }
+        let w = flat.summary().unwrap();
+        assert!(!w.at_end && w.edge_fraction == 0.25 && w.mean == 90.0 && w.p95 == 90.0 && w.interior == 90.0, "{w:?}");
+        // A worst value at an end only a rounding above the interior's is still the one reported
+        // (a gap tolerance of 0 sees it), placed inside the edge.
+        let mut tied = Spread::default();
+        tied.push(0.0, Vec3::ZERO, 0.5);
+        tied.push(1e-10, Vec3::X, 1.0);
+        let w = tied.summary().unwrap();
+        assert!(w.value == 1e-10 && !w.at_end && w.edge_fraction == 0.5, "{w:?}");
+        assert!(Spread::default().summary().is_none());
     }
 
     #[test]
