@@ -14,7 +14,7 @@ use truck_meshalgo::tessellation::RobustMeshableShape;
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
-use crate::record::Rebuild;
+use crate::record::{Rebuild, Was};
 use crate::{KernelError, Result, guard};
 
 /// What splits the faces.
@@ -152,8 +152,8 @@ fn trace_tol_of(size: f64) -> f64 {
 }
 
 /// Trace the zero set of `g` over a face: chains of exact points.
-fn trace(face: &mt::Face, g: &Field, size: f64) -> Result<Vec<Chain>> {
-    if let Some(chains) = trace_flat(face, g, size) {
+fn trace(face: &mt::Face, g: &Field, size: f64, touching: bool) -> Result<Vec<Chain>> {
+    if let Some(chains) = trace_flat(face, g, size, touching) {
         return Ok(chains);
     }
     let tol = trace_tol(face, size);
@@ -327,14 +327,17 @@ fn trace(face: &mt::Face, g: &Field, size: f64) -> Result<Vec<Chain>> {
 /// the boundary, taken in order along the line. Which side a corner is on is decided once, at
 /// the corner, so a plane through a corner crosses the boundary there once or not at all, as it
 /// should. `None` (traced on a mesh instead) for any other face or tool, and where an edge lies
-/// in the plane.
-fn trace_flat(face: &mt::Face, g: &Field, size: f64) -> Option<Vec<Chain>> {
+/// in the plane, unless `touching` (the body has faces lying in the plane, #190): such an edge
+/// is then the boundary of the face, which the plane only touches there, and no line runs
+/// along it.
+fn trace_flat(face: &mt::Face, g: &Field, size: f64, touching: bool) -> Option<Vec<Chain>> {
     let Field::Plane { o, n } = g else { return None };
     let surface = face.surface();
     let Field::Plane { n: m, .. } = surface_field(&surface) else { return None };
     let along = m.cross(*n).normalized()?;
     let tol = size * 1e-7 + 1e-9;
     let mut hits: Vec<mt::Point3> = Vec::new();
+    let mut lying: Vec<(Vec3, Vec3)> = Vec::new();
     for e in face.boundaries().iter().flat_map(|w| w.edge_iter()) {
         let (a, b) = (from_p3(e.front().point()), from_p3(e.back().point()));
         let (ga, gb) = ((a - *o).dot(*n), (b - *o).dot(*n));
@@ -345,6 +348,10 @@ fn trace_flat(face: &mt::Face, g: &Field, size: f64) -> Option<Vec<Chain>> {
             let (t0, t1) = c.range_tuple();
             (1..8).all(|k| from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 8.0)).dist_to_segment(a, b) <= tol)
         };
+        if touching && straight && ga.abs() <= tol && gb.abs() <= tol {
+            lying.push((a, b));
+            continue;
+        }
         if !straight || (ga.abs() <= tol && gb.abs() <= tol) || !ga.is_finite() || !gb.is_finite() {
             return None;
         }
@@ -362,6 +369,11 @@ fn trace_flat(face: &mt::Face, g: &Field, size: f64) -> Option<Vec<Chain>> {
         let [a, b] = pair else { return None };
         // A corner the plane only touches: no line.
         if a.distance(*b) <= tol {
+            continue;
+        }
+        // A stretch of the boundary lying in the plane: no line inside the face.
+        let mid = (from_p3(*a) + from_p3(*b)) * 0.5;
+        if lying.iter().any(|(p, q)| mid.dist_to_segment(*p, *q) <= tol) {
             continue;
         }
         chains.push(Chain { pts: vec![(*a, uv(*a)?), (*b, uv(*b)?)], closed: false });
@@ -697,9 +709,18 @@ fn inside(poly: &[(f64, f64)], q: (f64, f64)) -> bool {
 /// by its pieces, boundary edges cut in every face).
 /// Returns how many lines split it and how many faces now stand in its place (at `fi`). The
 /// pieces of cut edges are recorded in `rec`.
-fn split_one(faces: &mut Vec<mt::Face>, fi: usize, g: &Field, size: f64, new_edges: &mut Vec<mt::Edge>, rec: &mut Rebuild) -> Result<(usize, usize)> {
+#[allow(clippy::too_many_arguments)]
+fn split_one(
+    faces: &mut Vec<mt::Face>,
+    fi: usize,
+    g: &Field,
+    size: f64,
+    new_edges: &mut Vec<mt::Edge>,
+    rec: &mut Rebuild,
+    touching: bool,
+) -> Result<(usize, usize)> {
     let Some(face) = faces.get(fi).cloned() else { return Ok((0, 1)) };
-    let chains = trace(&face, g, size)?;
+    let chains = trace(&face, g, size, touching)?;
     if chains.is_empty() {
         return Ok((0, 1));
     }
@@ -1091,7 +1112,8 @@ pub(crate) struct Imprint {
     rec: Rebuild,
 }
 
-fn imprint(body: &Body, faces: &[usize], fields: &[Field], size: f64) -> Result<Imprint> {
+/// `touching`: the body has faces lying in the (plane) tool (see [`trace_flat`]).
+fn imprint(body: &Body, faces: &[usize], fields: &[Field], size: f64, touching: bool) -> Result<Imprint> {
     let mut out = Imprint { shells: Vec::new(), origin: Vec::new(), new_edges: Vec::new(), made: HashMap::new(), rec: Rebuild::default() };
     let body_faces: Vec<&mt::Face> = body.solid.face_iter().collect();
     let mut base = 0;
@@ -1110,7 +1132,7 @@ fn imprint(body: &Body, faces: &[usize], fields: &[Field], size: f64) -> Result<
                     continue;
                 }
                 let src = origin.get(k).copied().unwrap_or(0);
-                let (m, pieces) = split_one(&mut fs, k, g, size, &mut out.new_edges, &mut out.rec)?;
+                let (m, pieces) = split_one(&mut fs, k, g, size, &mut out.new_edges, &mut out.rec, touching)?;
                 *out.made.entry(src).or_default() += m;
                 // The pieces stand at k..k + pieces; positions after shift.
                 target = target.iter().take(k).copied().chain(std::iter::repeat_n(true, pieces)).chain(target.iter().skip(k + 1).copied()).collect();
@@ -1165,7 +1187,7 @@ pub(crate) fn split_any(body: &Body, faces: &[usize], tool: &SplitTool) -> Resul
         return Err(KernelError::Invalid("no such face".into()));
     }
     guard("split face", || {
-        let mut imp = imprint(body, faces, &fields, size)?;
+        let mut imp = imprint(body, faces, &fields, size, false)?;
         if imp.made.values().all(|m| *m == 0) {
             return Err(KernelError::Invalid("the tool does not cross the selected faces".into()));
         }
@@ -1221,6 +1243,36 @@ fn side_of(face: &mt::Face, g: &Field, size: f64) -> Result<f64> {
         }
     }
     Ok(best)
+}
+
+/// Whether `face` lies in the zero set of `g` (a flat face in a plane tool, whatever its surface
+/// type: a revolved line's annulus too), by its corners and the corners of its mesh.
+fn lies_in(face: &mt::Face, g: &Field, size: f64) -> bool {
+    let tol = size * 1e-9 + 1e-12;
+    if !face.vertex_iter().all(|v| g.eval(from_p3(v.point())).abs() <= tol) {
+        return false;
+    }
+    let shell: mt::Shell = vec![face.clone()].into();
+    let meshed = shell.robust_triangulation(trace_tol(face, size));
+    let Some(mesh) = meshed.face_iter().next().and_then(|f| f.surface()) else { return false };
+    mesh.positions().iter().all(|p| g.eval(from_p3(*p)).abs() <= tol)
+}
+
+/// Whether `face` lies on one side of the zero set of `g` (touching it at most), by its corners
+/// and the corners of its mesh.
+fn one_sided(face: &mt::Face, g: &Field, size: f64) -> bool {
+    let tol = size * 1e-7 + 1e-9;
+    let shell: mt::Shell = vec![face.clone()].into();
+    let meshed = shell.robust_triangulation(trace_tol(face, size));
+    let mesh = meshed.face_iter().next().and_then(|f| f.surface());
+    let points = face.vertex_iter().map(|v| v.point()).chain(mesh.iter().flat_map(|m| m.positions().iter().copied()).collect::<Vec<_>>());
+    let (mut lo, mut hi) = (0.0_f64, 0.0_f64);
+    for p in points {
+        let x = g.eval(from_p3(p));
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    lo >= -tol || hi <= tol
 }
 
 /// Loops from edges (each used once), chained end to start; edges are turned round as needed.
@@ -1343,12 +1395,101 @@ fn components(faces: Vec<mt::Face>) -> Vec<Vec<mt::Face>> {
     out
 }
 
+/// A body divided by a tool (see [`split_sides`]): its faces (and pieces of them) on the tool's
+/// back and on its front, each side closed by its section (the section faces of both sides, as
+/// the back has them), and how each face was made from the body's (the sections from nothing).
+pub(crate) struct Sides {
+    back: Vec<mt::Face>,
+    front: Vec<mt::Face>,
+    section: Vec<mt::Face>,
+    rec: Rebuild,
+    /// The body has faces lying in the (plane) tool.
+    touching: bool,
+}
+
 /// Split a body into the parts on either side of a tool: a plane, or another face's surface
 /// (extended). Faces are divided where the tool meets them and every part is closed with the
 /// piece of the tool's surface inside the body; parts come in face order, those on the tool's
 /// back first. A body the tool misses comes back whole. Each part's history is over `[body]`:
 /// its faces the body's (or pieces of them), the section new.
 pub fn split_body(body: &Body, tool: &SplitTool) -> Result<Vec<Body>> {
+    guard("split body", || {
+        let Some(sides) = split_sides(body, tool)? else {
+            return Ok(vec![crate::boolean_record::operand(body, 0, &crate::record::counts(&[body]))]);
+        };
+        let mut parts = Vec::new();
+        for side in [sides.back, sides.front] {
+            for comp in components(side) {
+                let shell = mt::Shell::from(comp);
+                if shell.shell_condition() != mt::ShellCondition::Closed {
+                    return Err(KernelError::Failed("a part of the split does not close".into()));
+                }
+                parts.push(crate::record::rebuilt(mt::Solid::new_unchecked(vec![shell]), &[&body.solid], &sides.rec)?.with_color(body.color));
+            }
+        }
+        Ok(parts)
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many splits [`plane_parts`] divided (past its test for a face lying in the plane).
+    pub(crate) static DIRECT_SPLITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The parts of `body` on the back and on the front of `plane` (in that order), as the boolean of
+/// `body` and `tool` (a box with a face in the plane, [`crate::ops::half_box`]) makes the part on
+/// the box's side, each with its history over `[body, tool]`: the section is a piece of the box's
+/// face in the plane (#190). Only for a body with faces lying in the plane (the case the boolean
+/// takes by nudging the box): faces lying there are taken into the section of the side their
+/// material is on, as the box's face takes them in the boolean. An error otherwise, and where the
+/// plane only touches the body or the split is not supported.
+pub(crate) fn plane_parts(body: &Body, plane: &solidcraft_geom::Plane, tool: &Body) -> Result<[Body; 2]> {
+    let n = plane.normal();
+    let cap = tool
+        .solid
+        .face_iter()
+        .find(|f| match surface_field(&f.surface()) {
+            Field::Plane { o, n: m } => m.cross(n).len() < 1e-9 && (o - plane.origin).dot(n).abs() <= body.size() * 1e-9,
+            _ => false,
+        })
+        .ok_or_else(|| KernelError::Failed("the tool has no face in the plane".into()))?;
+    // Asked first, from the faces' corners (and only where they all lie in the plane, a mesh): a
+    // split with no face in the plane is the boolean's, and is not divided here for nothing.
+    let g = Field::Plane { o: plane.origin, n };
+    if !body.solid.face_iter().any(|f| lies_in(f, &g, body.size())) {
+        return Err(KernelError::Failed("no face of the body lies in the plane".into()));
+    }
+    #[cfg(test)]
+    DIRECT_SPLITS.with(|c| c.set(c.get() + 1));
+    let Some(mut sides) = split_sides(body, &SplitTool::Plane(*plane))? else {
+        return Err(KernelError::Failed("the plane misses the body".into()));
+    };
+    if !sides.touching {
+        return Err(KernelError::Failed("no face of the body lies in the plane".into()));
+    }
+    for f in &sides.section {
+        sides.rec.made(f, vec![Was::Face(cap.id())]);
+    }
+    let part = |faces: Vec<mt::Face>| -> Result<Body> {
+        let mut shells = Vec::new();
+        for comp in components(faces) {
+            let shell = mt::Shell::from(comp);
+            if shell.shell_condition() != mt::ShellCondition::Closed {
+                return Err(KernelError::Failed("a part of the split does not close".into()));
+            }
+            shells.push(shell);
+        }
+        crate::record::rebuilt(mt::Solid::new_unchecked(shells), &[&body.solid, &tool.solid], &sides.rec)
+    };
+    let back = part(std::mem::take(&mut sides.back))?;
+    let front = part(std::mem::take(&mut sides.front))?;
+    Ok([back, front])
+}
+
+/// The faces of `body` on either side of `tool`, closed by the section (see [`Sides`]); `None`
+/// when the tool misses the body.
+fn split_sides(body: &Body, tool: &SplitTool) -> Result<Option<Sides>> {
     body.require_brep("split body")?;
     if body.solid.boundaries().len() != 1 {
         return Err(KernelError::Invalid("not supported yet: splitting a body with voids".into()));
@@ -1384,109 +1525,154 @@ pub fn split_body(body: &Body, tool: &SplitTool) -> Result<Vec<Body>> {
         Field::Surface(s) => s.clone(),
         Field::Curve { .. } => return Err(KernelError::Invalid("a body is split by a plane or a face".into())),
     };
-    let total = body.solid.face_iter().count();
-    let all: Vec<usize> = (0..total).collect();
-    guard("split body", || {
-        let imp = imprint(body, &all, &fields, size)?;
+    // Faces lying in a plane tool, and faces that only touch it (all of the face on one side, a
+    // step's riser on the step): those are not divided, and the cut faces' boundaries lying in the
+    // plane are no lines across them. A body without any keeps the split it had.
+    let flat = |f: &mt::Face| matches!(g, Field::Plane { .. }) && lies_in(f, g, size);
+    let touching = body.solid.face_iter().any(flat);
+    let all: Vec<usize> =
+        body.solid.face_iter().enumerate().filter(|(_, f)| !touching || (!flat(f) && !one_sided(f, g, size))).map(|(i, _)| i).collect();
+    {
+        let imp = imprint(body, &all, &fields, size, touching)?;
         let new_edges = imp.new_edges;
-        if imp.made.values().all(|m| *m == 0) || new_edges.is_empty() {
-            return Ok(vec![crate::boolean_record::operand(body, 0, &crate::record::counts(&[body]))]);
-        }
         let mut rec = imp.rec;
         let faces: Vec<mt::Face> = imp.shells.into_iter().flatten().collect();
-        // The section: loops of the new edges on the tool surface, outer loops counter-clockwise
-        // about its normal and holes inside them.
-        let loops = chain_loops(&new_edges)?;
-        let polys: Vec<Vec<(f64, f64)>> = loops.iter().map(|l| loop_uv(&surface, &l.clone().into())).collect();
-        let signed = |p: &[(f64, f64)]| {
-            (0..p.len())
-                .map(|i| {
-                    let (a, b) = (p[i], p[(i + 1) % p.len()]);
-                    a.0 * b.1 - b.0 * a.1
-                })
-                .sum::<f64>()
-        };
-        let depth: Vec<usize> = (0..loops.len())
-            .map(|i| {
-                let q = polys.get(i).and_then(|p| p.first()).copied().unwrap_or((0.0, 0.0));
-                (0..loops.len()).filter(|&j| j != i && polys.get(j).is_some_and(|p| inside(p, q))).count()
-            })
-            .collect();
-        let wire = |i: usize, ccw: bool| -> mt::Wire {
-            let w: mt::Wire = loops.get(i).cloned().unwrap_or_default().into();
-            let is_ccw = polys.get(i).is_some_and(|p| signed(p) > 0.0);
-            if is_ccw == ccw { w } else { w.inverse() }
-        };
-        let mut section = Vec::new();
-        // On a surface of revolution, loops that run once round it (a cylinder through a box:
-        // its circles at the top and bottom) bound bands: taken in order along the profile,
-        // each pair is one face, the lower loop running back round and the upper forward.
-        let mut wrapping = vec![false; loops.len()];
-        if let mt::Surface::RevolutedCurve(rc) = &surface {
-            let (o, axis) = (rc.entity().origin(), rc.entity().axis().normalize());
-            let x0 = if axis.x.abs() < 0.9 { mt::Vector3::unit_x() } else { mt::Vector3::unit_y() };
-            let ex = (x0 - axis * x0.dot(axis)).normalize();
-            let ey = axis.cross(ex);
-            let tau = std::f64::consts::TAU;
-            let samples = |w: &mt::Wire| -> Vec<mt::Point3> {
-                w.edge_iter()
-                    .flat_map(|e| {
-                        let c = e.oriented_curve();
-                        let (t0, t1) = c.range_tuple();
-                        (0..32).map(move |k| c.subs(t0 + (t1 - t0) * k as f64 / 32.0)).collect::<Vec<_>>()
+        // The section bounded by `edges`: their loops on the tool surface, outer loops counter-
+        // clockwise about its normal and holes inside them.
+        let section_of = |new_edges: &[mt::Edge]| -> Result<Vec<mt::Face>> {
+            let loops = chain_loops(new_edges)?;
+            let polys: Vec<Vec<(f64, f64)>> = loops.iter().map(|l| loop_uv(&surface, &l.clone().into())).collect();
+            let signed = |p: &[(f64, f64)]| {
+                (0..p.len())
+                    .map(|i| {
+                        let (a, b) = (p[i], p[(i + 1) % p.len()]);
+                        a.0 * b.1 - b.0 * a.1
                     })
-                    .collect()
+                    .sum::<f64>()
             };
-            let mut bands: Vec<(f64, usize)> = Vec::new();
-            for (i, l) in loops.iter().enumerate() {
-                let pts = samples(&l.clone().into());
-                let ang = |p: &mt::Point3| (p - o).dot(ey).atan2((p - o).dot(ex));
-                let turn: f64 = (0..pts.len())
-                    .map(|k| {
-                        let d = ang(&pts[(k + 1) % pts.len()]) - ang(&pts[k]);
-                        d - tau * (d / tau).round()
-                    })
-                    .sum();
-                if (turn.abs() - tau).abs() < 0.1 {
-                    let along = pts.iter().map(|p| (p - o).dot(axis)).sum::<f64>() / pts.len().max(1) as f64;
-                    bands.push((along, i));
-                    if let Some(w) = wrapping.get_mut(i) {
-                        *w = true;
+            let depth: Vec<usize> = (0..loops.len())
+                .map(|i| {
+                    let q = polys.get(i).and_then(|p| p.first()).copied().unwrap_or((0.0, 0.0));
+                    (0..loops.len()).filter(|&j| j != i && polys.get(j).is_some_and(|p| inside(p, q))).count()
+                })
+                .collect();
+            let wire = |i: usize, ccw: bool| -> mt::Wire {
+                let w: mt::Wire = loops.get(i).cloned().unwrap_or_default().into();
+                let is_ccw = polys.get(i).is_some_and(|p| signed(p) > 0.0);
+                if is_ccw == ccw { w } else { w.inverse() }
+            };
+            let mut section = Vec::new();
+            // On a surface of revolution, loops that run once round it (a cylinder through a box:
+            // its circles at the top and bottom) bound bands: taken in order along the profile,
+            // each pair is one face, the lower loop running back round and the upper forward.
+            let mut wrapping = vec![false; loops.len()];
+            if let mt::Surface::RevolutedCurve(rc) = &surface {
+                let (o, axis) = (rc.entity().origin(), rc.entity().axis().normalize());
+                let x0 = if axis.x.abs() < 0.9 { mt::Vector3::unit_x() } else { mt::Vector3::unit_y() };
+                let ex = (x0 - axis * x0.dot(axis)).normalize();
+                let ey = axis.cross(ex);
+                let tau = std::f64::consts::TAU;
+                let samples = |w: &mt::Wire| -> Vec<mt::Point3> {
+                    w.edge_iter()
+                        .flat_map(|e| {
+                            let c = e.oriented_curve();
+                            let (t0, t1) = c.range_tuple();
+                            (0..32).map(move |k| c.subs(t0 + (t1 - t0) * k as f64 / 32.0)).collect::<Vec<_>>()
+                        })
+                        .collect()
+                };
+                let mut bands: Vec<(f64, usize)> = Vec::new();
+                for (i, l) in loops.iter().enumerate() {
+                    let pts = samples(&l.clone().into());
+                    let ang = |p: &mt::Point3| (p - o).dot(ey).atan2((p - o).dot(ex));
+                    let turn: f64 = (0..pts.len())
+                        .map(|k| {
+                            let d = ang(&pts[(k + 1) % pts.len()]) - ang(&pts[k]);
+                            d - tau * (d / tau).round()
+                        })
+                        .sum();
+                    if (turn.abs() - tau).abs() < 0.1 {
+                        let along = pts.iter().map(|p| (p - o).dot(axis)).sum::<f64>() / pts.len().max(1) as f64;
+                        bands.push((along, i));
+                        if let Some(w) = wrapping.get_mut(i) {
+                            *w = true;
+                        }
                     }
                 }
-            }
-            bands.sort_by(|a, b| a.0.total_cmp(&b.0));
-            // A loop runs so that the band (towards `toward` along the axis) is on its left about
-            // the surface normal.
-            let oriented = |i: usize, toward: f64| -> mt::Wire {
-                let w: mt::Wire = loops.get(i).cloned().unwrap_or_default().into();
-                let pts = samples(&w);
-                let (Some(p), Some(q)) = (pts.first(), pts.get(1)) else { return w };
-                let n = surface.search_nearest_parameter(*p, None, 50).map(|(u, v)| surface.normal(u, v)).unwrap_or(axis);
-                let left = n.cross(q - p);
-                if left.dot(axis) * toward >= 0.0 { w } else { w.inverse() }
-            };
-            for pair in bands.chunks(2) {
-                let [(_, lo), (_, hi)] = pair else { return Err(KernelError::Failed("an unmatched band edge in the section".into())) };
-                section.push(mt::Face::new_unchecked(vec![oriented(*lo, 1.0), oriented(*hi, -1.0)], surface.clone()));
-            }
-        }
-        for (i, d) in depth.iter().enumerate() {
-            if d % 2 != 0 || wrapping.get(i).copied().unwrap_or(false) {
-                continue;
-            }
-            let mut ws = vec![wire(i, true)];
-            for (j, dj) in depth.iter().enumerate() {
-                let q = polys.get(j).and_then(|p| p.first()).copied().unwrap_or((0.0, 0.0));
-                if *dj == d + 1 && polys.get(i).is_some_and(|p| inside(p, q)) {
-                    ws.push(wire(j, false));
+                bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+                // A loop runs so that the band (towards `toward` along the axis) is on its left about
+                // the surface normal.
+                let oriented = |i: usize, toward: f64| -> mt::Wire {
+                    let w: mt::Wire = loops.get(i).cloned().unwrap_or_default().into();
+                    let pts = samples(&w);
+                    let (Some(p), Some(q)) = (pts.first(), pts.get(1)) else { return w };
+                    let n = surface.search_nearest_parameter(*p, None, 50).map(|(u, v)| surface.normal(u, v)).unwrap_or(axis);
+                    let left = n.cross(q - p);
+                    if left.dot(axis) * toward >= 0.0 { w } else { w.inverse() }
+                };
+                for pair in bands.chunks(2) {
+                    let [(_, lo), (_, hi)] = pair else { return Err(KernelError::Failed("an unmatched band edge in the section".into())) };
+                    section.push(mt::Face::new_unchecked(vec![oriented(*lo, 1.0), oriented(*hi, -1.0)], surface.clone()));
                 }
             }
-            section.push(mt::Face::new_unchecked(ws, surface.clone()));
+            for (i, d) in depth.iter().enumerate() {
+                if d % 2 != 0 || wrapping.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
+                let mut ws = vec![wire(i, true)];
+                for (j, dj) in depth.iter().enumerate() {
+                    let q = polys.get(j).and_then(|p| p.first()).copied().unwrap_or((0.0, 0.0));
+                    if *dj == d + 1 && polys.get(i).is_some_and(|p| inside(p, q)) {
+                        ws.push(wire(j, false));
+                    }
+                }
+                section.push(mt::Face::new_unchecked(ws, surface.clone()));
+            }
+            Ok(section)
+        };
+        if !touching {
+            if imp.made.values().all(|m| *m == 0) || new_edges.is_empty() {
+                return Ok(None);
+            }
+            let section = section_of(&new_edges)?;
+            // Each face goes to the side its inside is on.
+            let (mut back, mut front) = (Vec::new(), Vec::new());
+            for f in faces {
+                let x = side_of(&f, g, size)?;
+                if x.abs() <= size * 1e-9 {
+                    return Err(KernelError::Invalid("not supported yet: the tool lies along a face of the body".into()));
+                }
+                if x < 0.0 {
+                    back.push(f);
+                } else {
+                    front.push(f);
+                }
+            }
+            // The section is new: it comes from nothing of the body.
+            for f in &section {
+                rec.made(f, Vec::new());
+            }
+            // The section closes the back side facing the tool's normal, the front side facing away.
+            back.extend(section.iter().cloned());
+            front.extend(section.iter().map(|f| f.inverse()));
+            return Ok(Some(Sides { back, front, section, rec, touching }));
         }
-        // Each face goes to the side its inside is on.
+        // Faces lying in the plane (#190): each side is closed by the whole of its footprint in
+        // the plane, the faces of the body lying there on that side included, as the boolean with
+        // a box whose face is in the plane closes it. Its boundary is where that side's other
+        // faces meet the plane and no face of that side goes on: the cuts, and edges of the body
+        // lying in the plane.
+        let in_plane = |e: &mt::Edge| {
+            let on = |p: mt::Point3| g.eval(from_p3(p)).abs() <= size * 1e-7 + 1e-9;
+            let c = e.curve();
+            let (t0, t1) = c.range_tuple();
+            on(e.front().point()) && on(e.back().point()) && [0.25, 0.5, 0.75].iter().all(|k| on(c.subs(t0 + (t1 - t0) * k)))
+        };
         let (mut back, mut front) = (Vec::new(), Vec::new());
         for f in faces {
+            if flat(&f) {
+                continue;
+            }
             let x = side_of(&f, g, size)?;
             if x.abs() <= size * 1e-9 {
                 return Err(KernelError::Invalid("not supported yet: the tool lies along a face of the body".into()));
@@ -1497,25 +1683,33 @@ pub fn split_body(body: &Body, tool: &SplitTool) -> Result<Vec<Body>> {
                 front.push(f);
             }
         }
-        // The section is new: it comes from nothing of the body.
-        for f in &section {
+        if back.is_empty() || front.is_empty() {
+            return Ok(None);
+        }
+        let cuts: std::collections::HashSet<mt::EdgeID> = new_edges.iter().map(|e| e.id()).collect();
+        let rim = |side: &[mt::Face]| -> Vec<mt::Edge> {
+            let mut uses: Vec<(mt::Edge, usize)> = Vec::new();
+            let edges: Vec<mt::Edge> = side
+                .iter()
+                .flat_map(|f| f.boundaries().iter().flat_map(|w| w.edge_iter().cloned().collect::<Vec<_>>()).collect::<Vec<_>>())
+                .collect();
+            for e in &edges {
+                match uses.iter_mut().find(|(x, _)| x.id() == e.id()) {
+                    Some((_, n)) => *n += 1,
+                    None => uses.push((e.clone(), 1)),
+                }
+            }
+            uses.into_iter().filter(|(e, n)| *n == 1 && (cuts.contains(&e.id()) || in_plane(e))).map(|(e, _)| e).collect()
+        };
+        let (back_section, front_section) = (section_of(&rim(&back))?, section_of(&rim(&front))?);
+        for f in back_section.iter().chain(&front_section) {
             rec.made(f, Vec::new());
         }
-        // The section closes the back side facing the tool's normal, the front side facing away.
-        back.extend(section.iter().cloned());
-        front.extend(section.iter().map(|f| f.inverse()));
-        let mut parts = Vec::new();
-        for side in [back, front] {
-            for comp in components(side) {
-                let shell = mt::Shell::from(comp);
-                if shell.shell_condition() != mt::ShellCondition::Closed {
-                    return Err(KernelError::Failed("a part of the split does not close".into()));
-                }
-                parts.push(crate::record::rebuilt(mt::Solid::new_unchecked(vec![shell]), &[&body.solid], &rec)?.with_color(body.color));
-            }
-        }
-        Ok(parts)
-    })
+        back.extend(back_section.iter().cloned());
+        front.extend(front_section.iter().map(|f| f.inverse()));
+        let section = back_section.into_iter().chain(front_section).collect();
+        Ok(Some(Sides { back, front, section, rec, touching }))
+    }
 }
 
 #[cfg(test)]

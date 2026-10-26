@@ -2432,6 +2432,12 @@ pub fn split_by_plane(body: &Body, plane: &solidcraft_geom::Plane) -> Result<Vec
 pub fn half_space(body: &Body, plane: &solidcraft_geom::Plane, positive: bool) -> Result<(Option<Body>, Body)> {
     // The box's own construction roles describe no face of the design: the cut face has none.
     let tool = half_box(body, plane, positive)?.with_face_sources(None);
+    // The body divided by the plane directly (faces lying in it included), held to the checks
+    // the boolean holds its results to: the boolean's tries at faces lying in its cap, and the
+    // nudge they end in, are what a split cost (#190).
+    if let Some(part) = plane_part(body, plane, positive, &tool) {
+        return Ok((finished(body, &tool, BoolOp::Intersect, Ok(Some(part)))?, tool));
+    }
     let (part, report) = capture_boolean_diagnostics(|| boolean(body, &tool, BoolOp::Intersect));
     // Faces of the body lying in the plane coincide with the box's cap, which the boolean may
     // only take by nudging the box, by a share of its own size: the cut face then moves off the
@@ -2459,6 +2465,25 @@ pub fn half_space(body: &Body, plane: &solidcraft_geom::Plane, positive: bool) -
     }
     merge(report);
     Ok((part?, tool))
+}
+
+/// The part of `body` on one side of `plane` made by dividing it there, when faces of the body lie
+/// in the plane ([`crate::splitface::plane_parts`]), and it passes what [`boolean_whole_with`] asks
+/// of a result of the intersection with `tool`, more strictly: the two parts' volumes add up to
+/// the body's (the box's, which bounds the boolean's, is no bound here), the same membership at the
+/// sample points, on meshes at the step it takes, and no skin of no thickness. `None` otherwise,
+/// for the boolean to decide.
+fn plane_part(body: &Body, plane: &solidcraft_geom::Plane, positive: bool, tool: &Body) -> Option<Body> {
+    let [back, front] = guard("split by a plane", || crate::splitface::plane_parts(body, plane, tool)).ok()?;
+    let size = body.size().max(tool.size());
+    let tol_m = (size * 5e-4).min(meeting_size(body, tool) * 2e-3).max(size * 1e-5);
+    let mesh = |b: &Body| b.tessellate_with(tol_m, true).ok();
+    let (ma, mb, m_back, m_front) = (mesh(body)?, mesh(tool)?, mesh(&back)?, mesh(&front)?);
+    let (va, v_back, v_front) = (ma.measure().volume, m_back.measure().volume, m_front.measure().volume);
+    let conserved = v_back > 0.0 && v_front > 0.0 && (v_back + v_front - va).abs() <= 2e-4 * va.abs() + 1e-9;
+    let (part, mr) = if positive { (front, m_front) } else { (back, m_back) };
+    let sound = conserved && !crate::coplanar::has_skin(&part, &mr) && mismatch(&ma, &mb, &mr, BoolOp::Intersect).is_none_or(|f| f < 0.004);
+    sound.then_some(part)
 }
 
 /// `body` with its planar faces lying in `plane` moved off it, a thousandth of the body's size,

@@ -3260,3 +3260,77 @@ fn recent_meshes_answer_only_for_their_own_solid() {
         assert!(same(&body.keeping_meshes().tessellate_with(tol, true).unwrap(), &first), "body {k}");
     }
 }
+
+/// A split by a plane that holds a face of the body is made by dividing the body there, not by
+/// the boolean's tries at that face lying in the box's cap (#190): a stepped block split at its
+/// step height and a stepped round shaft split at its shoulder. Each part has its analytic volume,
+/// closes, and its cut face is a piece of the box's face in the plane (its history says so, for
+/// the `section` name), while the step's face stays the body's own.
+#[test]
+fn split_through_a_face_lying_in_the_plane() {
+    let step = Region2 {
+        outer: Loop2::polygon(&[
+            Vec2::new(0.0, 0.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(40.0, 10.0),
+            Vec2::new(20.0, 10.0),
+            Vec2::new(20.0, 25.0),
+            Vec2::new(0.0, 25.0),
+        ]),
+        holes: vec![],
+    };
+    let block = extrude(&Plane::XZ, std::slice::from_ref(&step), 0.0, 15.0).unwrap().pop().unwrap();
+    let shaft = revolve(&Plane::XZ, &[step], Vec2::ZERO, Vec2::Y, std::f64::consts::TAU).unwrap().pop().unwrap();
+    // The sketch's y runs along -z: the wide step is z -10..0, the narrow one -25..-10, and the
+    // step's face lies in z = -10. The plane's normal is +z.
+    let at_step = Plane { origin: Vec3::new(0.0, 0.0, -10.0), x: Vec3::X, y: Vec3::Y };
+    let (r1, r2) = (40.0_f64, 20.0_f64);
+    for (name, body, upper, lower, tol) in
+        [("block", &block, 40.0 * 10.0 * 15.0, 20.0 * 15.0 * 15.0, 1e-9), ("shaft", &shaft, PI * r1 * r1 * 10.0, PI * r2 * r2 * 15.0, 2e-3)]
+    {
+        for (positive, want) in [(true, upper), (false, lower)] {
+            let (part, tool) = half_space(body, &at_step, positive).unwrap();
+            let part = part.unwrap();
+            let m = measure(&part).unwrap();
+            // Made by the split itself, not by the boolean.
+            let [back, front] = crate::splitface::plane_parts(body, &at_step, &tool).unwrap();
+            let direct = measure(if positive { &front } else { &back }).unwrap();
+            assert_eq!((m.faces, m.volume), (direct.faces, direct.volume), "{name} {positive}");
+            assert!(rel(m.volume, want) < tol, "{name} {positive}: volume {} want {want}", m.volume);
+            assert!(part.validity().is_empty(), "{name} {positive}: {:?}", part.validity());
+            let h = part.history().unwrap();
+            assert_eq!(h.operands, 2, "{name} {positive}");
+            let from_tool =
+                h.faces.iter().filter(|f| f.origins.iter().any(|o| matches!(o, crate::history::FaceOrigin::Face { operand: 1, .. }))).count();
+            assert_eq!(from_tool, 1, "{name} {positive}: the cut face, and only it, comes from the box ({} faces)", tool.face_count());
+        }
+    }
+}
+
+/// A split with no face of the body in the plane goes straight to the boolean: the direct split
+/// (#190) is not even begun. One with such a face is divided directly.
+#[test]
+fn a_split_with_no_face_in_the_plane_skips_the_direct_split() {
+    let count = || crate::splitface::DIRECT_SPLITS.with(|c| c.get());
+    let block = box_solid(Vec3::new(0.0, 0.0, 0.0), Vec3::new(40.0, 20.0, 10.0)).unwrap();
+    let across = Plane { origin: Vec3::new(0.0, 0.0, 4.0), x: Vec3::X, y: Vec3::Y };
+    let before = count();
+    let (part, _) = half_space(&block, &across, true).unwrap();
+    assert!(rel(measure(&part.unwrap()).unwrap().volume, 40.0 * 20.0 * 6.0) < 1e-9);
+    assert_eq!(count(), before, "the plane holds no face of the block");
+    let step = Region2 {
+        outer: Loop2::polygon(&[
+            Vec2::new(0.0, 0.0),
+            Vec2::new(40.0, 0.0),
+            Vec2::new(40.0, 10.0),
+            Vec2::new(20.0, 10.0),
+            Vec2::new(20.0, 25.0),
+            Vec2::new(0.0, 25.0),
+        ]),
+        holes: vec![],
+    };
+    let stepped = extrude(&Plane::XZ, &[step], 0.0, 15.0).unwrap().pop().unwrap();
+    let at_step = Plane { origin: Vec3::new(0.0, 0.0, -10.0), x: Vec3::X, y: Vec3::Y };
+    half_space(&stepped, &at_step, true).unwrap();
+    assert_eq!(count(), before + 1, "the plane holds the step's face");
+}
