@@ -7,9 +7,8 @@ robustness on blends, offsets and free-form work.
 - **Status:** Accepted, 2026-10-26, with the owner's decisions under [Decisions](#decisions).
 - **Author:** Claude (agent), for the owner
 - **Created:** 2026-10-26
-- **Home:** `docs/rfcs/` in wckdboy/polycore. Until that repository is created (it waits for
-  the owner's OK), the same text is in Polykrom PR
-  [#237](https://github.com/wckdboy/polykrom/pull/237).
+- **Home:** [wckdboy/polycore](https://github.com/wckdboy/polycore), `docs/rfcs/`. Polykrom
+  points here from [`docs/polycore.md`](https://github.com/wckdboy/polykrom/blob/main/docs/polycore.md).
 - **Builds on:** Polykrom's [ENGINES.md](https://github.com/wckdboy/polykrom/blob/main/docs/ENGINES.md)
   (kernel stages K0 to K7). This RFC does not change those stages. It says what the kernel
   becomes, where it lives, how the code gets there and how each step is judged.
@@ -36,11 +35,11 @@ hand-calculated or invariants. OCCT is the bar and a cross-check, never the answ
 | Direction | Consequence |
 |---|---|
 | One kernel, in Rust, named **PolyCore**; the bar is OCCT, the goal is commercial-kernel class | All kernel work goes into PolyCore. No second kernel is started. |
-| PolyCore has **its own repository and workspace** | wckdboy/polycore, Apache-2.0. Created when the owner says so. |
+| PolyCore has **its own repository and workspace** | [wckdboy/polycore](https://github.com/wckdboy/polycore), Apache-2.0. |
 | **Polykrom** is the product and PolyCore's only consumer | No C ABI, no external kernel protocol. The API is a Rust API. Polykrom stays MIT OR Apache-2.0. |
 | **Nightfall is archived** | No Nightfall work. Its useful parts are harvested ([Harvest from Nightfall](#harvest-from-nightfall)). |
 | Convergence, not rewrite | Each phase replaces one layer behind a stable boundary; the app keeps working. |
-| **TinyRex** is the flagship acceptance test | It has its own repository, wckdboy/tinyrex. The agent rebuilds it from scratch on every phase, through Polykrom's own tools, with results at least as good as the phase before. |
+| **TinyRex** is the flagship acceptance test | It has its own repository, [wckdboy/tinyrex](https://github.com/wckdboy/tinyrex). The agent rebuilds it from scratch on every phase, through Polykrom's own tools, with results at least as good as the phase before. |
 
 ## Where we start
 
@@ -305,13 +304,15 @@ closing PR:
 
 TinyRex is a walking robot built in Polykrom through Polykrom's own AI tooling: the MCP
 server, engine commands and the control channel. It found #216 (MJCF meshes with gaps) and the
-free-form shell cases behind #194. It lives in its own repository, **wckdboy/tinyrex**, which
-PolyCore and Polykrom reference by revision. That repository holds the spec, the prompt, the
-hand-worked checks and every phase's results.
+free-form shell cases behind #194. It lives in its own repository, [wckdboy/tinyrex](https://github.com/wckdboy/tinyrex), which PolyCore and
+Polykrom reference by revision. It holds the staged briefs
+([`spec/stages.md`](https://github.com/wckdboy/tinyrex/blob/main/spec/stages.md)), the harness
+that runs them ([`harness/`](https://github.com/wckdboy/tinyrex/tree/main/harness)), the design
+and every run's reports ([`results/`](https://github.com/wckdboy/tinyrex/tree/main/results)).
 
-On every phase the agent builds TinyRex **from an empty design**, using only Polykrom's tools,
-on Polykrom pinned to that phase's PolyCore. Polykrom's `tools/agent-eval` runs the task from
-wckdboy/tinyrex and grades the saved design, never the agent's account of it.
+On every phase the agent builds TinyRex **from an empty design**, stage by stage, using only
+Polykrom's tools, on Polykrom pinned to that phase's PolyCore. TinyRex's harness runs the stages;
+the grading reads the saved design, never the agent's account of it.
 
 | Measure | At least as good means |
 |---|---|
@@ -324,7 +325,8 @@ wckdboy/tinyrex and grades the saved design, never the agent's account of it.
 | Agent | Turns, wall time and cost: median within 1.25× of the phase before (agent runs vary). |
 
 The agent runs three times per phase; the gate reads the median run, and all three reports
-go to wckdboy/tinyrex. Phase 0 records the baseline on truck.
+go to [wckdboy/tinyrex](https://github.com/wckdboy/tinyrex). Phase 0 records the baseline on truck and adds the hand-worked checks the
+grading needs to the spec.
 
 ### The bake-off against OCCT
 
@@ -417,7 +419,7 @@ Checked and excluded:
 
 | Phase | ENGINES | What | Phase-specific exit gate | Effort (eng.-months, AI-assisted) |
 |---|---|---|---|---|
-| **0 Extraction and harness** | K0 | Create wckdboy/polycore (on the owner's OK). Move `crates/kernel`, `crates/geom`, the vendored truck crates (renamed `polycore-truck-*`, with truck-topology and truck-modeling added) and `tests/kernel-cases` into it; Polykrom switches to the pinned git dependency. Extract the `Kernel` trait with no behaviour change. Build `polycore-bench`: the RFC 0001 rubric, the OCCT reference program, Nightfall's 20 reference parts. Create wckdboy/tinyrex with the spec and checks. Record every baseline. | Polykrom builds and passes CI on the pinned revision with identical kernel-case, ladder and reference-test results; PolyCore CI green; first bake-off score published; TinyRex baseline run on truck. | 1–2 |
+| **0 Extraction and harness** | K0 | Move `crates/kernel`, `crates/geom`, the vendored truck crates (renamed `polycore-truck-*`, with truck-topology and truck-modeling added) and `tests/kernel-cases` into it; Polykrom switches to the pinned git dependency. Extract the `Kernel` trait with no behaviour change. Build `polycore-bench`: the RFC 0001 rubric, the OCCT reference program, Nightfall's 20 reference parts. Add hand-worked checks to TinyRex's spec. Record every baseline. | Polykrom builds and passes CI on the pinned revision with identical kernel-case, ladder and reference-test results; PolyCore CI green; first bake-off score published; TinyRex baseline run on truck. | 1–2 |
 | **1 Own geometry and topology** | K1 | `polycore-math`, `-geom`, `-topo`, `-mesh`; analytic surfaces first-class; model resolution 1e-6 mm, fixed after measuring the corpus; tolerant edges and vertices, p-curves; the validity checker; tessellation and STEP export off truck; mass properties from the exact B-rep; analysis meshes and analytic contact primitives. Truck survives only in `polycore-legacy`. At the end, re-evaluate adopting solidcore wholesale. | Tessellation 14/14; #216 closed (watertight meshes and B-rep inertia in MJCF); volume and area within 1e-6 relative on every analytic reference test; every corpus body round-trips truck ↔ PolyCore exactly; the solidcore re-evaluation published. | 2–4 |
 | **2 Booleans** | K2 | General-fuse pipeline (coincidences settled lowest dimension first), the analytic SSI table, the existing BVH broad phase, procedural intersection curves, classification by ray casting with winding numbers as fallback. The truck booleans, the retry ladder and the special-case modules are deleted as their cases pass. Kernel-level case format. | Booleans ≥ 84/89 and crashes 10/10; ladder tier 02 20/20; no hangs; boolean median time ≤ half of truck's; bake-off target. | 4–8 |
 | **3 Free-form SSI, sweeps, lofts** | K3 | Subdivision seeding with normal-cone loop tests, marching, tangent and overlap handling; sweeps and lofts on PolyCore topology; USD `omniSolid`. | SSI corpus 119/119; sweeps ≥ 78/83; surfaces ≥ 6/8; import ≥ 22/23; bake-off target. | 6–12 |
@@ -472,7 +474,7 @@ Paths are in wckdboy/nightfall at its final `main`, `f4a8de0`.
 | `core/sketch/rust` | The sketch solver Nightfall vendored from SolidCraft | Nothing | – | Polykrom already has it. |
 | `services/study/src` (RFC 0014) | Netgen meshing, a custom sparse Cholesky, MFEM physics (P2 elasticity and heat), units; the cantilever and thermal checks within 2 % | Polykrom's `crates/study` ([Study program](#the-study-program)) | Study track, alongside Phases 0–1 | Replaced natively. The physics, the units and the checks are the reference the Rust code must match; Netgen and the custom Cholesky are dropped (fTetWild and faer instead). |
 | P2 field display (#336) | The mid-edge-node logic: each P2 surface triangle drawn as four through its mid-edge values, so the field's maximum equals the reported one to 1e-9 | Polykrom's `crates/study` (field output) and its stress contours (#29) | Study track | Port the logic and its 1e-9 check. The Swift and Metal drawing does not carry over. |
-| `agent/evals` (`run.py`, #259) | A provider-agnostic eval runner: build, edit and repair tasks; a deterministic `reference` runner that checks the harness and the MCP contract without a model; `SKIP` for sessions that could not start; `--resume`; the rule that the pass rate may not drop | Polykrom's `tools/agent-eval` | 0 | Port it; it runs the TinyRex gate from wckdboy/tinyrex. Polykrom's harness keeps its parts and systems rounds. |
+| `agent/evals` (`run.py`, #259) | A provider-agnostic eval runner: build, edit and repair tasks; a deterministic `reference` runner that checks the harness and the MCP contract without a model; `SKIP` for sessions that could not start; `--resume`; the rule that the pass rate may not drop | Polykrom's `tools/agent-eval` | 0 | Port it. Polykrom's harness keeps its parts and systems rounds; TinyRex keeps its own staged harness. |
 | `examples/parts` | 20 reference parts with analytic answers, the corpus of Nightfall's bake-off | Polykrom's `tests/oracle/` as recipes, and `polycore-bench` | 0 | Re-express each as a Polykrom recipe with its analytic answer. |
 | `tools/bakeoff` (RFC 0001) | The rubric, the decision rule, the per-process runner (crashes become results), sanitiser runs, the history probe, findings F1–F13 | `polycore-bench` | 0 | Port the Python runner and scoring. The C++ kernel drivers stay behind; OCCT is reached through the frozen `nf` ([The OCCT reference program](#the-occt-reference-program)). |
 | `core/ir/schema` (RFC 0005) and `tools/cli/mcp.cpp` | The selector and generative-name design (references by how an entity came to be, narrowed by geometry; cardinality `expect`), per-feature content hashes, and the MCP tool design | Polykrom's `crates/doc` and `crates/mcp`, as design reference | Polykrom, after Phase 0 | Polykrom's names already follow exact kernel history, which is stronger than generative names plus OCCT's `Modified`/`Generated`. Take three ideas: a reference that resolves to the wrong count is an error with a pointer, never a guess; geometric filters (`type`, `normal`, `near`, `radius`, `convex`) as an agent-facing query in MCP; per-feature content hashes, measured against today's dependency-aware rebase before adopting. Compare the MCP tool set with Polykrom's and take what is missing. No code or schema is taken. |
@@ -616,7 +618,7 @@ claim otherwise.
 - **PolyCore** is the kernel: the wckdboy/polycore repository and its `polycore` and
   `polycore-*` crates. Polykrom's own crates keep their `solidcraft-*` names (Polykrom's
   AGENTS.md: not renamed piecemeal).
-- **TinyRex** is the flagship robot and its repository, wckdboy/tinyrex.
+- **TinyRex** is the flagship robot and its repository, [wckdboy/tinyrex](https://github.com/wckdboy/tinyrex).
 
 ## Decisions
 
@@ -625,14 +627,14 @@ final one is listed.
 
 | # | Topic | Decision |
 |---|---|---|
-| 1 | Where PolyCore lives | Its own repository and workspace, wckdboy/polycore, closely tied to Polykrom. Created only on the owner's explicit OK. Phase 0 extracts `crates/kernel` and the vendored truck into it. Polykrom consumes it as a git dependency pinned by revision, with an untracked `[patch]` to a local checkout for joint development. PolyCore CI runs the kernel cases and the ladder; Polykrom CI pins and tests a PolyCore revision. |
+| 1 | Where PolyCore lives | Its own repository and workspace, [wckdboy/polycore](https://github.com/wckdboy/polycore), closely tied to Polykrom; created on the owner's OK on 2026-10-26. Phase 0 extracts `crates/kernel` and the vendored truck into it. Polykrom consumes it as a git dependency pinned by revision, with an untracked `[patch]` to a local checkout for joint development. PolyCore CI runs the kernel cases and the ladder; Polykrom CI pins and tests a PolyCore revision. |
 | 2 | solidcore | A reference to port from, watched for improvements. Any unit that wins on our corpus is ported. Anything we build that helps it goes upstream to tangency-labs/solidcore as PRs; bugs we can't fix go as reports. At the end of Phase 1, adopting it wholesale is re-evaluated on our corpus. |
 | 3 | The bar | OCCT. The goal is an open-source kernel that rivals the commercial kernels. |
 | 4 | OCCT reference program | A frozen, pinned Nightfall `nf` build used as a tool, since it reports operation history. Commit and recipe under [The OCCT reference program](#the-occt-reference-program). |
 | 5 | Model tolerance | 1e-6 mm, fixed in Phase 1 after measuring the corpus. |
 | 6 | Bake-off targets | As listed under [The bake-off against OCCT](#the-bake-off-against-occt). |
 | 7 | Test models | No models made in commercial CAD; ABC, Fusion 360 Gallery and NIST are out. Our own cases, plus existing high-quality open models with permissive licences made in open tools ([Test models](#test-models)). |
-| 8 | TinyRex | Its own repository, wckdboy/tinyrex, referenced by PolyCore and Polykrom. The gate points there: rebuilt from scratch by the agent on every phase, judged on the median of three runs. |
+| 8 | TinyRex | Its own repository, [wckdboy/tinyrex](https://github.com/wckdboy/tinyrex), referenced by PolyCore and Polykrom. The gate points there: rebuilt from scratch by the agent on every phase, judged on the median of three runs. |
 | 9 | Study program | Lives in Polykrom, integrated as natively as licences allow; PolyCore supplies analysis-ready geometry. Recommended: Rust-native P2 FEA with faer in process, fTetWild as a separate program (GMP prevents linking it), MFEM as a separate program for heavier physics. Netgen is dropped. ([The study program](#the-study-program).) |
 | 10 | Licences | PolyCore is Apache-2.0, with `NOTICE` entries for anything ported from SMLib or solidcore. Polykrom stays MIT OR Apache-2.0. |
 | 11 | Nightfall | Archived now (2026-10-26). Another agent handles the notices. The harvest reads from the archive. |
