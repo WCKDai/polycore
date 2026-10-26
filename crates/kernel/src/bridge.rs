@@ -769,6 +769,12 @@ pub fn bridge_tangent(a: &[Frame], b: &[Frame], orders: [Continuity; 2], crown: 
     if n == 0 || n > solidcraft_geom::bspline::MAX_SPLINE_DEGREE {
         return Err(KernelError::Failed("bridge: degree".into()));
     }
+    if folds(orders, n, [tangent[0] * (1.0 + crown_a), tangent[1] * (1.0 + crown_b)])? {
+        return Err(KernelError::Invalid(
+            "a blend's tangent share and crown together make it leave so fast that its cross-section would fold back on itself: lower one of them"
+                .into(),
+        ));
+    }
     let mut layers: Vec<Vec<Vec3>> = vec![Vec::with_capacity(stations); n + 1];
     for (fa, fb) in a.iter().zip(b) {
         if !fa.p.is_finite() || !fb.p.is_finite() || !fa.leave.is_finite() || !fb.leave.is_finite() {
@@ -808,6 +814,26 @@ pub fn bridge_tangent(a: &[Frame], b: &[Frame], orders: [Continuity; 2], crown: 
     let points: Vec<HPoint> = ctrl.iter().map(|p| HPoint::weighted(*p, 1.0)).collect();
     let nurbs = NurbsSurface::from_homogeneous([degree, n], [knots_u, knots_v], points).map_err(|e| KernelError::Failed(format!("bridge: {e}")))?;
     guard("bridge surface", || crate::spline_conv::tensor_face(&nurbs).map(|f| surface_body(vec![f])))
+}
+
+/// Whether cross-sections leaving each end at `speed` (in chords) can fold back on themselves.
+/// Leaving fast folds soonest between two rims facing each other in one plane: the cross-section's
+/// controls then lie on the chord, and it folds where their curve runs backwards along it. The
+/// legacy share never folds there, even at the largest crown.
+fn folds(orders: [Continuity; 2], n: usize, speed: [f64; 2]) -> Result<bool> {
+    let a = Frame { p: Vec3::ZERO, leave: Vec3::X, bend: Vec3::ZERO, bend_change: Vec3::ZERO };
+    let b = Frame { p: Vec3::X, leave: Vec3::X * -1.0, bend: Vec3::ZERO, bend_change: Vec3::ZERO };
+    let c = section(&a, &b, orders, n, speed)?;
+    // The hodograph's control values along the chord, and its value by de Casteljau's steps.
+    let d: Vec<f64> = c.windows(2).map(|w| w.get(1).map_or(0.0, |q| q.x) - w.first().map_or(0.0, |p| p.x)).collect();
+    let along = |t: f64| {
+        let mut v = d.clone();
+        while v.len() > 1 {
+            v = v.windows(2).map(|w| w.first().copied().unwrap_or(0.0) * (1.0 - t) + w.get(1).copied().unwrap_or(0.0) * t).collect();
+        }
+        v.first().copied().unwrap_or(0.0)
+    };
+    Ok((0..=256).any(|i| along(i as f64 / 256.0) < -1e-12))
 }
 
 /// The surface of a bridge face as a grid of points, for callers that measure the result.

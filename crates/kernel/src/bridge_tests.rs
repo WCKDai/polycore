@@ -380,6 +380,27 @@ fn a_blend_leaving_at_the_chords_speed_is_the_hermite_strip() {
 }
 
 #[test]
+fn a_blend_leaving_so_fast_that_it_folds_is_refused() {
+    // Two boxes' top rims facing each other in one plane (z = 10, y = 10 and y = 20): each end
+    // leaves along the chord, and a G1 cross-section's controls are 0, s/3, 1 - s/3 and 1 along
+    // it for a speed s in chords. Its hodograph's controls s, 3 - 2s, s stay above the axis while
+    // 3 - 2s >= -s, s <= 3: tangent share 1 at crown 2 is the most, crown 3 (s = 4) folds.
+    let a = box_solid(Vec3::new(0.0, 0.0, 0.0), Vec3::new(40.0, 10.0, 10.0)).unwrap();
+    let b = box_solid(Vec3::new(0.0, 20.0, 0.0), Vec3::new(40.0, 30.0, 10.0)).unwrap();
+    let (pa, pb) = ([Vec3::new(20.0, 10.0, 10.0)], [Vec3::new(20.0, 20.0, 10.0)]);
+    let g1 = [Continuity::G1; 2];
+    let blend = |orders, crown: f64, share: f64| blend_between_tangent(&a, &pa, &b, &pb, orders, [crown; 2], [share; 2], None, None, 9, false);
+    let err = blend(g1, 3.0, BLEND_TANGENT);
+    assert!(matches!(&err, Err(KernelError::Invalid(m)) if m.contains("fold")), "{err:?}");
+    assert!(blend(g1, 1.9, BLEND_TANGENT).is_ok());
+    // The legacy share never folds, at the largest crown and any order: blends saved with it
+    // still build.
+    for orders in [[Continuity::G1, Continuity::G2], [Continuity::G2; 2], [Continuity::G3; 2], [Continuity::G0, Continuity::G3]] {
+        assert!(blend(orders, 3.0, LEGACY_BLEND_TANGENT).is_ok(), "{orders:?}");
+    }
+}
+
+#[test]
 fn a_picked_seam_sets_where_a_closed_blend_starts() {
     // The same coaxial rims as above, but the upper chain told to start a quarter round from where
     // the lower one starts: the blend then turns a quarter round the axis, as asked.
