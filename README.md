@@ -18,6 +18,10 @@ with their Git history from `crates/kernel` and `crates/geom` into `crates/polyc
 source/consumer revision is in `polykrom.rev`. The public package names remain `solidcraft-kernel`
 and `solidcraft-geom` until Polykrom's coordinated rename stage.
 
+The repository also holds the [bake-off and gate harness](bench/README.md) and its first
+[scorecard](bench/scorecard.md): today's Polykrom kernel measured against OpenCASCADE on the
+kernel cases and ladder, with determinism and per-engine evidence.
+
 The standalone native/wasm workspace and development tasks are the first extraction arc.
 Polykrom's pinned git dependency, the complete corpus gate, the OCCT bake-off and the remaining
 Phase 0 baselines are not claimed complete yet. At `polykrom.rev` the tree has 400 regression
