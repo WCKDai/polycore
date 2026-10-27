@@ -330,9 +330,20 @@ fn chain_polyline(chain: &[mt::Edge]) -> Result<Vec<Vec3>> {
     Ok(out)
 }
 
-/// The point at the middle of a chain, by length.
+/// The point at the middle of a chain, by length: on the edge's own curve, at the parameter
+/// between the two samples it falls between (a point between them on the chord would stand off
+/// a curved edge by up to the chord's sagitta).
 fn chain_mid(chain: &[mt::Edge]) -> Result<Vec3> {
     let poly = chain_polyline(chain)?;
+    // Each sample's edge and parameter, in the order `chain_polyline` takes them.
+    let params: Vec<(usize, f64)> = chain
+        .iter()
+        .enumerate()
+        .flat_map(|(i, e)| {
+            let (t0, t1) = e.oriented_curve().range_tuple();
+            (0..=PER_EDGE).map(move |k| (i, t0 + (t1 - t0) * k as f64 / PER_EDGE as f64))
+        })
+        .collect();
     let mut cum = Vec::with_capacity(poly.len());
     cum.push(0.0);
     for w in poly.windows(2) {
@@ -354,6 +365,31 @@ fn chain_mid(chain: &[mt::Edge]) -> Result<Vec3> {
     };
     let span = up - lo;
     let t = if span > 1e-12 { (half - lo) / span } else { 0.0 };
+    // Both samples on one edge: that edge's curve between their parameters. (Consecutive samples
+    // on two edges are the same point, the vertex they share.)
+    if let (Some(&(ea, ta)), Some(&(eb, tb))) = (params.get(hi - 1), params.get(hi))
+        && ea == eb
+        && let Some(e) = chain.get(ea)
+    {
+        // The parameter whose point is the remaining length on from `a`, by bisection: a curve's
+        // parameter need not run evenly with its length (a NURBS), though within one sample
+        // interval the chord stands for the arc.
+        let c = e.oriented_curve();
+        let want = (half - lo).max(0.0);
+        let (mut l, mut r) = (ta, tb);
+        for _ in 0..40 {
+            let m = 0.5 * (l + r);
+            if from_p3(c.subs(m)).dist(*a) < want {
+                l = m;
+            } else {
+                r = m;
+            }
+        }
+        let p = from_p3(c.subs(0.5 * (l + r)));
+        if p.is_finite() {
+            return Ok(p);
+        }
+    }
     Ok(*a + (*b - *a) * t)
 }
 
@@ -447,26 +483,40 @@ fn side_edges(face: &mt::Face, side: Side, tol: f64) -> Result<Vec<mt::Edge>> {
 /// best first: the face a match continues from, and the ones it might have been read from.
 fn support_faces(target: &Body, chain: &[mt::Edge], leave: Vec3) -> Result<Vec<(mt::Face, f64)>> {
     let mid = chain_mid(chain)?;
-    let tol = target.size() * 1e-6 + 1e-9;
+    // The chain's edges are the face's own, so its middle only has to land as near the face as
+    // the target's shape is read there (`bridge::frames`, a ten-thousandth of the chain): an edge
+    // a trim traced across a face lies that near it, not on it to the last digit.
+    let poly = chain_polyline(chain)?;
+    let length: f64 = poly.windows(2).filter_map(|w| Some(w.first()?.dist(*w.get(1)?))).sum();
+    let tol = (length * 1e-4).max(target.size() * 1e-6 + 1e-9);
     let mut out: Vec<(mt::Face, f64)> = Vec::new();
+    // What the faces bounded by the chain came to, for the refusal: (how far, how much of the
+    // leave direction their tangent plane holds).
+    let mut seen: Vec<(f64, f64)> = Vec::new();
     for face in target.solid.face_iter() {
         if !chain.iter().all(|e| face.edge_iter().any(|f| f.id() == e.id())) {
             continue;
         }
-        let Some((n, d)) = normal_near(face, mid) else { continue };
-        if d > tol {
+        let Some((n, d)) = normal_near(face, mid) else {
+            seen.push((f64::INFINITY, 0.0));
             continue;
-        }
+        };
         let score = (leave - n * leave.dot(n)).len();
-        if score.is_finite() && score >= 0.2 {
+        seen.push((d, score));
+        if d <= tol && score.is_finite() && score >= 0.2 {
             out.push((face.clone(), score));
         }
     }
     if out.is_empty() {
-        return Err(KernelError::Invalid(
-            "no face of the target holds the picked edges in the direction the match leaves in: pick the chain of a face the surface can continue"
-                .into(),
-        ));
+        let found = if seen.is_empty() {
+            "no face is bounded by all the picked edges".to_string()
+        } else {
+            let each: Vec<String> = seen.iter().map(|(d, s)| format!("{d:.1e} mm off (within {tol:.1e}), holding {s:.2} of it")).collect();
+            format!("the faces they bound: {}", each.join("; "))
+        };
+        return Err(KernelError::Invalid(format!(
+            "no face of the target holds the picked edges in the direction the match leaves in ({found}): pick the chain of a face the surface can continue"
+        )));
     }
     out.sort_by(|a, b| b.1.total_cmp(&a.1));
     Ok(out)
