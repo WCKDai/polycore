@@ -25,7 +25,7 @@ src="$dir/polykrom"
 
 if [[ ! -d "$src/.git" ]]; then
   git init -q "$src"
-  git -C "$src" remote add origin https://github.com/wckdboy/polykrom.git
+  git -C "$src" remote add origin https://github.com/WCKDai/polykrom.git
 fi
 git -C "$src" fetch -q --depth 1 origin "$POLYKROM_REV"
 git -C "$src" checkout -q --force --detach "$POLYKROM_REV"

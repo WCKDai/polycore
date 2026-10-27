@@ -7,6 +7,7 @@ on:
   merge_group:
   schedule:
     - cron: "0 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,12 +18,44 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: 2
+  CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: 4
 
 jobs:
-  rust:
+  pull-request:
+    name: Rust / wasm (Ubuntu PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: polycore-pr-linux
+          cache-on-failure: true
+      - name: Format, check, Clippy, tests, wasm and dependency boundary
+        run: cargo xtask ci
+
+  full:
     name: Rust / wasm (${{ matrix.os }})
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    environment: ci
+    env:
+      R2_CONFIGURED: ${{ vars.R2_CONFIGURED }}
+      RUSTC_WRAPPER: ${{ vars.R2_CONFIGURED == 'true' && 'sccache' || '' }}
+      SCCACHE_BUCKET: ${{ vars.R2_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+      SCCACHE_REGION: ${{ vars.SCCACHE_REGION }}
+      SCCACHE_S3_USE_SSL: ${{ vars.SCCACHE_S3_USE_SSL }}
+      SCCACHE_S3_KEY_PREFIX: ${{ vars.SCCACHE_S3_KEY_PREFIX }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -33,17 +66,29 @@ jobs:
         with:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
+      - name: Install sccache
+        if: vars.R2_CONFIGURED == 'true'
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: polycore-full-${{ matrix.os }}
+          cache-on-failure: true
+          cache-targets: false
       - name: Format, check, Clippy, tests, wasm and dependency boundary
         run: cargo xtask ci
+
   property-tests:
     name: Boolean properties (nightly)
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: polycore-properties-linux
+          cache-on-failure: true
       - run: cargo xtask property-test
         env:
           PROPTEST_CASES: 200

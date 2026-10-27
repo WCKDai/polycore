@@ -3,6 +3,7 @@
 
 mod kernel_cases;
 mod kernel_ladder;
+mod task;
 mod test;
 
 use std::path::PathBuf;
@@ -44,8 +45,11 @@ fn run() -> Result<(), String> {
         "property-test" => run_cargo(&["test", "-p", "solidcraft-kernel", "--test", "boolean_props", "--profile", "ci", "--locked"]),
         "wasm" => wasm(),
         "verify-deps" => verify_deps(),
+        "task-check" => task::check(rest.first().copied().ok_or("task-check needs a JSON task path")?),
         "kernel-cases" => kernel_cases::run(&rest),
-        _ => Err(format!("unknown task {command:?}; expected ci, fmt, check, build, clippy, test, property-test, wasm, verify-deps or kernel-cases")),
+        _ => Err(format!(
+            "unknown task {command:?}; expected ci, fmt, check, build, clippy, test, property-test, wasm, verify-deps, task-check or kernel-cases"
+        )),
     }
 }
 
@@ -55,7 +59,8 @@ fn ci() -> Result<(), String> {
     run_cargo(&["clippy", "--workspace", "--all-targets", "--profile", "ci", "--locked", "--", "-D", "warnings"])?;
     test()?;
     wasm()?;
-    verify_deps()
+    verify_deps()?;
+    task::check("agent/tasks/example.json")
 }
 
 fn test() -> Result<(), String> {

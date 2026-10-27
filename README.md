@@ -5,7 +5,7 @@ commercial kernels: exact B-rep geometry and topology (NURBS and analytic), bool
 offsets, shells, sweeps and lofts, exact face and edge history, watertight tessellation, mass
 properties, and analysis-ready geometry for simulation.
 
-PolyCore is the kernel of [Polykrom](https://github.com/wckdboy/polykrom), an open,
+PolyCore is the kernel of [Polykrom](https://github.com/WCKDai/polykrom), an open,
 agent-drivable parametric CAD app. Polykrom is its only consumer. Parameters, features, names
 and assemblies stay in Polykrom; PolyCore takes geometry in and returns geometry with its history.
 
@@ -50,7 +50,12 @@ cargo xtask test          # native unit, integration and doc tests
 cargo xtask wasm          # kernel and geometry on wasm32
 cargo xtask verify-deps   # the renamed, local-only Truck package closure
 cargo xtask ci            # fmt, check, Clippy, tests, wasm and dependency checks
+cargo xtask task-check agent/tasks/example.json  # bounded agent task packet
 ```
+
+Multi-agent ownership, model routing, evidence and token/cost policy are in
+[`agent/README.md`](agent/README.md). GitHub environment/secret setup and R2-backed sccache are in
+[`docs/operations/github-environments.md`](docs/operations/github-environments.md).
 
 ## Gates
 

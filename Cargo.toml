@@ -10,7 +10,7 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.95"
 authors = ["PolyCore contributors"]
-repository = "https://github.com/wckdboy/polycore"
+repository = "https://github.com/WCKDai/polycore"
 
 [workspace.dependencies]
 solidcraft-geom = { path = "crates/solidcraft-geom" }
