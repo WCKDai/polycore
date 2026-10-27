@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - rust-16
+    - trusted
