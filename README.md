@@ -11,8 +11,9 @@ and assemblies stay in Polykrom; PolyCore takes geometry in and returns geometry
 
 ## Status
 
-Phase 0 is underway. [RFC 0001](docs/rfcs/0001-polycore.md), accepted on 2026-10-26, is the
-design and exit-gate contract. This workspace contains Polykrom's kernel and geometry, extracted
+Phase 0 is underway. [RFC 0001](docs/rfcs/0001-polycore.md) is the extraction and phase-gate
+contract; [RFC 0002](docs/rfcs/0002-ai-native-engineering-platform.md) defines the expanded
+AI-native CAD, simulation, robotics and USD architecture. This workspace contains Polykrom's kernel and geometry, extracted
 with their Git history from `crates/kernel` and `crates/geom` into `crates/polycore` and
 `crates/solidcraft-geom`, plus the vendored Truck closure, tests and regression corpus. The
 source/consumer revision is in `polykrom.rev`. The public package names remain `solidcraft-kernel`

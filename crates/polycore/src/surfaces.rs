@@ -600,7 +600,10 @@ pub(crate) fn nearest_face(body: &Body, p: Vec3) -> Result<usize> {
     let mut best: Option<(f64, u32)> = None;
     for (t, f) in m.triangles.iter().zip(&m.tri_face) {
         let Some([a, b, c]) = m.tri(t) else { continue };
-        let d = ((a + b + c) / 3.0).dist(p).min(a.dist(p)).min(b.dist(p)).min(c.dist(p));
+        // Distance to the triangle itself, not just its vertices and centroid: a point on a
+        // large triangle near an edge can be farther from every feature point than an adjacent
+        // face is, which selected the wrong face after retessellation.
+        let d = crate::polyhedron::point_tri(p, a, b, c);
         if best.is_none_or(|(x, _)| d < x) {
             best = Some((d, *f));
         }
@@ -1683,6 +1686,23 @@ mod tests {
         assert!(!back.is_surface() && rel(measure(&back).unwrap().volume, 1000.0) < 1e-9);
         assert!(remove_faces(&b, &(0..6).collect::<Vec<_>>()).is_err());
         assert!(remove_faces(&b, &[]).is_err());
+    }
+
+    /// A point on a large face near its edge is nearest that face itself. Measuring only face
+    /// vertices and triangle centroids can pick the adjacent face after retessellation.
+    #[test]
+    fn nearest_face_measures_the_surface_under_the_point() {
+        let b = box_solid(Vec3::ZERO, Vec3::new(400.0, 40.0, 10.0)).unwrap();
+        let mesh = b.tessellate(1e-3).unwrap();
+        let mut top = Vec::new();
+        for (triangle, face) in mesh.triangles.iter().zip(&mesh.tri_face) {
+            let Some([a, b, c]) = mesh.tri(triangle) else { continue };
+            if [a.z, b.z, c.z].iter().all(|z| (*z - 10.0).abs() < 1e-9) && !top.contains(face) {
+                top.push(*face);
+            }
+        }
+        assert_eq!(top.len(), 1, "the box has one top face: {top:?}");
+        assert_eq!(nearest_face(&b, Vec3::new(1.0, 1.0, 10.0)).unwrap(), top[0] as usize);
     }
 
     /// Faces that are not planes or cylinders thicken onto fitted surfaces. A sixth of a sphere

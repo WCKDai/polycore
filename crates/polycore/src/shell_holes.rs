@@ -219,11 +219,44 @@ pub(crate) fn shell_round_holes(b: &Body, opened: &[usize], thickness: f64, tole
     }
     let filled = crate::delete_face::delete_faces(b, &lining)?;
     let mut open_filled: Vec<usize> = Vec::new();
-    for p in &inside {
-        let f = crate::surfaces::nearest_face(&filled, *p)?;
-        if !open_filled.contains(&f) {
-            open_filled.push(f);
+    // Filling records exact provenance. Follow every requested opening through it first: after
+    // retessellation a point near a face edge can have a nearer triangle from the adjacent face.
+    for (position, original) in opened.iter().enumerate() {
+        let mapped: Vec<usize> = filled
+            .history()
+            .map(|history| {
+                history
+                    .faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, face)| {
+                        face.origins.iter().any(|origin| matches!(origin, crate::history::FaceOrigin::Face { operand: 0, face } if face == original))
+                    })
+                    .map(|(face, _)| face)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !mapped.is_empty() {
+            for face in mapped {
+                if !open_filled.contains(&face) {
+                    open_filled.push(face);
+                }
+            }
+            continue;
         }
+        // A body without usable history keeps the previous geometric fallback. It must not map
+        // two requested openings onto one face: that would silently lose an opening.
+        let Some(point) = inside.get(position) else {
+            return Err(KernelError::Failed("shell: an open face probe was lost".into()));
+        };
+        let face = crate::surfaces::nearest_face(&filled, *point)?;
+        if open_filled.contains(&face) {
+            return Err(KernelError::Failed("shell: two open faces could not be followed separately through hole filling".into()));
+        }
+        open_filled.push(face);
+    }
+    if open_filled.is_empty() {
+        return Err(KernelError::Failed("shell: no open face could be followed through hole filling".into()));
     }
     let margin = thickness + b.size() * 0.05;
     let cavity = crate::offset_free::offset_free(&filled, |i| if open_filled.contains(&i) { margin } else { -thickness }, tolerance)?;

@@ -3751,6 +3751,23 @@ fn shell_round_a_hole_closer_to_a_chamfer_than_the_wall_on_planes() {
     }
 }
 
+/// The perforated top itself is open after hole filling: the opening is followed through exact
+/// history, so retessellation cannot substitute an adjacent side. A point just below the top is
+/// outside the open cavity, while the bottom wall remains material. #194.
+#[test]
+fn shell_holes_keeps_the_perforated_face_open() {
+    let block = box_solid(Vec3::ZERO, Vec3::new(40.0, 20.0, 20.0)).unwrap();
+    let chamfered = chamfer(&block, &[Vec3::new(20.0, 20.0, 20.0)], 2.0).unwrap();
+    let drill = cylinder(Vec3::new(5.0, 15.0, -1.0), Vec3::Z, 1.65, 22.0).unwrap();
+    let body = boolean(&chamfered, &drill, BoolOp::Cut).unwrap().unwrap();
+    let s = shell(&body, &[Vec3::new(20.0, 10.0, 20.0)], 1.5).unwrap();
+    assert!(s.validity().is_empty(), "{:?}", s.validity());
+    assert_eq!(s.solid.boundaries().len(), 1);
+    assert!(s.history().is_some());
+    assert!(!s.contains(Vec3::new(20.0, 10.0, 19.0)), "the top opening must be open");
+    assert!(s.contains(Vec3::new(20.0, 10.0, 0.5)), "the bottom wall must remain");
+}
+
 /// A barrel loft shelled a thousandth of a millimetre thick: the wall check's chord is at most
 /// a twentieth of the wall, which once put its upper bound under its lower one (a panic, caught
 /// as an internal error). A shell or a refusal, never that.

@@ -438,6 +438,39 @@ fn mass_properties_are_translation_invariant_about_the_centroid() {
 }
 
 #[test]
+fn open_mass_properties_match_closed_meshes_and_translate_with_their_box() {
+    let closed = offset_box(Vec3::new(100.0, -50.0, 7.0), 20.0, 30.0, 40.0);
+    let exact = closed.mass_properties().unwrap();
+    let relaxed = closed.mass_properties_open().unwrap();
+    assert!(close(relaxed.volume, exact.volume, 1e-9), "{relaxed:?} vs {exact:?}");
+    assert!((relaxed.centroid - exact.centroid).len() < 1e-9, "{relaxed:?} vs {exact:?}");
+    for r in 0..3 {
+        for c in 0..3 {
+            assert!((relaxed.inertia[r][c] - exact.inertia[r][c]).abs() <= 1e-9 * exact.inertia[0][0], "{r}{c}");
+        }
+    }
+
+    // A genuinely open mesh integrates about its box centre. Moving it must move the centroid
+    // exactly and leave volume and centroid-relative inertia unchanged.
+    let mut here = offset_box(Vec3::new(3.0, 7.0, 11.0), 20.0, 30.0, 40.0);
+    here.triangles.truncate(10);
+    let mut moved = here.clone();
+    let offset = Vec3::new(100.0, -50.0, 7.0);
+    for position in &mut moved.positions {
+        *position += offset;
+    }
+    let a = here.mass_properties_open().unwrap();
+    let b = moved.mass_properties_open().unwrap();
+    assert!(close(b.volume, a.volume, 1e-9), "{a:?} vs {b:?}");
+    assert!((b.centroid - a.centroid - offset).len() < 1e-9, "{a:?} vs {b:?}");
+    for r in 0..3 {
+        for c in 0..3 {
+            assert!((b.inertia[r][c] - a.inertia[r][c]).abs() <= 1e-9 * a.inertia[0][0].max(1.0), "{r}{c}: {a:?} vs {b:?}");
+        }
+    }
+}
+
+#[test]
 fn mass_properties_of_an_inward_facing_box_are_positive() {
     let mut m = offset_box(Vec3::ZERO, 2.0, 3.0, 4.0);
     for t in &mut m.triangles {
