@@ -19,7 +19,7 @@ fn finite(x: f64, what: &str) -> Result<f64> {
 
 /// A closed wire in 3D from a sketch loop, with each edge's segment and that segment's
 /// position in the loop (a big arc makes two edges).
-fn wire_sources(plane: &Plane, lp: &Loop2) -> Result<(mt::Wire, Vec<(mt::Edge, Seg2, usize)>)> {
+pub(crate) fn wire_sources(plane: &Plane, lp: &Loop2) -> Result<(mt::Wire, Vec<(mt::Edge, Seg2, usize)>)> {
     let n = lp.segs.len();
     if n == 0 || n > MAX_SEGS {
         return Err(KernelError::Invalid(format!("loop with {n} segments")));

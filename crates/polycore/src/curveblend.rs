@@ -2399,7 +2399,7 @@ pub(crate) use corner::corner_blend;
 
 #[cfg(test)]
 #[path = "curveblend_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "curveblend_law_tests.rs"]

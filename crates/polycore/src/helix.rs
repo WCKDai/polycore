@@ -181,7 +181,10 @@ fn lp_area_path(plane: &Plane, lp: &Loop2, o: Vec3, k: Vec3, turns: f64) -> f64 
     lp.signed_area().abs() * std::f64::consts::TAU * r * turns
 }
 
-/// A solid from a planar loop of straight segments to an apex point off its plane (a pyramid).
+/// A solid from a planar loop to an apex point off its plane: a pyramid from straight segments,
+/// a cone from a circle, a spike or a tooth from any mix. A straight segment's side is a flat
+/// triangle; a curved one's is the ruled surface from the segment to the apex, its ruling lines
+/// running into the apex.
 pub fn loft_to_point(plane: &Plane, lp: &Loop2, apex: Vec3) -> Result<Body> {
     if !apex.is_finite() || lp.segs.is_empty() || lp.segs.len() > 10_000 {
         return Err(KernelError::Invalid("loft to a point: bad section or apex".into()));
@@ -189,32 +192,40 @@ pub fn loft_to_point(plane: &Plane, lp: &Loop2, apex: Vec3) -> Result<Body> {
     if ((apex - plane.origin).dot(plane.normal())).abs() < 1e-9 {
         return Err(KernelError::Invalid("the apex lies in the section's plane".into()));
     }
-    if lp.segs.iter().any(|s| !matches!(s, Seg2::Line { .. })) {
-        return Err(KernelError::Invalid("not supported yet: lofting curved sections to a point".into()));
-    }
     // Wind the base so its normal points away from the apex.
     let above = (apex - plane.origin).dot(plane.normal()) > 0.0;
     let base = crate::numbered::number_loops([lp]).pop().ok_or_else(|| KernelError::Invalid("loft to a point: bad section".into()))?.oriented(above);
     let lp = &base.lp;
+    let (bw, sources) = crate::build::wire_sources(plane, lp)?;
     guard("loft to point", || {
-        let verts: Vec<mt::Vertex> = lp.segs.iter().map(|s| builder::vertex(p3(plane.to_world(s.start())))).collect();
         let top = builder::vertex(p3(apex));
-        let m = verts.len();
-        let edges: Vec<mt::Edge> = (0..m).filter_map(|i| Some(builder::line(verts.get(i)?, verts.get((i + 1) % m)?))).collect();
-        let sides: Vec<mt::Edge> = verts.iter().map(|v| builder::line(v, &top)).collect();
+        let m = sources.len();
+        // One ruling per base vertex, shared by the two sides that meet there.
+        let sides: Vec<mt::Edge> = sources.iter().map(|(e, _, _)| builder::line(e.front(), &top)).collect();
+        let apex4 = mt::Vector4::new(apex.x, apex.y, apex.z, 1.0);
         let mut faces = Vec::with_capacity(m + 1);
-        // History as the faces are made: the base is the section (the start cap), each
-        // triangle comes from its base segment.
+        // History as the faces are made: the base is the section (the start cap), each side
+        // comes from its base segment.
         let mut history = Vec::with_capacity(m + 1);
-        let bw: mt::Wire = edges.iter().cloned().collect();
-        faces.push(builder::try_attach_plane(&[bw]).map_err(|e| KernelError::Failed(format!("loft base: {e}")))?);
+        faces.push(builder::try_attach_plane(std::slice::from_ref(&bw)).map_err(|e| KernelError::Failed(format!("loft base: {e}")))?);
         history.push(record::cap(false));
-        for i in 0..m {
-            let (Some(e), Some(up), Some(down)) = (edges.get(i), sides.get((i + 1) % m), sides.get(i)) else { continue };
-            // Triangle i: along the base edge, up to the apex, back down — opposite to the base's winding.
+        for (i, (e, seg, k)) in sources.iter().enumerate() {
+            let (Some(down), Some(up)) = (sides.get(i), sides.get((i + 1) % m)) else { continue };
+            // Along the base edge backwards, up to the apex, back down: opposite to the base's winding.
             let w: mt::Wire = vec![e.inverse(), down.clone(), up.inverse()].into();
-            faces.push(builder::try_attach_plane(&[w]).map_err(|e| KernelError::Failed(format!("loft side: {e}")))?);
-            history.push(record::profile(base.numbers(i)));
+            let face = if matches!(seg, Seg2::Line { .. }) {
+                builder::try_attach_plane(&[w]).map_err(|e| KernelError::Failed(format!("loft side: {e}")))?
+            } else {
+                // u runs the way the wire does along the base (from the edge's back to its front),
+                // so the surface's normal agrees with the wire; v runs from the base to the apex.
+                let along = e.inverse().oriented_curve().lift_up();
+                let point = mt::BSplineCurve::new(mt::KnotVec::bezier_knot(1), vec![apex4, apex4]);
+                let surface = mt::BSplineSurface::homotopy(along, point);
+                mt::Face::try_new(vec![w], mt::Surface::NurbsSurface(mt::NurbsSurface::new(surface)))
+                    .map_err(|e| KernelError::Failed(format!("loft side: {e}")))?
+            };
+            faces.push(face);
+            history.push(record::profile(base.numbers(*k)));
         }
         let shell: mt::Shell = faces.into();
         let body = match Solid::try_new(vec![shell.clone()]) {
@@ -256,6 +267,54 @@ mod tests {
         let v = crate::measure(&b).unwrap().volume;
         assert!((v - 1600.0 * 30.0 / 3.0).abs() < 1e-6, "{v}");
         assert_eq!(b.face_count(), 5);
+        solid_of(&b, 1600.0 * 30.0 / 3.0, 1e-9);
         assert!(loft_to_point(&pl, &lp, Vec3::new(1.0, 1.0, 0.0)).is_err());
+    }
+
+    /// A body that is a sound closed solid of the given volume, meshing without a crack.
+    fn solid_of(b: &Body, want: f64, rel: f64) {
+        assert!(b.validity().is_empty(), "{:?}", b.validity());
+        let v = crate::measure(b).unwrap().volume;
+        assert!((v - want).abs() / want < rel, "{v} vs {want}");
+        let mesh = b.tessellate_with(0.01, true).unwrap();
+        assert_eq!(crate::curveblend::tests::open_and_over_shared(&mesh, 1e-4), (0, 0), "open and over-shared mesh sides");
+    }
+
+    #[test]
+    fn a_circle_lofts_to_a_cone() {
+        let pl = Plane { origin: Vec3::ZERO, x: Vec3::X, y: Vec3::Y };
+        let b = loft_to_point(&pl, &Loop2::circle(Vec2::ZERO, 5.0), Vec3::new(0.0, 0.0, 12.0)).unwrap();
+        solid_of(&b, std::f64::consts::PI * 25.0 * 12.0 / 3.0, 2e-3);
+        // Below the section as well.
+        let b = loft_to_point(&pl, &Loop2::circle(Vec2::ZERO, 5.0), Vec3::new(0.0, 0.0, -12.0)).unwrap();
+        solid_of(&b, std::f64::consts::PI * 25.0 * 12.0 / 3.0, 2e-3);
+    }
+
+    #[test]
+    fn an_oblique_spike_joins_its_plate() {
+        // TinyRex's dorsal spike (WCKDai/polycore#11): r 4.5 at z 292, apex 9 mm up and 4 mm aside.
+        let pl = Plane { origin: Vec3::new(0.0, 0.0, 292.0), x: Vec3::X, y: Vec3::Y };
+        let spike = loft_to_point(&pl, &Loop2::circle(Vec2::new(-40.0, 0.0), 4.5), Vec3::new(-44.0, 0.0, 301.0)).unwrap();
+        let cone = std::f64::consts::PI * 4.5 * 4.5 * 9.0 / 3.0;
+        solid_of(&spike, cone, 2e-3);
+        let plate = crate::box_solid(Vec3::new(-60.0, -20.0, 288.0), Vec3::new(-20.0, 20.0, 292.0)).unwrap();
+        let joined = crate::boolean(&plate, &spike, crate::BoolOp::Union).unwrap().unwrap();
+        solid_of(&joined, 40.0 * 40.0 * 4.0 + cone, 2e-3);
+    }
+
+    #[test]
+    fn a_tooth_of_a_line_and_an_arc() {
+        // A D-shaped section: a half circle closed by its diameter, to a point over its middle.
+        let pl = Plane { origin: Vec3::ZERO, x: Vec3::X, y: Vec3::Y };
+        let r = 3.0;
+        let lp = Loop2 {
+            segs: vec![
+                Seg2::Line { a: Vec2::new(-r, 0.0), b: Vec2::new(r, 0.0) },
+                Seg2::Arc { center: Vec2::ZERO, radius: r, start: 0.0, sweep: std::f64::consts::PI },
+            ],
+        };
+        let b = loft_to_point(&pl, &lp, Vec3::new(0.0, 1.0, 8.0)).unwrap();
+        assert_eq!(b.face_count(), 3, "base, a flat side and a ruled side");
+        solid_of(&b, std::f64::consts::PI * r * r / 2.0 * 8.0 / 3.0, 2e-3);
     }
 }
