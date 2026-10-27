@@ -55,7 +55,6 @@ fn run() -> Result<(), String> {
 
 fn ci() -> Result<(), String> {
     run_cargo(&["fmt", "-p", "solidcraft-geom", "-p", "solidcraft-kernel", "-p", "xtask", "--", "--check"])?;
-    run_cargo(&["check", "--workspace", "--all-targets", "--locked"])?;
     run_cargo(&["clippy", "--workspace", "--all-targets", "--profile", "ci", "--locked", "--", "-D", "warnings"])?;
     test()?;
     wasm()?;
