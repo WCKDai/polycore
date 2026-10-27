@@ -455,6 +455,29 @@ fn mass_properties_of_an_open_or_empty_mesh_are_none() {
     assert!(Mesh::default().mass_properties().is_none());
 }
 
+/// Two boxes touching along one edge (a solid pinched there, as a TorsoShell in #216): the edge
+/// is used by four triangles, twice each way. The mesh still bounds both boxes.
+#[test]
+fn mass_properties_of_a_mesh_pinched_along_an_edge_are_both_halves() {
+    let a = offset_box(Vec3::ZERO, 1.0, 1.0, 1.0);
+    let b = offset_box(Vec3::new(1.0, 1.0, 0.0), 1.0, 1.0, 1.0);
+    // b's corners 0 and 4 are a's 2 and 6: the shared edge x = y = 1.
+    let at = |i: u32| match i {
+        0 => 2,
+        4 => 6,
+        i => i + 8,
+    };
+    let mut m = a.clone();
+    m.positions.extend(b.positions);
+    m.triangles.extend(b.triangles.iter().map(|t| t.map(at)));
+    assert!(m.is_closed());
+    let p = m.mass_properties().expect("a pinched closed mesh has mass properties");
+    assert!(close(p.volume, 2.0, 1e-12), "{p:?}");
+    assert!((p.centroid - Vec3::new(1.0, 1.0, 0.5)).len() < 1e-12, "{p:?}");
+    // Each unit box's own Ixx is 1/6, and each sits 0.5 off the joint centroid in y: 2·(1/6 + 0.25).
+    assert!(close(p.inertia[0][0], 2.0 * (1.0 / 6.0 + 0.25), 1e-9), "{p:?}");
+}
+
 #[test]
 fn mass_properties_need_consistently_oriented_faces() {
     // Every edge still has two triangles, but one face of the box points inwards: its signed
