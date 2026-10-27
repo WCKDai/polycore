@@ -7,9 +7,9 @@ robustness on blends, offsets and free-form work.
 - **Status:** Accepted, 2026-10-26, with the owner's decisions under [Decisions](#decisions).
 - **Author:** Claude (agent), for the owner
 - **Created:** 2026-10-26
-- **Home:** [wckdboy/polycore](https://github.com/wckdboy/polycore), `docs/rfcs/`. Polykrom
-  points here from [`docs/polycore.md`](https://github.com/wckdboy/polykrom/blob/main/docs/polycore.md).
-- **Builds on:** Polykrom's [ENGINES.md](https://github.com/wckdboy/polykrom/blob/main/docs/ENGINES.md)
+- **Home:** [WCKDai/polycore](https://github.com/WCKDai/polycore), `docs/rfcs/`. Polykrom
+  points here from [`docs/polycore.md`](https://github.com/WCKDai/polykrom/blob/main/docs/polycore.md).
+- **Builds on:** Polykrom's [ENGINES.md](https://github.com/WCKDai/polykrom/blob/main/docs/ENGINES.md)
   (kernel stages K0 to K7). This RFC does not change those stages. It says what the kernel
   becomes, where it lives, how the code gets there and how each step is judged.
 
@@ -35,7 +35,7 @@ hand-calculated or invariants. OCCT is the bar and a cross-check, never the answ
 | Direction | Consequence |
 |---|---|
 | One kernel, in Rust, named **PolyCore**; the bar is OCCT, the goal is commercial-kernel class | All kernel work goes into PolyCore. No second kernel is started. |
-| PolyCore has **its own repository and workspace** | [wckdboy/polycore](https://github.com/wckdboy/polycore), Apache-2.0. |
+| PolyCore has **its own repository and workspace** | [WCKDai/polycore](https://github.com/WCKDai/polycore), Apache-2.0. |
 | **Polykrom** is the product and PolyCore's only consumer | No C ABI, no external kernel protocol. The API is a Rust API. Polykrom stays MIT OR Apache-2.0. |
 | **Nightfall is archived** | No Nightfall work. Its useful parts are harvested ([Harvest from Nightfall](#harvest-from-nightfall)). |
 | Convergence, not rewrite | Each phase replaces one layer behind a stable boundary; the app keeps working. |
@@ -43,17 +43,17 @@ hand-calculated or invariants. OCCT is the bar and a cross-check, never the answ
 
 ## Where we start
 
-Measured on `wckdboy/polykrom` `main` at `0489d63e` (2026-10-26) unless stated.
+Measured on `WCKDai/polykrom` `main` at `0489d63e` (2026-10-26) unless stated.
 
 | Thing | State |
 |---|---|
 | `crates/kernel` (`solidcraft-kernel`) | 153 files, about 98,000 lines of Rust. About 70 public entry points, all free functions; no truck type in the public API. `#![forbid(unsafe_code)]`; panics contained by `guard`. |
 | `crates/geom` (`solidcraft-geom`) | About 15,700 lines: vectors, planes, B-splines, meshes, BVH, profiles, and the native B-rep schema. No dependencies but serde and thiserror. The kernel, the sketch solver and the renderer use it. |
 | Vendored truck (`vendor/`) | truck-geometry 10,065 lines, truck-shapeops 6,664, truck-meshalgo 6,253, truck-stepio 4,974, with Polykrom's fixes listed in `vendor/README.md`, wired in by `[patch.crates-io]`. truck-topology and truck-modeling come from crates.io. Apache-2.0. |
-| Native B-rep schema 3 | `solidcraft_geom::brep` ([native-brep.md](https://github.com/wckdboy/polykrom/blob/main/docs/native-brep.md)). Exact, kernel-neutral, already the cache format inside designs. |
-| [kernel-cases](https://github.com/wckdboy/polykrom/blob/main/docs/kernel-cases.md) | **288 / 382 pass** (the generated report at `0489d63e`; ENGINES.md's earlier 372 predates ten added cases, and SMLib's 317 below is on those 372). Booleans 64/89, crashes 6/10, fillets 38/50, import 19/23, sheet metal 57/57, shell 9/20, surfaces 0/8, sweeps 62/83, tessellation 12/14, threads 21/28. Cases are design recipes run by `polykrom-cli` (`cargo xtask kernel-cases`). |
-| [Kernel ladder](https://github.com/wckdboy/polykrom/blob/main/docs/kernel-ladder.md) | **102 / 116 pass**, with a timing golden (`tests/kernel-cases/ladder/golden.json`). |
-| [Reference tests](https://github.com/wckdboy/polykrom/blob/main/docs/oracle.md) | **83 / 83 pass** (62 analytic, 21 FreeCAD run as a separate program). |
+| Native B-rep schema 3 | `solidcraft_geom::brep` ([native-brep.md](https://github.com/WCKDai/polykrom/blob/main/docs/native-brep.md)). Exact, kernel-neutral, already the cache format inside designs. |
+| [kernel-cases](https://github.com/WCKDai/polykrom/blob/main/docs/kernel-cases.md) | **288 / 382 pass** (the generated report at `0489d63e`; ENGINES.md's earlier 372 predates ten added cases, and SMLib's 317 below is on those 372). Booleans 64/89, crashes 6/10, fillets 38/50, import 19/23, sheet metal 57/57, shell 9/20, surfaces 0/8, sweeps 62/83, tessellation 12/14, threads 21/28. Cases are design recipes run by `polykrom-cli` (`cargo xtask kernel-cases`). |
+| [Kernel ladder](https://github.com/WCKDai/polykrom/blob/main/docs/kernel-ladder.md) | **102 / 116 pass**, with a timing golden (`tests/kernel-cases/ladder/golden.json`). |
+| [Reference tests](https://github.com/WCKDai/polykrom/blob/main/docs/oracle.md) | **83 / 83 pass** (62 analytic, 21 FreeCAD run as a separate program). |
 | Recent kernel work | 18 merged kernel PRs since 2026-10-19, among them PRs #189 to #236: K2 broad phase, mesh reuse, direct split, exact plane–plane SSI, presearch grids; K4 rolling-ball fillets across loft seams and vertex blends (`loopblend.rs`, `curveblend.rs`, `blend_corner.rs`); K5 NURBS offset fitting, free-form shell and thicken (`offset_fit.rs`, `offset_free.rs`). Several are still open (#224 to #236). |
 | Known weak points (ENGINES.md) | Surface–surface intersection starts from a mesh collision. Boolean tolerance is a fraction of part size, wrapped in a retry ladder (4 shifts × 2 tolerances) and about ten special-case modules. Cylinders, cones, spheres and tori are not first-class surfaces. Ten corpus cases hang past 180 s. |
 
@@ -168,7 +168,7 @@ Dependencies point one way: math ← geom ← topo ← (ops, mesh, naming, props
 
 - **Pinned by revision.** Polykrom's workspace `Cargo.toml` names PolyCore's public crates by
   git and revision, for example
-  `solidcraft-kernel = { git = "https://github.com/wckdboy/polycore", rev = "<sha>" }`.
+  `solidcraft-kernel = { git = "https://github.com/WCKDai/polycore", rev = "<sha>" }`.
 - **Two public crates, then one.** Until Phase 1 splits it, `solidcraft-geom` is a second public
   crate: Polykrom's sketch solver and renderer use it directly. After the split they use the
   facade's re-exports (`polycore::math`, `polycore::mesh`), and Polykrom depends on the facade
@@ -184,7 +184,7 @@ Dependencies point one way: math ← geom ← topo ← (ops, mesh, naming, props
 
   ```toml
   # polykrom/.cargo/config.toml, untracked; or cargo --config polycore-dev.toml
-  [patch."https://github.com/wckdboy/polycore"]
+  [patch."https://github.com/WCKDai/polycore"]
   polycore = { path = "../polycore/crates/polycore" }
   ```
 
@@ -574,7 +574,7 @@ surface field's maximum equals the reported maximum to 1e-9.
 | Native schema 3 | read, write | `polycore-io` | PolyCore's persistent body format inside Polykrom designs. A change bumps the schema; old versions still read. |
 | USD `omniSolid` | read, write | `polycore-io` | `BrepArray` prims with analytic and NURBS faces, as the schema defines (Apache-2.0). Our own `.usda` reader and writer. Phase 3. |
 | USD meshes and UsdPhysics | write | Polykrom, with PolyCore meshes and inertia | For robot export (ENGINES.md S2). |
-| 3MF | write; read as meshes | `polycore-io` for meshes and face tags; Polykrom's `solidcraft-io` for the package | As today ([3mf-face-tags.md](https://github.com/wckdboy/polykrom/blob/main/docs/formats/3mf-face-tags.md)), on PolyCore's watertight meshes. |
+| 3MF | write; read as meshes | `polycore-io` for meshes and face tags; Polykrom's `solidcraft-io` for the package | As today ([3mf-face-tags.md](https://github.com/WCKDai/polykrom/blob/main/docs/formats/3mf-face-tags.md)), on PolyCore's watertight meshes. |
 | MJCF, URDF | write | Polykrom | Assembly formats stay in Polykrom. PolyCore supplies watertight meshes, exact mass, centre of mass and inertia, and contact primitives. Fixes #216 in Phase 1. |
 
 ## Risks and honest cost
@@ -645,7 +645,7 @@ claim otherwise.
 ## Naming
 
 - **Polykrom** is the product: the app, the CLI, the MCP server.
-- **PolyCore** is the kernel: the wckdboy/polycore repository and its `polycore` and
+- **PolyCore** is the kernel: the WCKDai/polycore repository and its `polycore` and
   `polycore-*` crates. Polykrom's own crates keep their `solidcraft-*` names (Polykrom's
   AGENTS.md: not renamed piecemeal).
 - **TinyRex** is the flagship robot and its repository, [wckdboy/tinyrex](https://github.com/wckdboy/tinyrex).
@@ -657,7 +657,7 @@ final one is listed.
 
 | # | Topic | Decision |
 |---|---|---|
-| 1 | Where PolyCore lives | Its own repository and workspace, [wckdboy/polycore](https://github.com/wckdboy/polycore), closely tied to Polykrom; created on the owner's OK on 2026-10-26. Phase 0 extracts `crates/kernel` and the vendored truck into it. Polykrom consumes it as a git dependency pinned by revision, with an untracked `[patch]` to a local checkout for joint development. PolyCore CI runs the kernel cases and the ladder; Polykrom CI pins and tests a PolyCore revision. |
+| 1 | Where PolyCore lives | Its own repository and workspace, [WCKDai/polycore](https://github.com/WCKDai/polycore), closely tied to Polykrom; created on the owner's OK on 2026-10-26. Phase 0 extracts `crates/kernel` and the vendored truck into it. Polykrom consumes it as a git dependency pinned by revision, with an untracked `[patch]` to a local checkout for joint development. PolyCore CI runs the kernel cases and the ladder; Polykrom CI pins and tests a PolyCore revision. |
 | 2 | solidcore | A reference to port from, watched for improvements. Any unit that wins on our corpus is ported. Anything we build that helps it goes upstream to tangency-labs/solidcore as PRs; bugs we can't fix go as reports. At the end of Phase 1, adopting it wholesale is re-evaluated on our corpus. |
 | 3 | The bar | OCCT. The goal is an open-source kernel that rivals the commercial kernels. |
 | 4 | OCCT reference program | A frozen, pinned Nightfall `nf` build used as a tool, since it reports operation history. Commit and recipe under [The OCCT reference program](#the-occt-reference-program). |

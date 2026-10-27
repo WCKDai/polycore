@@ -1,0 +1,68 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+# Third-party code kept with local fixes (see vendor/README.md); tested through the kernel.
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.95"
+authors = ["PolyCore contributors"]
+repository = "https://github.com/WCKDai/polycore"
+
+[workspace.dependencies]
+solidcraft-geom = { path = "crates/solidcraft-geom" }
+
+thiserror = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+log = "0.4"
+web-time = "1"
+spade = { version = "2.15", default-features = false, features = ["std"] }
+rayon = "1.12"
+
+# Renamed packages keep their original Rust crate names. Path wiring is intentional: Cargo
+# does not propagate a downstream workspace's [patch], and no registry Truck code may be mixed in.
+truck-modeling = { package = "polycore-truck-modeling", path = "vendor/truck-modeling" }
+truck-shapeops = { package = "polycore-truck-shapeops", path = "vendor/truck-shapeops", default-features = false }
+truck-meshalgo = { package = "polycore-truck-meshalgo", path = "vendor/truck-meshalgo", default-features = false, features = ["tessellation", "analyzers"] }
+truck-stepio = { package = "polycore-truck-stepio", path = "vendor/truck-stepio", default-features = false }
+truck-topology = { package = "polycore-truck-topology", path = "vendor/truck-topology" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+# `!(x > tol)` is our idiom for "not a usable number" (NaN-safe).
+neg_cmp_op_on_partial_ord = "allow"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+# Fast, representative checks. Truck's debug-only assertions reject valid seam and closed edges.
+[profile.ci]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+debug-assertions = false
+overflow-checks = true
+incremental = false
+
+[profile.ci.package."*"]
+opt-level = 2
+debug = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+debug = "line-tables-only"

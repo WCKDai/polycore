@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126"
+ ],
+ "what": "R2 at once on three edges meeting at a corner of an extruded arch: the top arc (between the top and the cylinder), the top line of the flat side and the vertical edge between the side and the cylinder",
+ "source": "invariants",
+ "method": "the corner where the curved round meets the two straight ones has no closed form. One valid, watertight body",
+ "body_count": 1,
+ "watertight": true
+}

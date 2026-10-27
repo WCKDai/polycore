@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/WCKDai/polycore/agent/task.schema.json",
+  "title": "PolyCore agent task",
+  "description": "A bounded, independently reviewable unit of PolyCore work.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "role",
+    "objective",
+    "owns",
+    "forbids",
+    "depends_on",
+    "acceptance",
+    "evidence",
+    "risk",
+    "budget",
+    "status"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 120
+    },
+    "role": {
+      "enum": [
+        "coordinator",
+        "explorer",
+        "geometry",
+        "verification",
+        "simulation",
+        "interchange",
+        "application",
+        "reviewer"
+      ]
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 20
+    },
+    "owns": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "forbids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "depends_on": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+      }
+    },
+    "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 8
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 8
+      }
+    },
+    "risk": {
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempts", "wall_minutes", "tokens", "usd", "model_tier"],
+      "properties": {
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "wall_minutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000000
+        },
+        "usd": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "model_tier": {
+          "enum": ["deterministic", "small", "standard", "strong", "reviewer"]
+        }
+      }
+    },
+    "status": {
+      "enum": ["planned", "active", "blocked", "review", "done", "cancelled"]
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

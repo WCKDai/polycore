@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#195"
+ ],
+ "what": "a G2 surface.blend between the edges of two lofted strips whose parameter lines do not cross their edges at right angles: refused as 'the support surface is too small around a picked edge to read its shape'",
+ "source": "invariants",
+ "method": "the strips of 195-g1-blend-between-sheared-strips, blended G2: planes have no curvature, so the G2 blend exists (a cross-section with zero curvature at both ends); its shape is the blend's own choice, so only the outcome is graded: one open sheet of three faces, stitched onto both strips.",
+ "valid": false,
+ "body_count": 1,
+ "faces": 3
+}

@@ -1,0 +1,221 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Profile"
+   }
+  },
+  {
+   "command": "sketch.spline.fit_point",
+   "params": {
+    "points": [
+     [
+      30,
+      0
+     ],
+     [
+      32,
+      30
+     ],
+     [
+      30,
+      60
+     ],
+     [
+      20,
+      85
+     ],
+     [
+      12,
+      100
+     ],
+     [
+      12,
+      115
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "surface.revolve",
+   "params": {
+    "sketch": "Profile",
+    "curves": [
+     "s1"
+    ],
+    "axis": "Z",
+    "body_name": "Bottle"
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      0,
+      1,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Hole"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     25
+    ],
+    "radius": 7
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "surface.trim",
+   "params": {
+    "body": "Bottle",
+    "curves": {
+     "sketch": "Hole"
+    },
+    "keep": [
+     [
+      -30,
+      0,
+      40
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      45.0,
+      0.0,
+      0.0
+     ],
+     "x_dir": [
+      0,
+      1,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Peg"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     25
+    ],
+    "radius": 5
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "surface.extrude",
+   "params": {
+    "sketch": "Peg",
+    "distance": 10,
+    "body_name": "Peg"
+   }
+  },
+  {
+   "command": "surface.blend",
+   "params": {
+    "from": {
+     "body": "Peg",
+     "edges": [
+      [
+       45,
+       0,
+       30
+      ],
+      [
+       45,
+       0,
+       20
+      ]
+     ]
+    },
+    "to": {
+     "body": "Bottle",
+     "edges": [
+      [
+       31.00622701011995,
+       6.459629978144547,
+       22.393172133978513
+      ],
+      [
+       31.926125115984103,
+       2.631949678753636,
+       31.447558178790185
+      ],
+      [
+       31.018796379133555,
+       -6.383701296047573,
+       22.401959086856724
+      ],
+      [
+       31.91988231519614,
+       -2.698141297068069,
+       31.427851571808755
+      ]
+     ]
+    },
+    "continuity": [
+     "g1",
+     "g1"
+    ],
+    "stitch": true
+   }
+  }
+ ]
+}

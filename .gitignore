@@ -1,0 +1,8 @@
+/target*/
+/polycore-dev.toml
+**/.DS_Store
+__pycache__/
+*.py[cod]
+*.swp
+*~
+.vscode/

@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126"
+ ],
+ "what": "R1, R2 and R3, one fillet after another, on the three edges of a box that meet at the corner (0, 0, 20): each later round runs into the earlier ones, so the corner closes over rounds of three radii",
+ "source": "invariants",
+ "method": "the corner's patch has no closed form. One valid, watertight body",
+ "body_count": 1,
+ "watertight": true
+}

@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126",
+  "wckdboy/polykrom#184"
+ ],
+ "what": "an R4 round on the bottom edge chain (four lines and four arcs, tangent) of a two-section loft whose walls all slope 5 in 30 (60x40 r10 outline at z 0, the same inset 5 at z 30): the curved edges between the floor and the lofted faces",
+ "source": "analytic",
+ "method": "two sections: the loft is ruled, planes on the lines and cones on the arcs, every wall at phi = atan(30/5) = 80.5377 deg to the floor. Loft: the section at height z is the outline offset in by d = z/6, area A0 - L0 d + pi d^2 (A0 = 2400 - 100(4 - pi), L0 = 120 + 20 pi), V = 30 A0 - 75 L0 + 250 pi = 56497.7871. The round's cross-section is the same all round: t = r/tan(phi/2) = 4.72184, area a = t r - r^2 (pi - phi)/2 = 4.999807, its centroid 1.260215 in from the edge. Swept square to a convex outline whose offsets stay rounded rectangles (t < 10), the round removes a (L0 - 2 pi x) = 874.5346: V = 55623.2525",
+ "body_count": 1,
+ "volume_mm3": 55623.252519086316
+}

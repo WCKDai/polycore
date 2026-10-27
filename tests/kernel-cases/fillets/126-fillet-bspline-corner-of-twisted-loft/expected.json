@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126"
+ ],
+ "what": "an R2 round on one corner of a loft through three squares (30 x 30) turned 0, 20 and 40 deg at z 0, 25, 50: a B-spline edge between two lofted (NURBS) faces, its ends meeting the caps at a slant",
+ "source": "invariants",
+ "method": "the loft through three sections is the loft's own interpolation, so there is no closed-form volume. The round runs the corner's length between the caps and meets both neighbours tangentially: one valid body whose free-form faces that meet smoothly count as one (the rig's rule), so the blend and its two lofted neighbours are one face beside the two other lofted faces and the two caps: 5 faces",
+ "body_count": 1,
+ "faces": 5
+}

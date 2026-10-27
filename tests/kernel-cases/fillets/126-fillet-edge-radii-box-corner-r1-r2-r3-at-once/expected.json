@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126"
+ ],
+ "what": "one fillet with a radius per edge: R1, R2 and R3 at once on the three edges of a box meeting at the corner (0, 0, 20), the corner closed by one patch",
+ "source": "invariants",
+ "method": "the corner patch between rounds of three radii has no closed form. One valid, watertight body",
+ "body_count": 1,
+ "watertight": true
+}

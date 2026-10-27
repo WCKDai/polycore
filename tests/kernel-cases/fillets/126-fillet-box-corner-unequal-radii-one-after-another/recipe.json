@@ -1,0 +1,52 @@
+{
+ "commands": [
+  {
+   "command": "solid.box",
+   "params": {
+    "length": 40.0,
+    "width": 30.0,
+    "height": 20.0,
+    "body_name": "Box"
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      20.0,
+      0,
+      20.0
+     ]
+    ],
+    "radius": 1
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      0,
+      15.0,
+      20.0
+     ]
+    ],
+    "radius": 2
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      0,
+      0,
+      10.0
+     ]
+    ],
+    "radius": 3
+   }
+  }
+ ]
+}

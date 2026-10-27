@@ -13,7 +13,7 @@
     "licence": "LGPL-2.1, dynamically linked into nf only"
   },
   "polykrom": {
-    "repository": "https://github.com/wckdboy/polykrom",
+    "repository": "https://github.com/WCKDai/polykrom",
     "commit": "3422dd5fb58a5dcae7606bdee4686db186580a53",
     "patch": "bench/oracle/polykrom-bench.patch",
     "binary": "target/release/polykrom-cli",

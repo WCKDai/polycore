@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126"
+ ],
+ "what": "control: an R4 round on the bottom circle of a revolved frustum (r 20 to 15 over 30): a circular edge between a plane and a cone, the case the rolling ball already handled",
+ "source": "analytic",
+ "method": "frustum pi h (R^2 + R r + r^2)/3 = 29059.7320. The wall is at phi = atan(30/5) to the floor; the round's cross-section is t = r/tan(phi/2), a = t r - r^2 (pi - phi)/2 = 4.999807 with its centroid 1.260215 in from the edge, revolved (Pappus) about the axis at 20 - 1.260215: V = 28471.0271",
+ "body_count": 1,
+ "faces": 4,
+ "volume_mm3": 28471.027105846057
+}

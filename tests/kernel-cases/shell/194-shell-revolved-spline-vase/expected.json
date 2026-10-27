@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#194"
+ ],
+ "what": "a vase revolved from a profile with a Bezier side (r 20 at the base to 15 at the top, 30 tall), shelled 1.5 mm open at the top; the revolved spline is free-form",
+ "source": "analytic",
+ "method": "the inner wall of a surface of revolution is the revolution of the meridian offset by t = 1.5 along its normal: (r - t n_r, z - t n_z) for the Bezier (20,0) (30,10) (10,20) (15,30) (its curvature radius is at least 7.42, so it stays clear of folding). Outer V = pi int r^2 z' ds = 34131.160186500; the cavity runs from the floor (offset z = 1.5, s = 0.016501) to the open top (offset z = 30, s = 0.981128): V_cav = pi int r_off^2 z_off' ds = 26883.561553152 (Simpson, 20000 steps); V = 7247.598633349. Faces: outer and inner side, bottom, floor, rim = 5",
+ "body_count": 1,
+ "volume_mm3": 7247.598633348545,
+ "faces": 5
+}

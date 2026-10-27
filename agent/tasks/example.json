@@ -1,0 +1,28 @@
+{
+  "id": "example-task",
+  "title": "Example bounded PolyCore task",
+  "role": "geometry",
+  "objective": "Describe one independently reviewable change and the measured outcome it must produce.",
+  "owns": ["crates/polycore/src/example.rs"],
+  "forbids": ["crates/polycore/src/topology.rs"],
+  "depends_on": [],
+  "acceptance": [
+    "The focused analytic regression fails before the change and passes after it.",
+    "cargo xtask ci passes with no reduction in the kernel corpus pass set."
+  ],
+  "evidence": [
+    "Focused test name and failure/pass output.",
+    "Kernel corpus counts before and after, with artifact hashes.",
+    "cargo xtask ci result at the final revision."
+  ],
+  "risk": "medium",
+  "budget": {
+    "attempts": 6,
+    "wall_minutes": 180,
+    "tokens": 250000,
+    "usd": 15,
+    "model_tier": "standard"
+  },
+  "status": "planned",
+  "notes": "Template only; copy it into agent/tasks with a real unique id before work."
+}
