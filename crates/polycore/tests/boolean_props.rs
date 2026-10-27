@@ -330,9 +330,8 @@ fn grid_small_sphere_thin_box_union_is_sound() {
     check(identity(&a, &b));
 }
 
-/// Two crossing cylinders: the union moved 1000 mm away loses about a tenth of its volume.
+/// Two crossing cylinders: the union moved 1000 mm away used to lose about a tenth of its volume.
 #[test]
-#[ignore = "kernel bug, #1649"]
 fn crossing_cylinders_union_moved_far() {
     let a = Prim::Cyl { at: [17.5, 30.0, 7.5], axis: 0, r: 5.0, h: 10.0 }.body();
     let b = Prim::Cyl { at: [17.5, 30.0, 15.0], axis: 1, r: 12.5, h: 5.0 }.body();
@@ -342,4 +341,15 @@ fn crossing_cylinders_union_moved_far() {
     let here = run(&a, &b, BoolOp::Union).unwrap();
     let there = run(&mv(&a), &mv(&b), BoolOp::Union).unwrap();
     assert!(close(here, there, s), "union at origin {here:.4}, moved by 1000 gives {there:.4}");
+}
+
+/// Two perpendicular cylinders in general position: union plus intersection gives
+/// 7426.03 mm³ against 6759.98 mm³ for the operands, about a tenth too much.
+/// Found by `identity_generic` at `PROPTEST_CASES=200` in CI run 40526497141.
+#[test]
+#[ignore = "kernel bug, #4"]
+fn crossing_cylinders_identity_generic() {
+    let a = Prim::Cyl { at: [12.268323965319889, 5.065436499422583, 22.41528584441384], axis: 2, r: 8.562052535879687, h: 17.412562292333657 };
+    let b = Prim::Cyl { at: [4.950833754742164, 3.9165914022500696, 17.38691364694377], axis: 0, r: 9.204462879829133, h: 10.333681915323915 };
+    check(identity(&a, &b));
 }
