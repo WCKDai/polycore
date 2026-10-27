@@ -912,7 +912,7 @@ fn smooth_neighbours_are_judged_at_the_seam_through_the_vertex() {
 
 /// A mesh's sides used by one triangle (open) and by more than two (over-shared), with corners
 /// closer than `weld` as one.
-fn open_and_over_shared(mesh: &solidcraft_geom::Mesh, weld: f64) -> (usize, usize) {
+pub(crate) fn open_and_over_shared(mesh: &solidcraft_geom::Mesh, weld: f64) -> (usize, usize) {
     let key = |p: Vec3| [(p.x / weld).round() as i64, (p.y / weld).round() as i64, (p.z / weld).round() as i64];
     let mut uses: std::collections::HashMap<([i64; 3], [i64; 3]), usize> = std::collections::HashMap::new();
     for t in &mesh.triangles {
