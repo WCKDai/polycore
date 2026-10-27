@@ -1,0 +1,23 @@
+{
+  "nightfall": {
+    "repository": "https://github.com/wckdboy/nightfall",
+    "commit": "f4a8de07a639cef08b5127ea4894bbc1581658ce",
+    "binary": "build/occt/tools/cli/nf",
+    "sha256": "1c3405a73adadd553a1e1b97c5621bb840aac558ab1c30891f501289bee565bf",
+    "built": "2026-10-26, macOS 27.2 arm64, bench/oracle/build-nf.sh"
+  },
+  "opencascade": {
+    "version": "7.9.3",
+    "commit": "a016080bf6738d6aeae020badee4e888ad1540a5",
+    "stamp": "a016080bf6738d6aeae020badee4e888ad1540a5-inc-align-d7887821ad973f2b2928fd4dcfabed5a4a4920d61a177634f865f9a8175054e4",
+    "licence": "LGPL-2.1, dynamically linked into nf only"
+  },
+  "polykrom": {
+    "repository": "https://github.com/wckdboy/polykrom",
+    "commit": "3422dd5fb58a5dcae7606bdee4686db186580a53",
+    "patch": "bench/oracle/polykrom-bench.patch",
+    "binary": "target/release/polykrom-cli",
+    "sha256": "4eea659ba93c969457488148010bac619e173e4fbfceed87291f58a9ef89c054",
+    "built": "2026-10-27, macOS 27.2 arm64, bench/oracle/build-cli.sh"
+  }
+}

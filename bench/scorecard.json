@@ -1,0 +1,654 @@
+{
+ "date": "2026-10-27",
+ "polykrom": "3422dd5fb58a5dcae7606bdee4686db186580a53",
+ "nightfall": "f4a8de07a639cef08b5127ea4894bbc1581658ce",
+ "weights": {
+  "success": 30,
+  "correctness": 20,
+  "history": 20,
+  "fillet": 10,
+  "performance": 10,
+  "robustness": 10
+ },
+ "tolerance": 1e-06,
+ "excluded_unsupported_in_both": [
+  "booleans/2754-taper-extrude-line-arc-corner",
+  "booleans/831-tapered-extrude-d-shape-arc-meets-line",
+  "ladder/06-threads/008-multi-start-thread",
+  "ladder/06-threads/009-thread-runout-length",
+  "ladder/07-fillets/012-variable-into-rounded-corner",
+  "ladder/07-fillets/013-corner-setback",
+  "ladder/07-fillets/015-corner-g2-patch"
+ ],
+ "corpus": {
+  "truck": {
+   "scores": {
+    "success": 84.67583497053045,
+    "correctness": 31.367924528301888,
+    "history": 71.95369742708009,
+    "fillet": 86.04651162790698,
+    "performance": 100.0,
+    "robustness": 30
+   },
+   "weighted": 67.67172604502622,
+   "detail": {
+    "attempted": 509,
+    "succeeded": 431,
+    "correct": 133,
+    "measured": 424,
+    "correct_by_tolerance": {
+     "1e-06": 117,
+     "0.0001": 363,
+     "0.001": 412
+    },
+    "answers_written_coarser_than_1e-6": 3,
+    "history_cases": 426,
+    "faces": 126782,
+    "exact_faces": 32308,
+    "fillet_cases": 86,
+    "fillet_succeeded": 74,
+    "shared_successes": 354,
+    "median_seconds": 0.1263044375,
+    "crashes": [
+     "import/3963-closed-spline-edge-vertex-past-start"
+    ],
+    "hangs": [
+     "booleans/2928-join-cap-touching-lips-with-offset-walls",
+     "booleans/3830-split-cup-by-extended-spline-surface",
+     "crashes/2357-join-ring-of-90-cylinder-segments",
+     "crashes/2992-join-disk-and-36-twisted-loft-blades",
+     "sweeps/1856-disk-and-36-twisted-lofted-blades-joined",
+     "sweeps/2552-thread-groove-cut-by-a-square-coil-in-a-bore",
+     "sweeps/3088-coil-thread-joined-flush-with-a-cylinder",
+     "sweeps/3936-loft-join-circle-to-rectangle-on-a-cylinder",
+     "sweeps/793-coil-cut-by-a-box-above-a-plane",
+     "sweeps/793-coil-split-by-a-plane-across-its-axis",
+     "threads/2038-cut-threaded-stud-from-bored-block"
+    ],
+    "determinism": {
+     "booleans/1140-hollow-lofted-tube-cut-in-half-and-joined": "time limit",
+     "booleans/3455-join-of-64-separate-pegs": "time limit",
+     "booleans/4095-slab-cut-standing-off-a-bore-r10": "geometry",
+     "crashes/4092-loft-ribs-rounded-pad-union-panics": "time limit",
+     "fillets/126-fillet-all-twelve-box-edges-r2": "geometry",
+     "fillets/126-fillet-box-corner-unequal-radii-one-after-another": "geometry",
+     "fillets/126-fillet-edge-radii-box-corner-r1-r2-r3-at-once": "geometry",
+     "fillets/126-fillet-edge-radii-two-parallel-edges": "geometry",
+     "fillets/1557-fillet-vertical-corners-after-bottom-rounds": "geometry",
+     "sweeps/2005-closed-sweep-twisted-cut-inside-a-torus": "geometry",
+     "sweeps/2005-closed-sweep-twisted-new-body": "geometry",
+     "sweeps/3006-second-sweep-from-a-plane-along-a-closed-path": "geometry",
+     "sweeps/3345-sweep-profile-mid-line-round-a-rounded-rectangle": "geometry",
+     "tessellation/784-stl-open-edges-filleted-and-drilled": "geometry",
+     "threads/2038-cut-threaded-stud-from-bored-block": "time limit"
+    },
+    "determinism_counts": {
+     "geometry": 11,
+     "time limit": 4,
+     "outcome": 0
+    },
+    "statuses": {
+     "pass": 420,
+     "fail": 66,
+     "unsupported": 11,
+     "hang": 11,
+     "crash": 1
+    },
+    "occt_operations_taken": 0,
+    "occt_operations_refused": 0,
+    "occt_refusal_reasons": {},
+    "occt_refusal_kinds": {}
+   },
+   "share_of_occt": 133.59050094634068
+  },
+  "occt": {
+   "scores": {
+    "success": 74.26326129666012,
+    "correctness": 32.520325203252035,
+    "history": 66.33417774188335,
+    "fillet": 55.81395348837209,
+    "performance": 30.248169113971503,
+    "robustness": 0
+   },
+   "weighted": 50.65609123825947,
+   "detail": {
+    "attempted": 509,
+    "succeeded": 378,
+    "correct": 120,
+    "measured": 369,
+    "correct_by_tolerance": {
+     "1e-06": 108,
+     "0.0001": 327,
+     "0.001": 358
+    },
+    "answers_written_coarser_than_1e-6": 3,
+    "history_cases": 365,
+    "faces": 85052,
+    "exact_faces": 15842,
+    "fillet_cases": 86,
+    "fillet_succeeded": 48,
+    "shared_successes": 354,
+    "median_seconds": 0.4175606035,
+    "crashes": [
+     "import/3963-closed-spline-edge-vertex-past-start"
+    ],
+    "hangs": [
+     "booleans/1140-hollow-lofted-tube-cut-in-half-and-joined",
+     "booleans/3455-join-of-64-separate-pegs",
+     "sweeps/1856-disk-and-36-twisted-lofted-blades-joined",
+     "sweeps/793-coil-split-by-a-plane-across-its-axis"
+    ],
+    "determinism": {
+     "fillets/126-fillet-edge-radii-box-corner-r1-r2-r3-at-once": "geometry",
+     "fillets/126-fillet-edge-radii-two-parallel-edges": "geometry",
+     "ladder/09-shells-and-offsets/010-shell-under-rounded-top": "geometry",
+     "shell/4010-shell-open-at-through-hole-wall": "geometry",
+     "shell/566-shell-swept-bar-with-bend": "geometry",
+     "sweeps/2005-closed-sweep-twisted-new-body": "geometry",
+     "sweeps/3345-sweep-profile-mid-line-round-a-rounded-rectangle": "geometry"
+    },
+    "determinism_counts": {
+     "geometry": 7,
+     "time limit": 0,
+     "outcome": 0
+    },
+    "statuses": {
+     "fail": 134,
+     "pass": 370,
+     "hang": 4,
+     "crash": 1
+    },
+    "occt_operations_taken": 543,
+    "occt_operations_refused": 111,
+    "occt_refusal_reasons": {
+     "unmatched_edge: edge sample N lies on N edges": 32,
+     "result face N has area N, the reply differs": 20,
+     "operation_failed: output is not valid closed solid geometry": 13,
+     "face N is too narrow to sample": 12,
+     "the result is not closed solids": 9,
+     "unmatched_face: operand N face sample N lies on N faces": 7,
+     "operation_failed: solid fillet failed": 4,
+     "operation_failed": 3,
+     "operation_failed: fillet cannot use the selected edge": 3,
+     "operation_failed: solid chamfer failed": 2,
+     "operation_failed: chamfer output face has no generated provenance": 2,
+     "operation_failed: fillet output face or edge has no provenance": 1,
+     "operation_failed: BRep_Tool:: no parameter on edge": 1,
+     "nf kernel serve closed its output": 1,
+     "operation_failed: boolean history refers outside its output": 1
+    },
+    "occt_refusal_kinds": {
+     "transfer: operand samples did not match the shape OCCT read": 51,
+     "OpenCASCADE failed, or its output failed Nightfall's validation": 30,
+     "read-back: the result did not read back as the same closed solids": 29,
+     "other": 1
+    }
+   }
+  }
+ },
+ "routed": {
+  "truck": {
+   "scores": {
+    "success": 79.32330827067669,
+    "correctness": 36.5,
+    "history": 83.38050953443582,
+    "fillet": 83.92857142857143,
+    "performance": 100.0,
+    "robustness": 30
+   },
+   "weighted": 69.16595153094731,
+   "detail": {
+    "attempted": 266,
+    "succeeded": 211,
+    "correct": 73,
+    "measured": 200,
+    "correct_by_tolerance": {
+     "1e-06": 65,
+     "0.0001": 171,
+     "0.001": 197
+    },
+    "answers_written_coarser_than_1e-6": 1,
+    "history_cases": 212,
+    "faces": 73291,
+    "exact_faces": 16078,
+    "fillet_cases": 56,
+    "fillet_succeeded": 47,
+    "shared_successes": 175,
+    "median_seconds": 0.368810042,
+    "crashes": [],
+    "hangs": [
+     "booleans/2928-join-cap-touching-lips-with-offset-walls",
+     "sweeps/2552-thread-groove-cut-by-a-square-coil-in-a-bore",
+     "threads/2038-cut-threaded-stud-from-bored-block"
+    ],
+    "determinism": {
+     "booleans/4095-slab-cut-standing-off-a-bore-r10": "geometry",
+     "crashes/4092-loft-ribs-rounded-pad-union-panics": "time limit",
+     "fillets/126-fillet-all-twelve-box-edges-r2": "geometry",
+     "fillets/126-fillet-box-corner-unequal-radii-one-after-another": "geometry",
+     "fillets/1557-fillet-vertical-corners-after-bottom-rounds": "geometry",
+     "tessellation/784-stl-open-edges-filleted-and-drilled": "geometry",
+     "threads/2038-cut-threaded-stud-from-bored-block": "time limit"
+    },
+    "determinism_counts": {
+     "geometry": 5,
+     "time limit": 2,
+     "outcome": 0
+    },
+    "statuses": {
+     "pass": 206,
+     "fail": 48,
+     "unsupported": 9,
+     "hang": 3
+    },
+    "occt_operations_taken": 0,
+    "occt_operations_refused": 0,
+    "occt_refusal_reasons": {},
+    "occt_refusal_kinds": {}
+   },
+   "share_of_occt": 118.04661191346023
+  },
+  "occt": {
+   "scores": {
+    "success": 74.43609022556392,
+    "correctness": 36.0655737704918,
+    "history": 73.33457772553461,
+    "fillet": 64.28571428571429,
+    "performance": 39.526395492625184,
+    "robustness": 40
+   },
+   "weighted": 58.59206834470841,
+   "detail": {
+    "attempted": 266,
+    "succeeded": 198,
+    "correct": 66,
+    "measured": 183,
+    "correct_by_tolerance": {
+     "1e-06": 60,
+     "0.0001": 168,
+     "0.001": 180
+    },
+    "answers_written_coarser_than_1e-6": 1,
+    "history_cases": 193,
+    "faces": 45301,
+    "exact_faces": 5096,
+    "fillet_cases": 56,
+    "fillet_succeeded": 36,
+    "shared_successes": 175,
+    "median_seconds": 0.933072792,
+    "crashes": [],
+    "hangs": [],
+    "determinism": {
+     "ladder/09-shells-and-offsets/010-shell-under-rounded-top": "geometry",
+     "shell/4010-shell-open-at-through-hole-wall": "geometry",
+     "shell/566-shell-swept-bar-with-bend": "geometry"
+    },
+    "determinism_counts": {
+     "geometry": 3,
+     "time limit": 0,
+     "outcome": 0
+    },
+    "statuses": {
+     "fail": 72,
+     "pass": 194
+    },
+    "occt_operations_taken": 543,
+    "occt_operations_refused": 60,
+    "occt_refusal_reasons": {
+     "unmatched_edge: edge sample N lies on N edges": 24,
+     "result face N has area N, the reply differs": 10,
+     "operation_failed: output is not valid closed solid geometry": 6,
+     "face N is too narrow to sample": 6,
+     "the result is not closed solids": 4,
+     "operation_failed: fillet cannot use the selected edge": 3,
+     "unmatched_face: operand N face sample N lies on N faces": 2,
+     "operation_failed: solid chamfer failed": 2,
+     "operation_failed: solid fillet failed": 2,
+     "operation_failed: fillet output face or edge has no provenance": 1
+    },
+    "occt_refusal_kinds": {
+     "transfer: operand samples did not match the shape OCCT read": 32,
+     "OpenCASCADE failed, or its output failed Nightfall's validation": 14,
+     "read-back: the result did not read back as the same closed solids": 14
+    }
+   }
+  }
+ },
+ "without_bridge_failures": {
+  "truck": {
+   "scores": {
+    "success": 87.38317757009345,
+    "correctness": 32.7027027027027,
+    "history": 71.7443391793893,
+    "fillet": 88.70967741935483,
+    "performance": 100.0,
+    "robustness": 30
+   },
+   "weighted": 68.97532938938191,
+   "detail": {
+    "attempted": 428,
+    "succeeded": 374,
+    "correct": 121,
+    "measured": 370,
+    "correct_by_tolerance": {
+     "1e-06": 109,
+     "0.0001": 321,
+     "0.001": 359
+    },
+    "answers_written_coarser_than_1e-6": 3,
+    "history_cases": 369,
+    "faces": 84146,
+    "exact_faces": 24473,
+    "fillet_cases": 62,
+    "fillet_succeeded": 55,
+    "shared_successes": 354,
+    "median_seconds": 0.1263044375,
+    "crashes": [
+     "import/3963-closed-spline-edge-vertex-past-start"
+    ],
+    "hangs": [
+     "booleans/2928-join-cap-touching-lips-with-offset-walls",
+     "booleans/3830-split-cup-by-extended-spline-surface",
+     "sweeps/1856-disk-and-36-twisted-lofted-blades-joined",
+     "sweeps/3936-loft-join-circle-to-rectangle-on-a-cylinder",
+     "sweeps/793-coil-split-by-a-plane-across-its-axis"
+    ],
+    "determinism": {
+     "booleans/1140-hollow-lofted-tube-cut-in-half-and-joined": "time limit",
+     "booleans/3455-join-of-64-separate-pegs": "time limit",
+     "booleans/4095-slab-cut-standing-off-a-bore-r10": "geometry",
+     "fillets/126-fillet-all-twelve-box-edges-r2": "geometry",
+     "fillets/126-fillet-box-corner-unequal-radii-one-after-another": "geometry",
+     "fillets/126-fillet-edge-radii-box-corner-r1-r2-r3-at-once": "geometry",
+     "fillets/126-fillet-edge-radii-two-parallel-edges": "geometry",
+     "fillets/1557-fillet-vertical-corners-after-bottom-rounds": "geometry",
+     "sweeps/2005-closed-sweep-twisted-new-body": "geometry",
+     "sweeps/3345-sweep-profile-mid-line-round-a-rounded-rectangle": "geometry",
+     "tessellation/784-stl-open-edges-filleted-and-drilled": "geometry"
+    },
+    "determinism_counts": {
+     "geometry": 9,
+     "time limit": 2,
+     "outcome": 0
+    },
+    "statuses": {
+     "pass": 364,
+     "fail": 49,
+     "unsupported": 9,
+     "hang": 5,
+     "crash": 1
+    },
+    "occt_operations_taken": 0,
+    "occt_operations_refused": 0,
+    "occt_refusal_reasons": {},
+    "occt_refusal_kinds": {}
+   },
+   "share_of_occt": 121.928708253694
+  },
+  "occt": {
+   "scores": {
+    "success": 87.85046728971963,
+    "correctness": 32.520325203252035,
+    "history": 66.33417774188335,
+    "fillet": 74.19354838709677,
+    "performance": 30.248169113971503,
+    "robustness": 0
+   },
+   "weighted": 56.570212526049794,
+   "detail": {
+    "attempted": 428,
+    "succeeded": 376,
+    "correct": 120,
+    "measured": 369,
+    "correct_by_tolerance": {
+     "1e-06": 108,
+     "0.0001": 327,
+     "0.001": 358
+    },
+    "answers_written_coarser_than_1e-6": 3,
+    "history_cases": 365,
+    "faces": 85052,
+    "exact_faces": 15842,
+    "fillet_cases": 62,
+    "fillet_succeeded": 46,
+    "shared_successes": 354,
+    "median_seconds": 0.4175606035,
+    "crashes": [
+     "import/3963-closed-spline-edge-vertex-past-start"
+    ],
+    "hangs": [
+     "booleans/1140-hollow-lofted-tube-cut-in-half-and-joined",
+     "booleans/3455-join-of-64-separate-pegs",
+     "sweeps/1856-disk-and-36-twisted-lofted-blades-joined",
+     "sweeps/793-coil-split-by-a-plane-across-its-axis"
+    ],
+    "determinism": {
+     "fillets/126-fillet-edge-radii-box-corner-r1-r2-r3-at-once": "geometry",
+     "fillets/126-fillet-edge-radii-two-parallel-edges": "geometry",
+     "ladder/09-shells-and-offsets/010-shell-under-rounded-top": "geometry",
+     "shell/4010-shell-open-at-through-hole-wall": "geometry",
+     "shell/566-shell-swept-bar-with-bend": "geometry",
+     "sweeps/2005-closed-sweep-twisted-new-body": "geometry",
+     "sweeps/3345-sweep-profile-mid-line-round-a-rounded-rectangle": "geometry"
+    },
+    "determinism_counts": {
+     "geometry": 7,
+     "time limit": 0,
+     "outcome": 0
+    },
+    "statuses": {
+     "fail": 55,
+     "pass": 368,
+     "hang": 4,
+     "crash": 1
+    },
+    "occt_operations_taken": 437,
+    "occt_operations_refused": 30,
+    "occt_refusal_reasons": {
+     "operation_failed: output is not valid closed solid geometry": 13,
+     "operation_failed: solid fillet failed": 4,
+     "operation_failed": 3,
+     "operation_failed: fillet cannot use the selected edge": 3,
+     "operation_failed: solid chamfer failed": 2,
+     "operation_failed: chamfer output face has no generated provenance": 2,
+     "operation_failed: fillet output face or edge has no provenance": 1,
+     "operation_failed: BRep_Tool:: no parameter on edge": 1,
+     "operation_failed: boolean history refers outside its output": 1
+    },
+    "occt_refusal_kinds": {
+     "OpenCASCADE failed, or its output failed Nightfall's validation": 30
+    }
+   }
+  }
+ },
+ "areas": {
+  "booleans": {
+   "cases": 87,
+   "truck": 64,
+   "occt": 58
+  },
+  "crashes": {
+   "cases": 10,
+   "truck": 6,
+   "occt": 4
+  },
+  "fillets": {
+   "cases": 64,
+   "truck": 53,
+   "occt": 33
+  },
+  "import": {
+   "cases": 23,
+   "truck": 19,
+   "occt": 19
+  },
+  "ladder/01-primitives": {
+   "cases": 6,
+   "truck": 6,
+   "occt": 6
+  },
+  "ladder/02-booleans": {
+   "cases": 20,
+   "truck": 17,
+   "occt": 16
+  },
+  "ladder/03-analytic-profiles": {
+   "cases": 9,
+   "truck": 9,
+   "occt": 9
+  },
+  "ladder/04-spline-profiles": {
+   "cases": 10,
+   "truck": 9,
+   "occt": 9
+  },
+  "ladder/05-holes-and-taps": {
+   "cases": 13,
+   "truck": 12,
+   "occt": 12
+  },
+  "ladder/06-threads": {
+   "cases": 8,
+   "truck": 8,
+   "occt": 6
+  },
+  "ladder/07-fillets": {
+   "cases": 14,
+   "truck": 13,
+   "occt": 10
+  },
+  "ladder/08-chamfers": {
+   "cases": 8,
+   "truck": 8,
+   "occt": 5
+  },
+  "ladder/09-shells-and-offsets": {
+   "cases": 11,
+   "truck": 10,
+   "occt": 9
+  },
+  "ladder/10-patterns-and-mirrors": {
+   "cases": 8,
+   "truck": 7,
+   "occt": 7
+  },
+  "ladder/11-cumulative-parts": {
+   "cases": 4,
+   "truck": 3,
+   "occt": 1
+  },
+  "sheet-metal": {
+   "cases": 57,
+   "truck": 57,
+   "occt": 56
+  },
+  "shell": {
+   "cases": 24,
+   "truck": 16,
+   "occt": 12
+  },
+  "surfaces": {
+   "cases": 8,
+   "truck": 8,
+   "occt": 8
+  },
+  "sweeps": {
+   "cases": 83,
+   "truck": 62,
+   "occt": 61
+  },
+  "tessellation": {
+   "cases": 14,
+   "truck": 12,
+   "occt": 11
+  },
+  "threads": {
+   "cases": 28,
+   "truck": 21,
+   "occt": 18
+  }
+ },
+ "runs": {
+  "truck": {
+   "column": "truck",
+   "environment": {},
+   "polykrom": "3422dd5fb58a5dcae7606bdee4686db186580a53",
+   "jobs": 3,
+   "timeout_s": 180,
+   "started": "2026-10-27T00:05:09+0100",
+   "wall_seconds": 1386.6101508140564,
+   "load_average": [
+    88.5869140625,
+    99.26611328125,
+    174.810546875
+   ]
+  },
+  "truck-1t": {
+   "column": "truck-1t",
+   "environment": {
+    "RAYON_NUM_THREADS": "1",
+    "POLYCORE_THREADS": "1"
+   },
+   "polykrom": "3422dd5fb58a5dcae7606bdee4686db186580a53",
+   "jobs": 3,
+   "timeout_s": 180,
+   "started": "2026-10-27T00:41:48+0100",
+   "wall_seconds": 1825.517212152481,
+   "load_average": [
+    59.0361328125,
+    70.79736328125,
+    93.37451171875
+   ]
+  },
+  "occt": {
+   "column": "occt",
+   "environment": {
+    "SOLIDCRAFT_NIGHTFALL": "nf",
+    "SOLIDCRAFT_NIGHTFALL_TIMEOUT": "60",
+    "POLYCORE_ORACLE_STRICT": "1",
+    "RUST_LOG": "warn"
+   },
+   "polykrom": "3422dd5fb58a5dcae7606bdee4686db186580a53",
+   "jobs": 3,
+   "timeout_s": 180,
+   "started": "2026-10-27T01:25:51+0100",
+   "wall_seconds": 719.3026719093323,
+   "load_average": [
+    90.8232421875,
+    114.00390625,
+    120.0078125
+   ]
+  },
+  "occt-1t": {
+   "column": "occt-1t",
+   "environment": {
+    "SOLIDCRAFT_NIGHTFALL": "nf",
+    "SOLIDCRAFT_NIGHTFALL_TIMEOUT": "60",
+    "POLYCORE_ORACLE_STRICT": "1",
+    "RAYON_NUM_THREADS": "1",
+    "POLYCORE_THREADS": "1"
+   },
+   "polykrom": "3422dd5fb58a5dcae7606bdee4686db186580a53",
+   "jobs": 3,
+   "timeout_s": 180,
+   "started": "2026-10-27T01:12:14+0100",
+   "wall_seconds": 774.5053467750549,
+   "load_average": [
+    143.0185546875,
+    119.439453125,
+    106.51025390625
+   ]
+  }
+ },
+ "caveats": [
+  "The machine was shared and heavily loaded during the runs (load average 60 to 490 on 12 cores). Times are noisy, and the 180 s limit decided four of the determinism differences (marked time limit).",
+  "The occt column has OpenCASCADE only behind the features' joins, cuts, intersects, constant fillets, equal chamfers and inward shells (543 operations taken in 266 cases); everything else in it is truck. It is the closest a Polykrom recipe can get to OCCT today, not OCCT alone.",
+  "The occt column is pessimistic: 80 of its 111 refused operations failed in the bridge (operand samples that did not match the shape OCCT read, results that did not read back), not in OpenCASCADE. The view without those cases is the fairer comparison of the kernels.",
+  "Correctness is measured the same way in both columns: Polykrom's mass properties integrate over a tessellation (divergence theorem), so the 1e-6 bar mostly measures that integrator, not the kernels; most results are within 1e-4. Exact mass properties from the B-rep (Phase 1) are what move this metric. 3 answers in the corpus are written to fewer digits than 1e-6 needs; they are held to their written precision.",
+  "occt times include starting nf kernel serve once per case (median 0.24 s measured on this machine) and a STEP round trip for every operation. The performance metric compares the columns as they run, not the kernels' own speed.",
+  "History is the share of a case's faces whose names Polykrom derives from exact kernel history (the occt column's history comes back from nf per face). Nightfall scored history as yes, partial or no; it is measured per face here.",
+  "A second all-cores run of the occt column (occt-repeat.json.gz) differed from the first in 8 cases, the same cases that differ by thread count, so they vary from run to run, not only with the number of threads. The truck geometry differences are real nondeterminism in Polykrom's kernel: mostly last-bit differences in volume, and 8e-5 mm\u00b3 in sweeps/3006.",
+  "Robustness credits truck with a green wasm32 build: Polykrom CI's wasm job passed on the head of #237, which main 3422dd5f merged. OCCT behind nf cannot run in the browser.",
+  "7 cases unsupported in both columns are left out (509 of 516 scored)."
+ ]
+}

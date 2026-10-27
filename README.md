@@ -11,8 +11,10 @@ and assemblies stay in Polykrom; PolyCore takes geometry in and returns geometry
 
 ## Status
 
-Not started. This repository holds the design, [RFC 0001](docs/rfcs/0001-polycore.md), accepted
-on 2026-10-26. Phase 0 moves Polykrom's kernel (`crates/kernel`, `crates/geom`) and its vendored
+No kernel code yet. This repository holds the design, [RFC 0001](docs/rfcs/0001-polycore.md),
+accepted on 2026-10-26, and the [bake-off and gate harness](bench/README.md) with its first
+[scorecard](bench/scorecard.md): today's Polykrom kernel scored against OpenCASCADE on the
+kernel cases and the ladder. Phase 0 moves Polykrom's kernel (`crates/kernel`, `crates/geom`) and its vendored
 truck crates here, and Polykrom switches to a pinned git dependency on this repository.
 
 | Phase | What |
