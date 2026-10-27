@@ -120,7 +120,7 @@ fn smallest_radius(body: &Body) -> Option<f64> {
         .min_by(f64::total_cmp)
 }
 
-fn bad(op: BoolOp, what: String) -> KernelError {
+pub(crate) fn bad(op: BoolOp, what: String) -> KernelError {
     let verb = match op {
         BoolOp::Union => "join",
         BoolOp::Cut => "cut",
@@ -129,6 +129,38 @@ fn bad(op: BoolOp, what: String) -> KernelError {
     KernelError::Failed(format!(
         "the {verb} could not be computed reliably: {what}. The result was refused rather than kept wrong; \
          where the bodies only touch (faces flush with each other), overlapping them slightly usually helps"
+    ))
+}
+
+/// A result can never leave the region its operands allow: a join stays inside the hull of
+/// their boxes, an intersection inside their overlap, a cut inside the target. The outline box
+/// is read from vertices and edge controls without meshing, so this is cheap enough to run
+/// before every tessellation. It is necessary, not sufficient, but a result outside it cannot be
+/// right however it is measured (issue #4).
+pub(crate) fn envelope_violation_mesh(ma: &Mesh, mb: &Mesh, op: BoolOp, result: &Mesh, tol: f64) -> Option<String> {
+    let (ba, bb, br) = (ma.bounds(), mb.bounds(), result.bounds());
+    if ba.is_empty() || bb.is_empty() || br.is_empty() {
+        return None;
+    }
+    let allowed = match op {
+        BoolOp::Union => ba.union(&bb),
+        BoolOp::Cut => ba,
+        BoolOp::Intersect => ba.intersection(&bb),
+    };
+    if allowed.is_empty() {
+        return Some("the operands do not overlap, so the intersection is empty".into());
+    }
+    let allowed = allowed.inflated(tol);
+    if allowed.contains(br.min) && allowed.contains(br.max) {
+        return None;
+    }
+    let at = |p: Vec3| format!("({:.3}, {:.3}, {:.3})", p.x, p.y, p.z);
+    Some(format!(
+        "the result reaches outside the region the operands allow: its box {}..{} leaves {}..{}",
+        at(br.min),
+        at(br.max),
+        at(allowed.min),
+        at(allowed.max)
     ))
 }
 
