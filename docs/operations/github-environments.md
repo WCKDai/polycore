@@ -79,7 +79,8 @@ These protected environments are in `WCKDai/platform`:
 | [`network`](https://github.com/WCKDai/platform/settings/environments/network) | Tailscale tailnet and OAuth credentials | `main` only |
 | [`agents`](https://github.com/WCKDai/platform/settings/environments/agents) | LiteLLM/model keys and budgets | trusted workflows |
 
-All currently carry `INFRA_CONFIGURED=false` until real values replace the `SET_ME` placeholders.
+They carry separate gates (`INFRA_CONFIGURED`, `NETWORK_CONFIGURED`,
+`AGENTS_CONFIGURED`) until real values replace the `SET_ME` placeholders.
 
 Provider keys should live once in the Coolify-hosted LiteLLM service. GitHub workers should
 receive only project-scoped LiteLLM virtual keys, never the upstream Anthropic, OpenAI, Gemini or
