@@ -45,7 +45,6 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    environment: ci
     env:
       R2_CONFIGURED: ${{ vars.R2_CONFIGURED }}
       RUSTC_WRAPPER: ${{ vars.R2_CONFIGURED == 'true' && 'sccache' || '' }}
