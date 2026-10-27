@@ -1,0 +1,102 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY"
+   }
+  },
+  {
+   "command": "sketch.polygon.inscribed",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 15,
+    "sides": 5,
+    "angle": 90
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "distance": 20,
+    "body_name": "Prism"
+   }
+  },
+  {
+   "command": "solid.cylinder",
+   "params": {
+    "radius": 40,
+    "height": 120,
+    "base": [
+     0,
+     -60,
+     55
+    ],
+    "axis": "Y",
+    "operation": "cut",
+    "targets": [
+     "Prism"
+    ]
+   }
+  },
+  {
+   "command": "surface.patch",
+   "params": {
+    "edges": [
+     [
+      7.1329,
+      9.8176,
+      15.6411
+     ],
+     [
+      -7.1329,
+      9.8176,
+      15.6411
+     ],
+     [
+      -11.5413,
+      -3.75,
+      16.7012
+     ],
+     [
+      -0.0,
+      -12.1353,
+      15.0
+     ],
+     [
+      11.5413,
+      -3.75,
+      16.7012
+     ]
+    ],
+    "body": "Prism",
+    "body_name": "Patch"
+   }
+  },
+  {
+   "command": "surface.thicken",
+   "params": {
+    "bodies": [
+     "Patch"
+    ],
+    "thickness": 2
+   }
+  },
+  {
+   "command": "solid.remove",
+   "params": {
+    "bodies": [
+     "Prism",
+     "Patch"
+    ]
+   }
+  }
+ ]
+}

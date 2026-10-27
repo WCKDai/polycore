@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#195"
+ ],
+ "what": "a G2 surface.blend from a computer mouse's extruded side walls up to its lofted crown: refused as 'the support surface is too small around a picked edge to read its shape' (the crown loft's rulings cross its rim at a slant); G1 is refused the same way",
+ "source": "invariants",
+ "method": "walls: the outline extruded from z = -3 to 18; crown: the loft of 195-g2-patch-capping-a-crown-loft; the closed G2 blend from the walls' top rim to the crown's lower rim, stitched onto both, and flat patches on the walls' bottom rim and the crown's top rim, stitched on: one closed, valid solid (a blend whose boundary strays from the rims leaves the stitch open). No closed form for its volume.",
+ "body_count": 1,
+ "watertight": true
+}

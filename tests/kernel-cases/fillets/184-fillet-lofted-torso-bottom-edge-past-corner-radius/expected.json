@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#184",
+  "wckdboy/polykrom#126"
+ ],
+ "what": "an R11 round on the same bottom edge chain of TinyRex's lofted torso, whose floor corners are r9 arcs: refused as 'the blend is larger than the neighbouring faces' (#184 case 1, r 10-12), though the wall leans out so far that the ball touches the floor well inside the arcs",
+ "source": "invariants",
+ "method": "the wall leaves the r9 floor arcs leaning out by about 35 deg from the vertical (x 32 to 52 over z 210 to 224), so the R11 ball touches the floor r tan(theta/2) = about 3.5 in from the edge (theta the angle between the floor's and the wall's normals), inside the 9 mm arcs: the round exists. One valid, watertight body",
+ "body_count": 1,
+ "watertight": true
+}

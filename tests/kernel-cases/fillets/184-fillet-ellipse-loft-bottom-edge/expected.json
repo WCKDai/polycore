@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#184",
+  "wckdboy/polykrom#126"
+ ],
+ "what": "an R4 round on the elliptic bottom edge of a loft from an ellipse (30 x 20, z 0) to a circle (r 10, z 40): a closed curved edge between the floor and a lofted face whose angle to the floor changes all round",
+ "source": "analytic",
+ "method": "two sections: the loft is ruled, W(t,s) = (1-s) E(t) + s C(t), and its volume is 40 pi * integral of (30-20s)(20-10s) ds = 39793.5069. A rolling-ball round of a convex edge is the solid opened by the ball (the union of the balls inside it). The walls lean in all round, so the lowest balls sit on the floor: their centres fill the region Omega at height 4 that lies 4 or more from the wall, bounded by the spine (solved per t on the wall's inward normals). Over a floor point q at distance d outside Omega, the column is removed below 4 - sqrt(16 - d^2) and between 4 + sqrt(16 - d^2) and the strip of wall normals through the spine, up to the wall (all of it where d >= 4). Integrated over the floor band in elliptic coordinates (trapezoid in t, midpoint across, 90 x 8000 and 180 x 2000, spine sampled at 2880 points), the round removes 1073.774 (+-0.01); the same integration of a revolved frustum gives 588.707 against Pappus's 588.705. V = 38719.733. Cross-check, not graded: OpenCASCADE 7.9.3 run out of process removes 1073.473 from its own loft",
+ "body_count": 1,
+ "volume_mm3": 38719.733
+}

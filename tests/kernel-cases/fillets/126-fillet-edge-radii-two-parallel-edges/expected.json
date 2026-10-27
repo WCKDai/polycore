@@ -1,0 +1,12 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126"
+ ],
+ "what": "one fillet with a radius per edge: R2 on the top front edge and R5 on the bottom back edge of a 40 x 30 x 20 box (edge_radii)",
+ "source": "analytic",
+ "method": "the two rounds don't meet: each takes (1 - pi/4) r^2 off along the 40 mm edge, V = 24000 - (1 - pi/4)(4 + 25) 40 = 23751.0619; each turns two flat strips 2r wide into a quarter cylinder pi r/2 wide, and each end face loses its corner, (1 - pi/4) r^2, at both ends: A = 5200 + (pi - 4) 40 + (5 pi/2 - 10) 40 - 2 (1 - pi/4)(4 + 25) = 5067.3761. Faces: 6 planes and 2 cylinders",
+ "body_count": 1,
+ "volume_mm3": 23751.06186954104,
+ "area_mm2": 5067.376064979623,
+ "faces": 8
+}

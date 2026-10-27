@@ -1,0 +1,103 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Path"
+   }
+  },
+  {
+   "command": "sketch.spline.control_point",
+   "params": {
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      25
+     ],
+     [
+      10,
+      35
+     ],
+     [
+      30,
+      40
+     ]
+    ]
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": "XY",
+    "name": "Ring"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 3
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.sweep",
+   "params": {
+    "sketch": "Ring",
+    "path_sketch": "Path",
+    "path": [
+     "s1"
+    ]
+   }
+  },
+  {
+   "command": "solid.shell",
+   "params": {
+    "faces": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      30,
+      0,
+      40
+     ]
+    ],
+    "thickness": 0.6
+   }
+  }
+ ]
+}

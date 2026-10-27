@@ -1,0 +1,10 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126"
+ ],
+ "what": "an R3 round on the elliptic rim where a cylinder (r 10) meets its top cut at 20 deg (z = 30 + x tan 20): a curved edge between a cylinder and a sloped plane, the angle between them changing along it",
+ "source": "analytic",
+ "method": "uncut: pi 10^2 30 = 9424.7780 (the slope averages out over the disk). A rolling-ball round of a convex edge is the solid eroded and dilated by the ball, so over each point (x, y) of the disk the top is max over centres c (|c| <= 7, on the plane offset 3 down) of c_z + sqrt(9 - |(x,y) - c|^2): its maximiser is c = (x + 3 sin 20, y) where that lies in the disk (the plane), else on the circle |c| = 7 (golden-section search). The removed volume, integrated over the ring 6..10 (Gauss-Legendre in r, 360 x 80 x 8 points, converged to 1e-3; 113.222 against the closed form 2 pi (1 - pi/4) 9 (10 - 0.2234 3) for a flat top), is 134.016: V = 9290.762",
+ "body_count": 1,
+ "volume_mm3": 9290.762
+}

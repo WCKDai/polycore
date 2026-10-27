@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#184",
+  "wckdboy/polykrom#126"
+ ],
+ "what": "an R8 round on the bottom edge chain (four lines and four arcs, tangent) of a loft through four rounded outlines (TinyRex's torso): refused as 'the ball doesn't fit along the edge (only straight edges can be blended)'",
+ "source": "invariants",
+ "method": "the loft through four sections is the loft's own interpolation, so there is no closed-form volume (the outline's own numbers are TinyRex's: 68 x 78 r9 at z 210 out to 130 x 92 at z 288, front corners rounder than the back). The round follows the tangent chain all the way round (one closed chain): one valid, watertight body",
+ "body_count": 1,
+ "watertight": true
+}

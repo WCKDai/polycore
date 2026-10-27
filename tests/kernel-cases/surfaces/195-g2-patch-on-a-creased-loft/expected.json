@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#195"
+ ],
+ "what": "a G2 N-sided surface.patch (nine edges) on the open end of a loft through creased sections (a T-rex skull's snout): refused as 'the support surface is too small around a picked edge to read its shape'",
+ "source": "invariants",
+ "method": "the skull loft: five closed sections at x = 15 \u2026 130 of three fit-point splines and a line (the jaw line), so the loft is creased where the curves meet and its end at x = 15 is a loop of nine edges; a G2 patch on that loop (G2 cannot hold at the creased corners, where the fill relaxes, as it does for G1): the loft (four faces, one per section curve) and the patch (one face) as two sheets (valid false).",
+ "valid": false,
+ "body_count": 2,
+ "faces": 5
+}

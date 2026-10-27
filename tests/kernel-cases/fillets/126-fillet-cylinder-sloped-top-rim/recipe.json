@@ -1,0 +1,93 @@
+{
+ "commands": [
+  {
+   "command": "solid.cylinder",
+   "params": {
+    "base": [
+     0,
+     0,
+     0
+    ],
+    "radius": 10,
+    "height": 40,
+    "body_name": "Post"
+   }
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Slope"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -20,
+      22.720595314675954
+     ],
+     [
+      20,
+      37.279404685324046
+     ],
+     [
+      20,
+      60
+     ],
+     [
+      -20,
+      60
+     ]
+    ],
+    "closed": true
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "solid.extrude",
+   "params": {
+    "sketch": "Slope",
+    "distance": 40,
+    "direction": "symmetric",
+    "operation": "cut",
+    "targets": [
+     "Post"
+    ]
+   }
+  },
+  {
+   "command": "solid.fillet",
+   "params": {
+    "edges": [
+     [
+      0,
+      10,
+      30
+     ]
+    ],
+    "radius": 3
+   }
+  }
+ ]
+}

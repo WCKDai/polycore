@@ -11,9 +11,18 @@ and assemblies stay in Polykrom; PolyCore takes geometry in and returns geometry
 
 ## Status
 
-Not started. This repository holds the design, [RFC 0001](docs/rfcs/0001-polycore.md), accepted
-on 2026-10-26. Phase 0 moves Polykrom's kernel (`crates/kernel`, `crates/geom`) and its vendored
-truck crates here, and Polykrom switches to a pinned git dependency on this repository.
+Phase 0 is underway. [RFC 0001](docs/rfcs/0001-polycore.md), accepted on 2026-10-26, is the
+design and exit-gate contract. This workspace contains Polykrom's kernel and geometry, extracted
+with their Git history from `crates/kernel` and `crates/geom` into `crates/polycore` and
+`crates/solidcraft-geom`, plus the vendored Truck closure, tests and regression corpus. The
+source/consumer revision is in `polykrom.rev`. The public package names remain `solidcraft-kernel`
+and `solidcraft-geom` until Polykrom's coordinated rename stage.
+
+The standalone native/wasm workspace and development tasks are the first extraction arc.
+Polykrom's pinned git dependency, the complete corpus gate, the OCCT bake-off and the remaining
+Phase 0 baselines are not claimed complete yet. At `polykrom.rev` the tree has 400 regression
+cases and 116 ladder cases; the imported generated report still covers its older 382-case run,
+so the added cases need a fresh measured baseline rather than an assumed pass.
 
 | Phase | What |
 |---|---|
@@ -24,6 +33,19 @@ truck crates here, and Polykrom switches to a pinned git dependency on this repo
 | 4 | Blends |
 | 5 | Offsets and local operations |
 | 6 | Parity with OCCT, speed, truck removed |
+
+## Build and verify
+
+Rust 1.95 or newer is required. See [CONTRIBUTING.md](CONTRIBUTING.md) for the clean-room,
+licence, determinism and testing rules.
+
+```sh
+cargo xtask check         # all workspace targets
+cargo xtask test          # native unit, integration and doc tests
+cargo xtask wasm          # kernel and geometry on wasm32
+cargo xtask verify-deps   # the renamed, local-only Truck package closure
+cargo xtask ci            # fmt, check, Clippy, tests, wasm and dependency checks
+```
 
 ## Gates
 
@@ -49,4 +71,4 @@ is read or used, and no model made in commercial CAD is used for testing.
 
 ## Licence
 
-Apache-2.0. See [LICENSE](LICENSE). Polykrom itself is MIT OR Apache-2.0.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Polykrom itself is MIT OR Apache-2.0.

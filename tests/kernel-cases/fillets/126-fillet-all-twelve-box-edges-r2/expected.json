@@ -1,0 +1,12 @@
+{
+ "sources": [
+  "wckdboy/polykrom#126"
+ ],
+ "what": "R2 on all twelve edges of a 40 x 30 x 20 box at once: every corner is a vertex where three equal rounds meet (a sphere octant)",
+ "source": "analytic",
+ "method": "the rounded box is the inner box (36 x 26 x 16) grown by the ball r = 2 (Minkowski sum, Steiner): V = abc + 2r(ab + bc + ca) + pi r^2 (a + b + c) + 4/3 pi r^3 = 23701.6872, A = 2(ab + bc + ca) + 2 pi r (a + b + c) + 4 pi r^2 = 4886.4424 with a, b, c the inner box's sides. Faces: 6 planes, 12 cylinders, 8 sphere corners = 26",
+ "body_count": 1,
+ "volume_mm3": 23701.68722955831,
+ "area_mm2": 4886.442390377452,
+ "faces": 26
+}

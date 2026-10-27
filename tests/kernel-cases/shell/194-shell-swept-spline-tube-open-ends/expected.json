@@ -1,0 +1,11 @@
+{
+ "sources": [
+  "wckdboy/polykrom#194"
+ ],
+ "what": "a circle r 3 swept along a planar cubic Bezier (0,0) (0,25) (10,35) (30,40) in XZ, shelled 0.6 mm open at both ends: a tube wall; the swept surface is free-form",
+ "source": "analytic",
+ "method": "the section stays square to the planar path with its centre on it, and the path's tightest radius (27.33) is far above r, so by Pappus each annulus sweeps its area times the path length: L = int |B'| dt = 55.271561795 (Simpson), V = pi (3^2 - 2.4^2) L = 562.595973258. The inner wall is the sweep of the circle r 2.4 (concentric offsets). Faces: outer and inner side, two end rims = 4",
+ "body_count": 1,
+ "volume_mm3": 562.595973258,
+ "faces": 4
+}
