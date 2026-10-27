@@ -346,6 +346,61 @@ fn a_blend_between_offset_strips_is_the_cubic_hermite_strip() {
 }
 
 #[test]
+fn a_blend_leaving_at_the_chords_speed_is_the_hermite_strip() {
+    // The strips of `a_blend_between_offset_strips_is_the_cubic_hermite_strip`, blended with each
+    // end leaving at the chord's speed (tangent share 1, new blends' default): the cubic Hermite
+    // strip whose inner control points stand chord/3 out, (10 + chord/3, 10) and (20 - chord/3,
+    // 15) in (y, z): handles three times the legacy third's, so its ends turn nine times less
+    // tightly (a Bézier's curvature at an end goes as 1 / |P1 - P0|²).
+    let a = box_solid(Vec3::new(0.0, 0.0, 0.0), Vec3::new(40.0, 10.0, 10.0)).unwrap();
+    let b = box_solid(Vec3::new(0.0, 20.0, 5.0), Vec3::new(40.0, 30.0, 15.0)).unwrap();
+    let (pa, pb) = ([Vec3::new(20.0, 10.0, 10.0)], [Vec3::new(20.0, 20.0, 15.0)]);
+    let (made, gap) = blend_between_tangent(&a, &pa, &b, &pb, [Continuity::G1; 2], [0.0, 0.0], [BLEND_TANGENT; 2], None, None, 9, false).unwrap();
+    assert!(gap < 1e-9, "{gap}");
+    let chord = 125f64.sqrt();
+    let control = [(10.0, 10.0), (10.0 + chord / 3.0, 10.0), (20.0 - chord / 3.0, 15.0), (20.0, 15.0)];
+    let bezier = |t: f64| {
+        let w = [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
+        control.iter().zip(w).fold((0.0, 0.0), |(y, z), ((cy, cz), w)| (y + cy * w, z + cz * w))
+    };
+    let across = 11;
+    for row in sample_grid(&made, 9, across).unwrap() {
+        for (j, p) in row.iter().enumerate() {
+            let (y, z) = bezier(j as f64 / (across - 1) as f64);
+            assert!((p.y - y).abs() < 1e-9 && (p.z - z).abs() < 1e-9, "at v = {j}/{}: {p:?} vs ({y}, {z})", across - 1);
+        }
+    }
+    // The legacy share is still what `blend_between` builds, and shares out of range are refused.
+    let legacy = blend_between(&a, &pa, &b, &pb, [Continuity::G1; 2], [0.0, 0.0], None, None, 9, false).unwrap().0;
+    let same = blend_between_tangent(&a, &pa, &b, &pb, [Continuity::G1; 2], [0.0, 0.0], [LEGACY_BLEND_TANGENT; 2], None, None, 9, false).unwrap().0;
+    assert_eq!(sample_grid(&legacy, 5, 5).unwrap(), sample_grid(&same, 5, 5).unwrap());
+    for bad in [0.0, -1.0, 3.5, f64::NAN] {
+        assert!(blend_between_tangent(&a, &pa, &b, &pb, [Continuity::G1; 2], [0.0, 0.0], [bad, 1.0], None, None, 9, false).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_blend_leaving_so_fast_that_it_folds_is_refused() {
+    // Two boxes' top rims facing each other in one plane (z = 10, y = 10 and y = 20): each end
+    // leaves along the chord, and a G1 cross-section's controls are 0, s/3, 1 - s/3 and 1 along
+    // it for a speed s in chords. Its hodograph's controls s, 3 - 2s, s stay above the axis while
+    // 3 - 2s >= -s, s <= 3: tangent share 1 at crown 2 is the most, crown 3 (s = 4) folds.
+    let a = box_solid(Vec3::new(0.0, 0.0, 0.0), Vec3::new(40.0, 10.0, 10.0)).unwrap();
+    let b = box_solid(Vec3::new(0.0, 20.0, 0.0), Vec3::new(40.0, 30.0, 10.0)).unwrap();
+    let (pa, pb) = ([Vec3::new(20.0, 10.0, 10.0)], [Vec3::new(20.0, 20.0, 10.0)]);
+    let g1 = [Continuity::G1; 2];
+    let blend = |orders, crown: f64, share: f64| blend_between_tangent(&a, &pa, &b, &pb, orders, [crown; 2], [share; 2], None, None, 9, false);
+    let err = blend(g1, 3.0, BLEND_TANGENT);
+    assert!(matches!(&err, Err(KernelError::Invalid(m)) if m.contains("fold")), "{err:?}");
+    assert!(blend(g1, 1.9, BLEND_TANGENT).is_ok());
+    // The legacy share never folds, at the largest crown and any order: blends saved with it
+    // still build.
+    for orders in [[Continuity::G1, Continuity::G2], [Continuity::G2; 2], [Continuity::G3; 2], [Continuity::G0, Continuity::G3]] {
+        assert!(blend(orders, 3.0, LEGACY_BLEND_TANGENT).is_ok(), "{orders:?}");
+    }
+}
+
+#[test]
 fn a_picked_seam_sets_where_a_closed_blend_starts() {
     // The same coaxial rims as above, but the upper chain told to start a quarter round from where
     // the lower one starts: the blend then turns a quarter round the axis, as asked.

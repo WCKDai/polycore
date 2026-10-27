@@ -71,7 +71,11 @@ pub fn map_on_threads<T: Sync, R: Send>(items: &[T], max_threads: usize, f: impl
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let threads = std::thread::available_parallelism().map(usize::from).unwrap_or(1).min(max_threads).min(items.len());
+        // Inside a worker of [`map_with_local_pools`] (its pool of one thread), the work stays on
+        // that worker: every core already runs one.
+        let nested = rayon::current_thread_index().is_some() && rayon::current_num_threads() == 1;
+        let cores = if nested { 1 } else { std::thread::available_parallelism().map(usize::from).unwrap_or(1) };
+        let threads = cores.min(max_threads).min(items.len());
         if threads > 1 {
             let next = AtomicUsize::new(0);
             let work = || {
@@ -124,6 +128,18 @@ mod tests {
         for (i, r) in result.iter().enumerate() {
             assert_eq!(r.as_ref().ok().copied(), (i != 7).then_some(i * 2));
         }
+    }
+
+    #[test]
+    fn plain_threads_inside_a_local_pool_stay_on_its_worker() {
+        let outer: Vec<usize> = (0..4).collect();
+        let inner: Vec<usize> = (0..64).collect();
+        let stayed = map_with_local_pools(&outer, 4, |_| {
+            let me = std::thread::current().id();
+            let on = map_on_threads(&inner, 16, |_| std::thread::current().id());
+            Ok(on.iter().all(|t| *t == Some(me)))
+        });
+        assert!(stayed.iter().all(|r| matches!(r, Ok(true))), "{stayed:?}");
     }
 
     #[test]

@@ -1181,8 +1181,16 @@
       "status": "pass"
     },
     "ladder/09-shells-and-offsets/011-part-shell": {
-      "seconds": 11.653319875,
-      "status": "fail"
+      "measured": {
+        "area_mm2": 20922.522518177368,
+        "body_count": 1,
+        "edges": 127,
+        "faces": 55,
+        "vertices": 91,
+        "volume_mm3": 15397.695974277703
+      },
+      "seconds": 35.4540215,
+      "status": "pass"
     },
     "ladder/10-patterns-and-mirrors/001-rect-pattern-holes": {
       "measured": {
@@ -1269,8 +1277,16 @@
       "status": "pass"
     },
     "ladder/10-patterns-and-mirrors/008-part-vents": {
-      "seconds": 15.009411459,
-      "status": "fail"
+      "measured": {
+        "area_mm2": 20922.528751153164,
+        "body_count": 1,
+        "edges": 135,
+        "faces": 59,
+        "vertices": 99,
+        "volume_mm3": 15355.290709774692
+      },
+      "seconds": 45.383917416,
+      "status": "pass"
     },
     "ladder/11-cumulative-parts/001-bracket": {
       "measured": {
@@ -1309,8 +1325,16 @@
       "status": "pass"
     },
     "ladder/11-cumulative-parts/004-housing": {
-      "seconds": 11.837619084,
-      "status": "fail"
+      "measured": {
+        "area_mm2": 21277.42233659444,
+        "body_count": 1,
+        "edges": 14251,
+        "faces": 6528,
+        "vertices": 7720,
+        "volume_mm3": 15045.770497080879
+      },
+      "seconds": 58.626120583,
+      "status": "pass"
     }
   },
   "reason": "truck baseline on Polykrom main (K0, #123)"

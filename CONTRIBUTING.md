@@ -23,6 +23,14 @@ cargo xtask property-test # random boolean properties; run separately
 For the web check, install the target with `rustup target add wasm32-unknown-unknown`.
 Run `cargo xtask ci` before every commit and keep pull requests to one coherent topic.
 
+## Build hygiene
+
+Use the shared `target/` cache incrementally and run one heavy build or corpus run at a time.
+Check free disk before a full build, and do not start one that would leave less than 10 GiB free.
+Remove only obsolete clones and artifacts you created; never clean a shared checkout or another
+agent's target directory. Avoid duplicate target directories, especially for Polykrom and
+PolyCore joint development, and use the existing release cache where it is appropriate.
+
 ## Non-negotiables
 
 - **Never crash.** Production code returns `Result`; unsupported geometry is refused with a

@@ -310,25 +310,49 @@ pub struct MassProperties {
 }
 
 impl Mesh {
-    /// [`MassProperties`] of a closed mesh, by the divergence theorem over the tetrahedra its
-    /// triangles make with the origin. `None` unless every edge (by vertex index: weld first) is
-    /// shared by exactly two triangles that cross it in opposite directions (closed, consistently
-    /// oriented), or for a mesh without volume or with non-finite values.
+    /// [`MassProperties`] of a closed mesh (see [`Mesh::is_closed`]), by the divergence theorem
+    /// over the tetrahedra its triangles make with the origin. `None` for a mesh that is not
+    /// closed, has no volume or has non-finite values.
     pub fn mass_properties(&self) -> Option<MassProperties> {
-        // Closed and consistently oriented: each edge is crossed once in each direction.
+        if !self.is_closed() {
+            return None;
+        }
+        self.integrate(Vec3::ZERO)
+    }
+
+    /// Whether the mesh is closed and consistently oriented: every edge (by vertex index: weld
+    /// first) is crossed as many times one way as the other by the triangles using it. Mostly that
+    /// is two triangles, once each way; where a solid touches itself along an edge (a pinch), four
+    /// or more. Either way the triangles bound a volume and [`Mesh::mass_properties`] is exact.
+    pub fn is_closed(&self) -> bool {
         let mut edges: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
         for t in &self.triangles {
             for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
                 *edges.entry((a, b)).or_insert(0) += 1;
             }
         }
-        if edges.is_empty() || edges.iter().any(|(&(a, b), n)| *n != 1 || edges.get(&(b, a)) != Some(&1)) {
+        !edges.is_empty() && edges.iter().all(|(&(a, b), n)| edges.get(&(b, a)) == Some(n))
+    }
+
+    /// [`Mesh::mass_properties`] of a mesh that leaves small cracks (a solid's mesh that could not
+    /// be closed): the tetrahedra are taken to the centre of its box, so a crack adds only the
+    /// thin cone it makes with that centre rather than one to the origin. `None` without volume.
+    pub fn mass_properties_open(&self) -> Option<MassProperties> {
+        let c = self.bounds().center();
+        if !c.is_finite() {
             return None;
         }
+        self.integrate(c)
+    }
+
+    /// The divergence-theorem sums of [`Mesh::mass_properties`] over the tetrahedra the triangles
+    /// make with `origin`: exact for a closed mesh wherever `origin` is.
+    fn integrate(&self, origin: Vec3) -> Option<MassProperties> {
         let xyz = |v: Vec3| [v.x, v.y, v.z];
         let (mut v6, mut first, mut second) = (0.0, Vec3::ZERO, [[0.0f64; 3]; 3]);
         for t in &self.triangles {
             let [a, b, c] = self.tri(t)?;
+            let (a, b, c) = (a - origin, b - origin, c - origin);
             let det = a.dot(b.cross(c));
             v6 += det;
             first += (a + b + c) * det;
@@ -362,7 +386,7 @@ impl Mesh {
             }
         }
         let finite = volume.is_finite() && c.iter().all(|x| x.is_finite()) && inertia.iter().flatten().all(|x| x.is_finite());
-        finite.then_some(MassProperties { volume, centroid, inertia })
+        finite.then_some(MassProperties { volume, centroid: centroid + origin, inertia })
     }
 }
 

@@ -498,13 +498,36 @@ fn shell_planar(b: &Body, open: &[Vec3], thickness: f64) -> Result<Body> {
     if let Some(shell) = crate::offset_free::shell_free(&healed, &opened, thickness)? {
         return Ok(record::after(shell, &healed, &record::counts(&[b])));
     }
+    let tolerance = crate::offset_free::shell_tolerance(&healed);
+    // A hole within two walls of another loop of its face: straight through the body with its
+    // holes filled (`shell_holes`), without first making the cavity the hole's vanishing ring
+    // would refuse.
+    if crate::shell_holes::hole_near_rim(&healed, thickness, 2.0)
+        && let Ok(Some(shell)) = crate::shell_holes::shell_round_holes(&healed, &opened, thickness, tolerance)
+    {
+        return Ok(record::after(shell, &healed, &record::counts(&[b])));
+    }
     let margin = thickness + size * 0.05;
-    shell_opened(b, &healed, open, &opened, thickness, margin).map_err(|e| match rim_without_thickness(&healed, &opened, thickness, false) {
+    let shell = shell_opened(b, &healed, open, &opened, thickness, margin).map_err(|e| match rim_without_thickness(&healed, &opened, thickness, false) {
         Some(r) => unsupported_shell(&format!(
             "the rim would have no thickness: an open face meets a round of radius {r:.4} mm tangentially, and the shell is {thickness:.4} mm thick (make the round smaller than the thickness)"
         )),
         None => e,
-    })
+    });
+    match shell {
+        // Refused somewhere (a hole closer to another wall than the wall is thick): through the
+        // body with its holes filled (`shell_holes`), else the refusal.
+        Err(e @ (KernelError::Failed(_) | KernelError::Invalid(_))) => {
+            if crate::shell_holes::refused_at(&e).is_none() {
+                return Err(e);
+            }
+            match crate::shell_holes::shell_round_holes(&healed, &opened, thickness, tolerance) {
+                Ok(Some(shell)) => Ok(record::after(shell, &healed, &record::counts(&[b]))),
+                _ => Err(e),
+            }
+        }
+        shell => shell,
+    }
 }
 
 /// A convex circular-meridian barrel between two axial caps. Sew its exact inset walls
@@ -655,6 +678,17 @@ fn shell_opened(b: &Body, healed: &Body, open: &[Vec3], opened: &[usize], thickn
         Ok(c) => c,
         Err(e) => return shell_by_opening(healed, opened, thickness, margin).map_err(|_| e),
     };
+    // A hole whose ring of face vanishes in the move: the cavity passes itself there, which the
+    // Boolean would make a wall thinner than asked. Refused here, saying where, so that the
+    // shell goes through the body with that hole filled (`shell_holes`).
+    if crate::shell_holes::hole_near_rim(healed, thickness, 3.0)
+        && let Some(p) = crate::offset_free::too_thin(healed, &cavity, opened, thickness, crate::offset_free::shell_tolerance(healed))?
+    {
+        return Err(KernelError::Failed(format!(
+            "not supported yet: the shell's walls would meet near [{:.2}, {:.2}, {:.2}] (the body is thinner there than twice the wall)",
+            p.x, p.y, p.z
+        )));
+    }
     let cavity = match opening_overreach(healed, &cavity, opened, thickness, margin) {
         Ok(Some(trimmed)) => trimmed,
         Ok(None) => cavity,

@@ -223,3 +223,21 @@ fn a_target_that_jumps_in_curvature_supplies_only_g1() {
     let (target, plain_picks) = cylinder_and_picks();
     assert!(match_surface(&sheet, &pick, &target, &plain_picks, Continuity::G3).is_ok());
 }
+
+#[test]
+fn a_chains_middle_lies_on_its_curved_edge() {
+    // A 3 mm line, then a quarter circle of radius 10 about the origin: the chain is 3 + 5π long,
+    // so its middle is 6.35 mm into the arc, between two of the arc's samples. It lies on the arc
+    // (10 from the centre), not on the chord between those samples, which stands up to its
+    // sagitta (4e-3 mm here) inside: a trimmed face's curved edge was then read as off its face.
+    let v = |x: f64, y: f64| mt::builder::vertex(p3(Vec3::new(x, y, 0.0)));
+    let (start, corner, end) = (v(13.0, 0.0), v(10.0, 0.0), v(0.0, 10.0));
+    let line = mt::builder::line(&start, &corner);
+    let arc =
+        mt::builder::circle_arc(&corner, &end, p3(Vec3::new(10.0 * std::f64::consts::FRAC_1_SQRT_2, 10.0 * std::f64::consts::FRAC_1_SQRT_2, 0.0)));
+    let mid = chain_mid(&[line, arc]).unwrap();
+    assert!((mid.len() - 10.0).abs() < 1e-9, "{mid:?} is {} from the centre", mid.len());
+    let along = (3.0 + 5.0 * std::f64::consts::PI) / 2.0 - 3.0;
+    let want = Vec3::new(10.0 * (along / 10.0).cos(), 10.0 * (along / 10.0).sin(), 0.0);
+    assert!(mid.dist(want) < 1e-3, "{mid:?} vs {want:?}");
+}
