@@ -1447,7 +1447,12 @@ where
             return (false, f64::NAN);
         }
         let Ok(mr) = r.tessellate_with(tol_m, true) else { return (false, f64::NAN) };
-        if let (Some(ma), Some(mb)) = (&meshes.0, &meshes.1)
+        // A join is already held to the tool's region by `check_retry`; testing it here as well
+        // rejected valid unions whose tessellation differed from the operands' by a chord, and
+        // the retry that followed changed the shape (Polykrom seed 55). Intersections and cuts
+        // are the operations where a wrong result hides inside a plausible volume.
+        if op != BoolOp::Union
+            && let (Some(ma), Some(mb)) = (&meshes.0, &meshes.1)
             && let Some(reason) = crate::boolean_guard::envelope_violation_mesh(ma, mb, op, &mr, 2.0 * tol_m)
         {
             reject(reason);
