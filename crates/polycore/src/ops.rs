@@ -987,16 +987,6 @@ fn boolean_untimed(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
     {
         return Ok(Some(result));
     }
-    // A tool tangent to the target along a curve in one of its planes (a sphere capping a
-    // cylinder of its radius): once more with the tool split along that plane. Only after a
-    // failure: a refusal (a join along an edge alone) stands.
-    if matches!(r, Err(KernelError::Failed(_)))
-        && op == BoolOp::Union
-        && !APART.with(|c| c.get())
-        && let Some(result) = crate::tangent_split::union(a, b, &boolean)
-    {
-        return Ok(Some(result));
-    }
     if r.is_ok() || !crate::tangent_cylinders::needed(a, b) {
         return r;
     }
