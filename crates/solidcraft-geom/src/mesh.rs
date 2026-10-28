@@ -324,6 +324,34 @@ impl Mesh {
     /// first) is crossed as many times one way as the other by the triangles using it. Mostly that
     /// is two triangles, once each way; where a solid touches itself along an edge (a pinch), four
     /// or more. Either way the triangles bound a volume and [`Mesh::mass_properties`] is exact.
+    /// Gives a vertex whose normal is not finite the area-weighted normal of the triangles at
+    /// it. A surface whose edge collapses to a point (a cone lofted to its apex, a sphere's pole)
+    /// has no normal there, and a renderer refuses a mesh with one (TinyRex's teeth and claws).
+    /// Finite normals are left as they are.
+    pub fn repair_normals(&mut self) {
+        if self.normals.len() != self.positions.len() || self.normals.iter().all(|n| n.is_finite()) {
+            return;
+        }
+        let mut sum = vec![Vec3::ZERO; self.positions.len()];
+        for t in &self.triangles {
+            let [Some(a), Some(b), Some(c)] = t.map(|i| self.positions.get(i as usize).copied()) else { continue };
+            let n = (b - a).cross(c - a);
+            if !n.is_finite() {
+                continue;
+            }
+            for i in t {
+                if let Some(s) = sum.get_mut(*i as usize) {
+                    *s += n;
+                }
+            }
+        }
+        for (n, s) in self.normals.iter_mut().zip(sum) {
+            if !n.is_finite() {
+                *n = s.normalized().unwrap_or(Vec3::Z);
+            }
+        }
+    }
+
     pub fn is_closed(&self) -> bool {
         let mut edges: std::collections::HashMap<(u32, u32), u32> = std::collections::HashMap::new();
         for t in &self.triangles {
