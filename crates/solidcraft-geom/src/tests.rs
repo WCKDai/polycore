@@ -839,3 +839,20 @@ fn a_box_from_points_holds_them_and_grows() {
     assert_eq!((both.min, both.max), (Vec3::new(0.0, 1.0, 4.0), Vec3::new(1.0, 2.0, 5.0)));
     assert!(b.intersection(&far).is_empty());
 }
+
+#[test]
+fn a_vertex_with_no_normal_takes_its_triangles() {
+    // A cone's apex: four triangles meet at vertex 4, whose surface normal is not finite.
+    let positions =
+        vec![Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 0.0, 2.0)];
+    let side = Vec3::new(1.0, 1.0, 0.5).normalized().unwrap();
+    let mut m = Mesh {
+        normals: vec![side, side, side, side, Vec3::new(f64::NAN, 0.0, 0.0)],
+        positions,
+        triangles: vec![[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
+        ..Default::default()
+    };
+    m.repair_normals();
+    assert!((m.normals[4] - Vec3::Z).len() < 1e-12, "{:?}", m.normals[4]);
+    assert_eq!(m.normals[0], side, "a finite normal is left as it is");
+}

@@ -278,6 +278,10 @@ mod tests {
         assert!((v - want).abs() / want < rel, "{v} vs {want}");
         let mesh = b.tessellate_with(0.01, true).unwrap();
         assert_eq!(crate::curveblend::tests::open_and_over_shared(&mesh, 1e-4), (0, 0), "open and over-shared mesh sides");
+        // The apex has no surface normal; a renderer refuses a mesh with a non-finite one.
+        for m in [mesh, b.tessellate(0.01).unwrap()] {
+            assert!(m.normals.iter().all(|n| n.is_finite()), "a non-finite normal at the apex");
+        }
     }
 
     #[test]
