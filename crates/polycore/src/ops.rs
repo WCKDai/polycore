@@ -2048,12 +2048,19 @@ pub(crate) fn nudged(r: Body, nb: &Body, counts: &[(usize, usize)]) -> Body {
     r.with_checked_history(h, counts)
 }
 
+/// The finest tolerance truck's boolean takes (`truck_base::tolerance::TOLERANCE`).
+const TRUCK_TOLERANCE: f64 = 1e-6;
+
 /// What truck's boolean makes of `a` and `b`: the solid, and its history in our terms (see
 /// [`recorded::shapeops`]). On copies of the operands moved by `shift` (when given; the result
 /// is moved back), which changes the rays the boolean classifies faces by. Copies (and moved
 /// copies) keep the operands' face and edge order, and so does moving the result back, so the
 /// history truck records holds for the operands themselves.
 pub(crate) fn truck_boolean(a: &Body, b: &Body, op: BoolOp, shift: Option<mt::Vector3>, tol: f64) -> Result<(Solid, Option<recorded::Shapeops>)> {
+    // Truck asserts its tolerance is no finer than its own (1e-6): a finer one, asked for by a
+    // small feature's refinement (TinyRex's claws), panicked into an internal error that ended
+    // the boolean instead of letting it try at the finest it can.
+    let tol = tol.max(TRUCK_TOLERANCE);
     if !take_attempt() {
         return Err(KernelError::Failed("no result in the tries it was given".into()));
     }
@@ -2588,3 +2595,14 @@ mod prism_fast_path_tests;
 #[cfg(test)]
 #[path = "placement_tests.rs"]
 mod placement_tests;
+
+#[cfg(test)]
+#[test]
+fn a_tolerance_finer_than_truck_takes_is_raised_not_a_panic() {
+    // A small feature's refinement can ask for less than 1e-6 (TinyRex's claws); truck asserts
+    // against that, and the panic was an internal error that ended the whole boolean.
+    let a = crate::box_solid(Vec3::ZERO, Vec3::new(2.0, 2.0, 2.0)).unwrap();
+    let b = crate::box_solid(Vec3::new(1.0, 1.0, 1.0), Vec3::new(3.0, 3.0, 3.0)).unwrap();
+    let (solid, _) = truck_boolean(&a, &b, BoolOp::Cut, None, 1e-7).unwrap();
+    assert!(!solid.boundaries().is_empty());
+}
