@@ -290,11 +290,73 @@ impl Out {
         let (po, dz, dx) = (self.point(o), self.direction(z), self.direction(x));
         self.add_shared(format!("AXIS2_PLACEMENT_3D('',#{po},#{dz},#{dx})"))
     }
+    /// A full circle. An edge trims it with its vertices; the placement's z is the plane normal.
+    fn write_circle(&mut self, c: &SeamCircle) -> u64 {
+        let ax = self.placement(c.origin, c.normal, c.x);
+        self.add_shared(format!("CIRCLE('',#{ax},{})", real(c.radius)))
+    }
+
+    /// A line in the surface's parameter plane, from `uv` along `dir` (radians per parameter).
+    fn pcurve(&mut self, surface: u64, ctx2d: u64, uv: [f64; 2], dir: [f64; 2]) -> u64 {
+        let p = self.add_shared(format!("CARTESIAN_POINT('',({},{}))", real(uv[0]), real(uv[1])));
+        let d = self.add_shared(format!("DIRECTION('',({},{}))", real(dir[0]), real(dir[1])));
+        let v = self.add_shared(format!("VECTOR('',#{d},{})", real(1.0)));
+        let line = self.add_shared(format!("LINE('',#{p},#{v})"));
+        let def = self.add(format!("DEFINITIONAL_REPRESENTATION('',(#{line}),#{ctx2d})"));
+        self.add(format!("PCURVE('',#{surface},#{def})"))
+    }
+
+    /// A seam curve: one 3D circle, and the two parameter lines where the periodic surface repeats.
+    fn seam_curve(&mut self, circle: u64, surface: u64, ctx2d: u64, uv_a: [f64; 2], uv_b: [f64; 2], dir: [f64; 2]) -> u64 {
+        let a = self.pcurve(surface, ctx2d, uv_a, dir);
+        let b = self.pcurve(surface, ctx2d, uv_b, dir);
+        self.add(format!("SEAM_CURVE('',#{circle},(#{a},#{b}),.PCURVE_S1.)"))
+    }
+
+    /// One toroidal face for a whole ring. The boundary is the outer equator and one meridian,
+    /// each a closed circle traversed both ways, so the face is the parameter square
+    /// `[0, 2π] × [0, 2π]` (v = 0 on the outer equator). Two faces that share one open loop
+    /// on a periodic torus are each filled with the smaller side of that loop.
+    fn write_seam_torus(&mut self, ring: &RingTorus, name: &str) -> u64 {
+        let tau = std::f64::consts::TAU;
+        let (o, z, x) = (ring.center, ring.axis, ring.x);
+        let (big, small) = (ring.big, ring.small);
+        let surface_axis = self.placement(o, z, x);
+        let surface = self.add_shared(format!("TOROIDAL_SURFACE('',#{surface_axis},{},{})", real(big), real(small)));
+        let ctx2d = self
+            .add_shared("(GEOMETRIC_REPRESENTATION_CONTEXT(2)PARAMETRIC_REPRESENTATION_CONTEXT()REPRESENTATION_CONTEXT('2D SPACE',''))".to_string());
+        let equator = self.point(add(o, mul(x, big + small)));
+        let vertex = self.add(format!("VERTEX_POINT('',#{equator})"));
+        let outer_axis = self.placement(o, z, x);
+        let outer = self.add_shared(format!("CIRCLE('',#{outer_axis},{})", real(big + small)));
+        let outer_seam = self.seam_curve(outer, surface, ctx2d, [0.0, tau], [0.0, 0.0], [1.0, 0.0]);
+        let outer_edge = self.add(format!("EDGE_CURVE('',#{vertex},#{vertex},#{outer_seam},.T.)"));
+        // The meridian circle's parameter increases the tube angle (toward the axis direction).
+        let meridian_normal = cross(x, z);
+        let meridian_axis = self.placement(add(o, mul(x, big)), meridian_normal, x);
+        let meridian = self.add_shared(format!("CIRCLE('',#{meridian_axis},{})", real(small)));
+        let meridian_seam = self.seam_curve(meridian, surface, ctx2d, [tau, 0.0], [0.0, 0.0], [0.0, 1.0]);
+        let meridian_edge = self.add(format!("EDGE_CURVE('',#{vertex},#{vertex},#{meridian_seam},.T.)"));
+        let oriented = |this: &mut Self, edge: u64, forward: bool| {
+            let sense = if forward { "T" } else { "F" };
+            this.add(format!("ORIENTED_EDGE('',*,*,#{edge},.{sense}.)"))
+        };
+        let a = oriented(self, outer_edge, false);
+        let b = oriented(self, meridian_edge, true);
+        let c = oriented(self, outer_edge, true);
+        let d = oriented(self, meridian_edge, false);
+        let loop_id = self.add(format!("EDGE_LOOP('',(#{a},#{b},#{c},#{d}))"));
+        let bound = self.add(format!("FACE_BOUND('',#{loop_id},.T.)"));
+        let face = self.add(format!("ADVANCED_FACE('',(#{bound}),#{surface},.T.)"));
+        let shell = self.add(format!("CLOSED_SHELL('',(#{face}))"));
+        self.add(format!("MANIFOLD_SOLID_BREP({},#{shell})", string(name)))
+    }
 
     /// Copy a solid entity of a parsed file and everything it uses; returns its new id.
     fn copy_solid(&mut self, ex: &p21::Exchange, root: u64, name: &str) -> std::result::Result<u64, String> {
         let mut map: HashMap<u64, u64> = HashMap::new();
         let seams = horn_seams(ex);
+        let circles = torus_seam_circles(ex);
         // Iterative post-order walk (children before parents).
         let mut stack: Vec<(u64, bool)> = vec![(root, false)];
         let mut guard = 0usize;
@@ -347,6 +409,14 @@ impl Out {
             if !done && let Some(sheet) = self.trimmed.get(&id).cloned() {
                 let new = self.write_sheet(&sheet).ok_or_else(|| format!("cannot write the cut sheet #{id}"))?;
                 map.insert(id, new);
+                continue;
+            }
+            // A torus seam is a rational quadratic that does not lie on the torus (its weights are
+            // not a circle's; the control points bow off the surface). Its vertices do. Write the
+            // parallel or meridian of the torus through those vertices, so a reader trims the
+            // toroidal face with a circle instead of a curve that misses it.
+            if !done && let Some(c) = circles.get(&id) {
+                map.insert(id, self.write_circle(c));
                 continue;
             }
             if !done {
@@ -457,6 +527,25 @@ enum AnalyticKind {
     },
 }
 
+/// A complete ring torus: centre, unit axis, unit reference in the equator, major and minor radii.
+struct RingTorus {
+    center: V3,
+    axis: V3,
+    x: V3,
+    big: f64,
+    small: f64,
+}
+
+/// A circle substituted for a torus seam spline: centre, plane normal, in-plane reference, radius.
+struct SeamCircle {
+    origin: V3,
+    normal: V3,
+    x: V3,
+    radius: f64,
+    /// How far the edge's vertices sit from the circle (the closer proposal wins).
+    err: f64,
+}
+
 type V3 = [f64; 3];
 
 fn sub(a: V3, b: V3) -> V3 {
@@ -480,6 +569,16 @@ fn norm(a: V3) -> f64 {
 fn unit(a: V3) -> Option<V3> {
     let n = norm(a);
     (n > 1e-12 && n.is_finite()).then(|| mul(a, 1.0 / n))
+}
+
+fn close_len(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-7 * (1.0 + a.abs().max(b.abs()))
+}
+
+/// A unit vector perpendicular to `axis`. World Z when the axis is not already along it.
+fn frame_x(axis: V3) -> Option<V3> {
+    let hint = if axis[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+    unit(sub(hint, mul(axis, dot(hint, axis))))
 }
 
 /// Circle through three points: centre, radius, unit normal.
@@ -953,6 +1052,165 @@ fn face_edges(ex: &p21::Exchange, face: &p21::Entity) -> Option<Vec<Vec<(u64, bo
         loops.push(v);
     }
     Some(loops)
+}
+
+/// A solid that is one complete ring torus (every face on that surface, one closed shell).
+///
+/// A cut, a partial turn or a fillet leaves some other face, and this returns nothing so the
+/// body's own boundary is written. A horn or a spindle is not a ring: the tube meets the axis.
+fn complete_ring(b: &Body) -> Option<RingTorus> {
+    if b.mesh.is_some() || b.paint().is_some_and(|p| !p.faces.is_empty()) || b.split_lines().is_some_and(|l| !l.is_empty()) {
+        return None;
+    }
+    let n = b.face_count();
+    if n == 0 || n > 48 || b.shell_count() != 1 {
+        return None;
+    }
+    let closed = b.solid.boundaries().iter().all(|sh| sh.shell_condition() == truck_topology::shell::ShellCondition::Closed);
+    if !closed {
+        return None;
+    }
+    let tol = (b.size() * 1e-7).max(1e-9) * 100.0;
+    let mut seen: Option<(V3, V3, f64, f64)> = None;
+    for face in b.solid.face_iter() {
+        let crate::offset::Surf::Torus { o, a, big, h, r, convex } = crate::offset::surf_of(face, tol)? else {
+            return None;
+        };
+        if !convex || !(big > r && r > 1e-9 && big.is_finite() && r.is_finite()) {
+            return None;
+        }
+        let axis = unit([a.x, a.y, a.z])?;
+        let center = add([o.x, o.y, o.z], mul(axis, h));
+        match seen {
+            None => seen = Some((center, axis, big, r)),
+            Some((c0, a0, b0, r0)) => {
+                let same = close_len(b0, big) && close_len(r0, r) && norm(cross(a0, axis)) <= 1e-6 && norm(sub(center, c0)) <= 1e-7 * (1.0 + big);
+                if !same {
+                    return None;
+                }
+            }
+        }
+    }
+    let (center, axis, big, small) = seen?;
+    Some(RingTorus { center, axis, x: frame_x(axis)?, big, small })
+}
+
+/// Rational seam curves of torus revolutions, rewritten as the circle the vertices lie on.
+///
+/// Only a rational B-spline is replaced. A boolean's intersection is a plain cubic through the
+/// true curve, and stays that spline: its ends can sit on a parallel without the curve being one.
+/// Faces are visited in id order so two proposals for one curve pick the same circle every run.
+fn torus_seam_circles(ex: &p21::Exchange) -> HashMap<u64, SeamCircle> {
+    let mut ids: Vec<u64> = ex.entities.iter().filter(|(_, e)| matches!(e.name(), "FACE_SURFACE" | "ADVANCED_FACE")).map(|(i, _)| *i).collect();
+    ids.sort();
+    let mut out: HashMap<u64, SeamCircle> = HashMap::new();
+    for id in ids {
+        let Some(fe) = ex.get(id) else { continue };
+        let Some(sid) = fe.params().get(2).and_then(Param::as_ref_id) else { continue };
+        let Some(se) = ex.get(sid).filter(|e| e.name() == "SURFACE_OF_REVOLUTION") else { continue };
+        let Some(Analytic { kind: AnalyticKind::Torus { o, z, big, small, .. }, .. }) = analytic_revolution(ex, se) else { continue };
+        let Some(loops) = face_edges(ex, fe) else { continue };
+        for (edge, _) in loops.into_iter().flatten() {
+            let Some(ent) = ex.get(edge) else { continue };
+            let Some(curve_id) = ent.params().get(3).and_then(Param::as_ref_id) else { continue };
+            if !ex.get(curve_id).is_some_and(|c| c.has("RATIONAL_B_SPLINE_CURVE")) {
+                continue;
+            }
+            let (Some(p), Some(q)) = (
+                ent.params().get(1).and_then(Param::as_ref_id).and_then(|v| vertex_point(ex, v)),
+                ent.params().get(2).and_then(Param::as_ref_id).and_then(|v| vertex_point(ex, v)),
+            ) else {
+                continue;
+            };
+            let Some(c) = circle_on_torus(o, z, big, small, p, q) else { continue };
+            match out.get(&curve_id) {
+                Some(old) if old.err <= c.err => {}
+                _ => {
+                    out.insert(curve_id, c);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The parallel or meridian of a ring torus through both vertices, when each lies on it.
+fn circle_on_torus(o: V3, z: V3, big: f64, small: f64, p: V3, q: V3) -> Option<SeamCircle> {
+    let z = unit(z)?;
+    if !(big.is_finite() && small.is_finite() && small > 1e-9 && big > small) {
+        return None;
+    }
+    let tol = 1e-5 * (1.0 + big);
+    let radial = |pt: V3| {
+        let v = sub(pt, o);
+        sub(v, mul(z, dot(v, z)))
+    };
+    let height = |pt: V3| dot(sub(pt, o), z);
+    let mut best: Option<SeamCircle> = None;
+    let mut keep = |c: SeamCircle| {
+        if best.as_ref().is_none_or(|b| c.err < b.err) {
+            best = Some(c);
+        }
+    };
+    if let Some(c) = parallel_circle(o, z, big, small, p, q, height(p), height(q), &radial, tol) {
+        keep(c);
+    }
+    if let Some(c) = meridian_circle(o, z, big, small, p, q, &radial, tol) {
+        keep(c);
+    }
+    best
+}
+
+fn circle_err(p: V3, center: V3, normal: V3, radius: f64) -> f64 {
+    let d = sub(p, center);
+    let along = dot(d, normal);
+    let radial = norm(sub(d, mul(normal, along)));
+    along.abs().max((radial - radius).abs())
+}
+
+/// A circle of constant height: centre on the axis, radius from the tube equation.
+fn parallel_circle(o: V3, z: V3, big: f64, small: f64, p: V3, q: V3, hp: f64, hq: f64, radial: &impl Fn(V3) -> V3, tol: f64) -> Option<SeamCircle> {
+    if (hp - hq).abs() > tol {
+        return None;
+    }
+    let hm = (hp + hq) * 0.5;
+    let disc = small * small - hm * hm;
+    if disc < -(tol * small) {
+        return None;
+    }
+    let root = disc.max(0.0).sqrt();
+    let (rp, rq) = (norm(radial(p)), norm(radial(q)));
+    let rho_pts = (rp + rq) * 0.5;
+    let rho = if (rho_pts - (big + root)).abs() <= (rho_pts - (big - root)).abs() { big + root } else { big - root };
+    if rho <= 1e-9 {
+        return None;
+    }
+    let center = add(o, mul(z, hm));
+    let err = circle_err(p, center, z, rho).max(circle_err(q, center, z, rho));
+    if err > tol {
+        return None;
+    }
+    let hint = if rp >= rq { radial(p) } else { radial(q) };
+    let x = unit(sub(hint, mul(z, dot(hint, z))))?;
+    Some(SeamCircle { origin: center, normal: z, x, radius: rho, err })
+}
+
+/// A circle in a plane through the axis: the tube's own circle, at one azimuth.
+fn meridian_circle(o: V3, z: V3, big: f64, small: f64, p: V3, q: V3, radial: &impl Fn(V3) -> V3, tol: f64) -> Option<SeamCircle> {
+    let up = unit(radial(p))?;
+    let uq = unit(radial(q))?;
+    // A parallel's ends leave this plane; a meridian's stay on one side of the axis.
+    if dot(up, uq) < 1.0 - 1e-8 {
+        return None;
+    }
+    let center = add(o, mul(up, big));
+    let normal = unit(cross(z, up))?;
+    let err = circle_err(p, center, normal, small).max(circle_err(q, center, normal, small));
+    if err > tol {
+        return None;
+    }
+    let x = unit(sub(up, mul(normal, dot(up, normal))))?;
+    Some(SeamCircle { origin: center, normal, x, radius: small, err })
 }
 
 /// Faces that truck splits (a revolution in two or three turns) joined back into one face per
@@ -1726,6 +1984,18 @@ fn products_text(products: &[ExportProduct], root: usize, header: &StepHeader, m
             let mut solids = Vec::new();
             for b in &p.bodies {
                 for lump in export_lumps(b.body) {
+                    // A whole ring is one face bounded by two seam circles. The faces a
+                    // revolution is split into share one loop, and a periodic torus fills each
+                    // of them with the smaller side of that loop.
+                    if let Some(ring) = complete_ring(&lump) {
+                        let id = o.write_seam_torus(&ring, &b.name);
+                        solids.push(id);
+                        let opacity = lump.paint().map(|p| p.opacity).unwrap_or(1.0);
+                        if let Some(c) = b.color {
+                            styled.push(style(&mut o, id, c, opacity));
+                        }
+                        continue;
+                    }
                     let (ex, merged, trimmed, face_paint) = brep_exchange(&lump, merge)?;
                     o.merged = merged;
                     o.trimmed = trimmed;

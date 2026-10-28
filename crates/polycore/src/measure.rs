@@ -3,6 +3,7 @@ use solidcraft_geom::{Aabb3, Mesh, Vec3};
 
 use crate::Result;
 use crate::body::Body;
+use crate::offset::{Surf, surf_of};
 use crate::topo::{TopoCounts, merged_topology};
 
 /// Measured properties of a body.
@@ -126,7 +127,19 @@ pub fn measure_mass(b: &Body) -> Result<MassMeasure> {
 /// fine the others go), then a fine and a medium one at once on desktop (one after the other
 /// in the browser). With `topology`, also the coarse unrefined mesh the topology counts take,
 /// made alongside them.
+///
+/// A complete cylinder, sphere or ring torus is the closed form instead (see [`analytic_solid`]).
+/// The topology mesh is unchanged, so merged face counts stay the tessellation's.
 fn mass(b: &Body, topology: bool) -> Result<(MassMeasure, Option<Mesh>)> {
+    if let Some(exact) = analytic_solid(b) {
+        let topo = if topology {
+            let coarse_tol = (b.size() * 1e-3).max(1e-3);
+            Some(b.tessellate_with(coarse_tol, false)?)
+        } else {
+            None
+        };
+        return Ok((exact, topo));
+    }
     let size = b.size();
     let coarse_tol = (size * 1e-3).max(1e-3);
     let coarse = b.tessellate_with(coarse_tol, true)?;
@@ -192,10 +205,151 @@ fn mass(b: &Body, topology: bool) -> Result<(MassMeasure, Option<Mesh>)> {
     Ok((MassMeasure { volume, area, centroid, bbox: coarse.bounds().union(&fine.bounds()) }, topo))
 }
 
+/// Most faces a complete cylinder, sphere or torus is split into. A larger solid keeps the
+/// mesh integral: scanning every face of a detailed part would cost more than it saves.
+const MAX_ANALYTIC_FACES: usize = 48;
+
+/// Volume, area, centre and box of a complete analytic solid, from the closed form.
+///
+/// One closed shell, and every face on that one surface (a cylinder also has its two flat
+/// caps). A cut, a hole or a partial turn leaves a face of another kind, and this returns
+/// nothing so the mesh integral stands. The parameters are the face's own surface, so the
+/// result does not depend on how fine the display mesh is.
+fn analytic_solid(b: &Body) -> Option<MassMeasure> {
+    if b.mesh.is_some() {
+        return None;
+    }
+    let n = b.face_count();
+    if n == 0 || n > MAX_ANALYTIC_FACES || b.shell_count() != 1 {
+        return None;
+    }
+    let closed = b.solid.boundaries().iter().all(|sh| sh.shell_condition() == truck_topology::shell::ShellCondition::Closed);
+    if !closed {
+        return None;
+    }
+    let tol = (b.size() * 1e-7).max(1e-9) * 100.0;
+    let mut faces = Vec::with_capacity(n);
+    for f in b.solid.face_iter() {
+        faces.push(surf_of(f, tol)?);
+    }
+    sphere_mass(&faces).or_else(|| torus_mass(&faces)).or_else(|| cylinder_mass(&faces))
+}
+
+fn close_len(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-7 * (1.0 + a.abs().max(b.abs()))
+}
+
+fn finite_mass(volume: f64, area: f64, centroid: Vec3, bbox: Aabb3) -> Option<MassMeasure> {
+    if volume.is_finite() && area.is_finite() && area >= 0.0 && centroid.is_finite() && bbox.min.is_finite() && bbox.max.is_finite() {
+        Some(MassMeasure { volume, area, centroid, bbox })
+    } else {
+        None
+    }
+}
+
+fn sphere_mass(faces: &[Surf]) -> Option<MassMeasure> {
+    let Surf::Sphere { c, r, convex } = *faces.first()? else { return None };
+    if !(r > 1e-9) {
+        return None;
+    }
+    for f in faces.iter().skip(1) {
+        let Surf::Sphere { c: c2, r: r2, convex: k } = *f else { return None };
+        if k != convex || !close_len(r, r2) || c.dist(c2) > 1e-7 * (1.0 + r) {
+            return None;
+        }
+    }
+    let sign = if convex { 1.0 } else { -1.0 };
+    let (pi, r2) = (std::f64::consts::PI, r * r);
+    let e = Vec3::new(r, r, r);
+    finite_mass(sign * 4.0 / 3.0 * pi * r2 * r, 4.0 * pi * r2, c, Aabb3 { min: c - e, max: c + e })
+}
+
+fn torus_mass(faces: &[Surf]) -> Option<MassMeasure> {
+    let Surf::Torus { o, a, big, h, r, convex } = *faces.first()? else { return None };
+    let a = a.normalized()?;
+    // A ring torus. A spindle (the tube crosses the axis) and a horn (it touches) are not this
+    // solid: the closed form below is the ring's.
+    if !(big > r && r > 1e-9) {
+        return None;
+    }
+    let center = o + a * h;
+    for f in faces.iter().skip(1) {
+        let Surf::Torus { o: o2, a: a2, big: b2, h: h2, r: r2, convex: k } = *f else { return None };
+        let a2 = a2.normalized()?;
+        if k != convex || !close_len(big, b2) || !close_len(r, r2) || a.cross(a2).len() > 1e-6 || center.dist(o2 + a2 * h2) > 1e-7 * (1.0 + big) {
+            return None;
+        }
+    }
+    let sign = if convex { 1.0 } else { -1.0 };
+    let pi2 = std::f64::consts::PI * std::f64::consts::PI;
+    let reach = |ai: f64| big * (1.0 - ai * ai).clamp(0.0, 1.0).sqrt() + r;
+    let e = Vec3::new(reach(a.x), reach(a.y), reach(a.z));
+    finite_mass(sign * 2.0 * pi2 * big * r * r, 4.0 * pi2 * big * r, center, Aabb3 { min: center - e, max: center + e })
+}
+
+struct CylinderFit {
+    o: Vec3,
+    a: Vec3,
+    r: f64,
+    convex: bool,
+}
+
+fn cylinder_mass(faces: &[Surf]) -> Option<MassMeasure> {
+    let mut cyl: Option<CylinderFit> = None;
+    let mut planes = Vec::new();
+    for f in faces {
+        match *f {
+            Surf::Cylinder { o, a, r, convex } => {
+                let a = a.normalized()?;
+                match &cyl {
+                    None => cyl = Some(CylinderFit { o, a, r, convex }),
+                    Some(c) => {
+                        let same = c.convex == convex
+                            && close_len(c.r, r)
+                            && c.a.cross(a).len() <= 1e-6
+                            && (o - c.o).cross(c.a).len() <= 1e-6 * (1.0 + o.len());
+                        if !same {
+                            return None;
+                        }
+                    }
+                }
+            }
+            Surf::Plane { n, d } => planes.push((n, d)),
+            Surf::Sphere { .. } | Surf::Cone { .. } | Surf::Torus { .. } => return None,
+        }
+    }
+    let c = cyl?;
+    let [(n0, d0), (n1, d1)] = planes.as_slice() else { return None };
+    if n0.cross(c.a).len() > 1e-6 || n1.cross(c.a).len() > 1e-6 {
+        return None;
+    }
+    let (denom0, denom1) = (n0.dot(c.a), n1.dot(c.a));
+    if denom0.abs() < 1e-8 || denom1.abs() < 1e-8 {
+        return None;
+    }
+    let t0 = (d0 - n0.dot(c.o)) / denom0;
+    let t1 = (d1 - n1.dot(c.o)) / denom1;
+    let h = (t1 - t0).abs();
+    if !(h > 1e-9 && h.is_finite() && c.r > 1e-9) {
+        return None;
+    }
+    let sign = if c.convex { 1.0 } else { -1.0 };
+    let pi = std::f64::consts::PI;
+    let (c0, c1) = (c.o + c.a * t0, c.o + c.a * t1);
+    let bbox = disk_box(c0, c.a, c.r).union(&disk_box(c1, c.a, c.r));
+    finite_mass(sign * pi * c.r * c.r * h, 2.0 * pi * c.r * (c.r + h), c.o + c.a * ((t0 + t1) * 0.5), bbox)
+}
+
+fn disk_box(center: Vec3, axis: Vec3, radius: f64) -> Aabb3 {
+    let reach = |ai: f64| radius * (1.0 - ai * ai).clamp(0.0, 1.0).sqrt();
+    let e = Vec3::new(reach(axis.x), reach(axis.y), reach(axis.z));
+    Aabb3 { min: center - e, max: center + e }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BoolOp, boolean, cylinder, torus};
+    use crate::{BoolOp, boolean, box_solid, cylinder, sphere, torus};
 
     /// The mass properties alone are [`measure`]'s, to the bit, with the tessellations made at
     /// once; and on a curved intersection they are the textbook ones.
@@ -213,8 +367,55 @@ mod tests {
         }
         let want = 2.0 * std::f64::consts::PI.powi(2) * 10.0 * 4.0;
         let got = measure_mass(&ring).unwrap().volume;
-        assert!((got - want).abs() < 1e-3 * want, "{got} against {want}");
+        assert!((got - want).abs() < 1e-9 * want, "{got} against {want}");
         assert!(measure(&ring).unwrap().merged.faces > 0);
+    }
+
+    /// A whole cylinder, sphere and torus report the closed form. A cut torus does not: it is no
+    /// longer that one surface, and the mesh integral is what a partial solid gets.
+    #[test]
+    fn analytic_primitives_match_the_closed_form() {
+        let rel = |a: f64, b: f64| (a - b).abs() / b.abs().max(1e-12);
+        let pi = std::f64::consts::PI;
+        let axis = Vec3::new(0.0, 1.0, 1.0).normalized().unwrap();
+        let base = Vec3::new(1.0, 2.0, 3.0);
+        let cyl = cylinder(base, axis, 5.0, 12.0).unwrap();
+        let mc = measure_mass(&cyl).unwrap();
+        assert!(rel(mc.volume, pi * 25.0 * 12.0) < 1e-9, "{}", mc.volume);
+        assert!(rel(mc.area, 2.0 * pi * 5.0 * (5.0 + 12.0)) < 1e-9, "{}", mc.area);
+        assert!(mc.centroid.dist(base + axis * 6.0) < 1e-8, "{:?}", mc.centroid);
+        let upright = cylinder(Vec3::new(1.0, 2.0, 3.0), Vec3::Z, 5.0, 12.0).unwrap();
+        let box_ = measure_mass(&upright).unwrap().bbox;
+        assert!((box_.min.x - (1.0 - 5.0)).abs() < 1e-9 && (box_.max.x - 6.0).abs() < 1e-9, "{box_:?}");
+        assert!((box_.min.z - 3.0).abs() < 1e-9 && (box_.max.z - 15.0).abs() < 1e-9, "{box_:?}");
+        let full = measure(&cyl).unwrap();
+        assert_eq!(full.volume.to_bits(), mc.volume.to_bits());
+        assert_eq!(full.area.to_bits(), mc.area.to_bits());
+        assert_eq!(full.centroid, mc.centroid);
+        assert_eq!((full.bbox.min, full.bbox.max), (mc.bbox.min, mc.bbox.max));
+
+        let c = Vec3::new(1.0, 2.0, 3.0);
+        let s = sphere(c, 10.0).unwrap();
+        let ms = measure_mass(&s).unwrap();
+        assert!(rel(ms.volume, 4.0 / 3.0 * pi * 1000.0) < 1e-9, "{}", ms.volume);
+        assert!(rel(ms.area, 4.0 * pi * 100.0) < 1e-9, "{}", ms.area);
+        assert!(ms.centroid.dist(c) < 1e-9, "{:?}", ms.centroid);
+        assert!((ms.bbox.min.x - (c.x - 10.0)).abs() < 1e-9 && (ms.bbox.max.z - (c.z + 10.0)).abs() < 1e-9, "{:?}", ms.bbox);
+
+        let tc = Vec3::new(3.0, -2.0, 4.0);
+        let t = torus(tc, 20.0, 5.0).unwrap();
+        let mt = measure_mass(&t).unwrap();
+        assert!(rel(mt.volume, 2.0 * pi * pi * 20.0 * 25.0) < 1e-9, "{}", mt.volume);
+        assert!(rel(mt.area, 4.0 * pi * pi * 20.0 * 5.0) < 1e-9, "{}", mt.area);
+        assert!(mt.centroid.dist(tc) < 1e-9, "{:?}", mt.centroid);
+        assert!((mt.bbox.min.x - (3.0 - 25.0)).abs() < 1e-9 && (mt.bbox.max.z - (4.0 + 5.0)).abs() < 1e-9, "{:?}", mt.bbox);
+
+        // A box through one side. The result is not the whole torus, so it must not take the
+        // closed form (that would match `mt.volume` to the last bit).
+        let block = box_solid(Vec3::new(-40.0, -40.0, -40.0), Vec3::new(0.0, 40.0, 40.0)).unwrap();
+        let cut = boolean(&t, &block, BoolOp::Cut).unwrap().unwrap();
+        let got = measure_mass(&cut).unwrap().volume;
+        assert!(rel(got, mt.volume) > 1e-3, "a cut torus must not report the whole torus: {got}");
     }
 
     /// A 10 mm cube at `at`, each side in n × n squares of two triangles, one face per side;

@@ -1421,6 +1421,57 @@ fn horn_torus_written_as_one_spline_face() {
     assert!(rel(measure(&imp.bodies[0].body).unwrap().volume, v) < 1e-3);
 }
 
+/// A whole ring torus is one toroidal face, bounded by the outer equator and one meridian.
+/// Each is a closed circle used both ways (a seam), so the face is the whole parameter square.
+/// Two faces sharing one open loop are each filled with the smaller side of that loop, and the
+/// solid they make has no volume. A cut keeps the intersection spline: that curve is not a circle.
+#[test]
+fn torus_seams_export_as_circles() {
+    let span = |b: &Body| -> ([f64; 3], [f64; 3]) {
+        let mesh = b.display_mesh((b.size() * 1e-2).max(1e-2)).unwrap();
+        assert!(mesh.triangles.len() > 64, "{} triangles", mesh.triangles.len());
+        let mut lo = [f64::MAX; 3];
+        let mut hi = [f64::MIN; 3];
+        for p in &mesh.positions {
+            let c = [p.x, p.y, p.z];
+            for i in 0..3 {
+                lo[i] = lo[i].min(c[i]);
+                hi[i] = hi[i].max(c[i]);
+            }
+        }
+        (lo, hi)
+    };
+    let check = |b: &Body, label: &str| {
+        let text = step_export(&[b], "t").unwrap();
+        assert_eq!(text.matches("TOROIDAL_SURFACE(").count(), 1, "{label}");
+        assert_eq!(text.matches("ADVANCED_FACE(").count(), 1, "{label}");
+        assert!(text.contains("SEAM_CURVE("), "{label}");
+        assert!(text.contains("CIRCLE("), "{label}");
+        assert!(!text.contains("B_SPLINE_CURVE("), "{label}: a seam is still a spline\n{text}");
+        let imp = round_trip(b);
+        let (src, got) = (span(b), span(&imp.bodies[0].body));
+        for i in 0..3 {
+            assert!((src.0[i] - got.0[i]).abs() < 2.0, "{label} min {i}: {:?} vs {:?}", src.0, got.0);
+            assert!((src.1[i] - got.1[i]).abs() < 2.0, "{label} max {i}: {:?} vs {:?}", src.1, got.1);
+        }
+    };
+    check(&torus(Vec3::ZERO, 20.0, 5.0).unwrap(), "axis Z");
+    // Circle in the XY plane, off the X axis, turned a full turn about that axis.
+    let prof = Region2 { outer: Loop2::circle(Vec2::new(0.0, 20.0), 5.0), holes: vec![] };
+    let tilted = revolve(&Plane::XY, &[prof], Vec2::ZERO, Vec2::X, std::f64::consts::TAU).unwrap().pop().unwrap();
+    check(&tilted, "axis X");
+    // A plane offset from the axis (x = 10) meets the torus in a curve that is not a circle.
+    // That intersection is a plain cubic and must stay one.
+    let block = box_solid(Vec3::new(10.0, -40.0, -40.0), Vec3::new(40.0, 40.0, 40.0)).unwrap();
+    let cut = boolean(&torus(Vec3::ZERO, 20.0, 5.0).unwrap(), &block, BoolOp::Cut).unwrap().unwrap();
+    let text = step_export(&[&cut], "t").unwrap();
+    // Truck writes that intersection as a plain cubic (`B_SPLINE_CURVE_WITH_KNOTS`), not a
+    // rational seam, so the circle substitution must leave it alone. The cut is not a whole ring.
+    assert!(text.contains("B_SPLINE_CURVE_WITH_KNOTS("), "the cut curve should stay a spline");
+    assert!(!text.contains("RATIONAL_B_SPLINE_CURVE("));
+    assert!(!text.contains("SEAM_CURVE("));
+}
+
 /// Booleans and blends build the same body every time, so an export is byte-identical from
 /// run to run (truck used to emit a boolean's faces in hash order of their addresses). The
 /// tee of oracle 35 with its rolling-ball fillet round the junction.
