@@ -144,6 +144,7 @@ mod sweep_path;
 #[cfg(test)]
 mod sweep_rails_tests;
 mod tangent_cylinders;
+mod tangent_split;
 mod tess;
 #[cfg(test)]
 mod thin_face_tests;
