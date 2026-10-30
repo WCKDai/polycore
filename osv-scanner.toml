@@ -1,0 +1,18 @@
+# Time-boxed acceptance of unmaintained transitive advisories in the current kernel graph.
+# Owner decision: 2026-10-30 (engineering task). Review by 2027-01-31.
+# The scanner is pinned to the workspace Cargo.lock; nested vendor lockfiles are not the graph.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0196"
+ignoreUntil = 2027-01-31
+reason = "cgmath is unmaintained and is a PolyCore/Truck dependency; replacement needs a geometry-layer migration."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0197"
+ignoreUntil = 2027-01-31
+reason = "cgmath swap_columns UB requires identical indices; the API is not called in PolyCore (searched 2026-10-30)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+ignoreUntil = 2027-01-31
+reason = "proc-macro-error is build-time only; it comes from the pinned renamed Truck derivation chain."
