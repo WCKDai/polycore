@@ -260,6 +260,12 @@ pub fn guarded() -> bool {
 
 /// Run third-party kernel code, converting a panic into an error.
 pub fn guard<T>(what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    // Work whose watch was cancelled starts no more third-party calls: every boolean, blend,
+    // sweep and tessellation passes through here, so the work stops at its next one
+    // (WCKDai/polykrom#264). Unwatched work is never cancelled.
+    if watch::current().is_some_and(|w| w.cancelled()) {
+        return Err(watch::cancelled_error(what));
+    }
     struct Depth;
     impl Drop for Depth {
         fn drop(&mut self) {

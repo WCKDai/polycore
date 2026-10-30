@@ -942,6 +942,10 @@ fn take_attempt() -> bool {
     if DEADLINE.with(|c| c.get()).is_some_and(|d| web_time::Instant::now() >= d) {
         return false;
     }
+    // Cancelled work tries no more (WCKDai/polykrom#264).
+    if crate::watch::current().is_some_and(|w| w.cancelled()) {
+        return false;
+    }
     ATTEMPTS.with(|c| match c.get() {
         None => true,
         Some(0) => false,

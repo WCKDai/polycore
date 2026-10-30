@@ -3853,3 +3853,22 @@ fn presearch_grids_once_per_polyline_change_nothing() {
         }
     }
 }
+
+/// A boolean whose watch was cancelled stops at its next third-party call (WCKDai/polykrom#264);
+/// unwatched, the same boolean works.
+#[test]
+fn a_cancelled_watch_stops_a_boolean() {
+    struct Cancelled;
+    impl crate::watch::Watch for Cancelled {
+        fn cancelled(&self) -> bool {
+            true
+        }
+        fn progress(&self, _: &'static str, _: usize, _: usize) {}
+    }
+    let a = crate::cylinder(Vec3::new(0.0, 0.0, 0.0), Vec3::Z, 10.0, 20.0).unwrap();
+    let b = crate::sphere(Vec3::new(5.0, 0.0, 20.0), 8.0).unwrap();
+    let r = crate::watch::watching(std::sync::Arc::new(Cancelled), || crate::boolean(&a, &b, crate::BoolOp::Union));
+    let e = r.expect_err("a cancelled boolean fails").to_string();
+    assert!(e.contains("cancelled") || e.contains("no result in the tries"), "{e}");
+    assert!(crate::boolean(&a, &b, crate::BoolOp::Union).unwrap().is_some(), "unwatched, the boolean works");
+}
