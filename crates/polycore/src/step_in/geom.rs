@@ -882,6 +882,34 @@ fn tube_angle(f: &Frame, big: f64, p: mt::Point3) -> f64 {
     z.atan2(rho - big)
 }
 
+/// A seam angle shared by points that run all the way round the other parameter.
+///
+/// `keys[i]` and `others[i]` are the two angles of one seam sample. The result is the mean key
+/// of a cluster whose other angles leave no gap wider than a right angle, so a full parallel or
+/// meridian is told from a short seam arc. `None` when no cluster covers the circle.
+fn full_circle_seam(keys: &[f64], others: &[f64], tol: f64) -> Option<f64> {
+    let n = keys.len().min(others.len());
+    let mut best: Option<(usize, f64)> = None;
+    for i in 0..n {
+        let mut covered = Vec::new();
+        let (mut sx, mut sy) = (0.0_f64, 0.0_f64);
+        for j in 0..n {
+            let (Some(k), Some(o)) = (keys.get(j), others.get(j)) else { continue };
+            let d = (k - keys[i]).rem_euclid(TAU);
+            if d.min(TAU - d) < tol {
+                covered.push(*o);
+                sx += k.cos();
+                sy += k.sin();
+            }
+        }
+        let Some((_, gap)) = largest_gap(&covered) else { continue };
+        if gap < FRAC_PI_2 && best.is_none_or(|(c, _)| covered.len() > c) {
+            best = Some((covered.len(), sy.atan2(sx)));
+        }
+    }
+    best.map(|(_, mean)| mean)
+}
+
 /// A straight profile of a surface of revolution, bounded by the face: boundary points are
 /// turned into the profile's meridian plane and projected onto the line, and the line stops at
 /// the axis (beyond it the surface would fold over itself).
@@ -1159,11 +1187,33 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
                 return Err("bad torus radii".into());
             }
             // Seam edges either run around the axis (constant tube angle) or around the tube
-            // (constant azimuth); each fixes one parameter seam.
-            let tube_seam: Vec<mt::Point3> =
-                seam.iter().copied().filter(|p| common_angle(std::iter::once(tube_angle(&f, big, *p))).is_some()).collect();
-            let phis_seam = common_angle(tube_seam.iter().map(|p| tube_angle(&f, big, *p)));
-            let az_seam: Vec<mt::Point3> = if phis_seam.is_some() { Vec::new() } else { seam.to_vec() };
+            // (constant azimuth); each fixes one parameter seam. A whole ring is both at once
+            // (the outer equator and one meridian, each used twice): those two circles cover
+            // their parameters, and each one sets its own seam. A short seam arc does not cover
+            // a circle, so a patch keeps the gap outside its boundary.
+            let (mut phis, mut azs) = (Vec::new(), Vec::new());
+            for p in seam {
+                let d = *p - f.o;
+                phis.push(tube_angle(&f, big, *p));
+                azs.push(d.dot(f.y).atan2(d.dot(f.x)));
+            }
+            let parallel = full_circle_seam(&phis, &azs, 1e-3);
+            let meridian = full_circle_seam(&azs, &phis, 1e-3);
+            let phis_seam = parallel.or_else(|| common_angle(phis.iter().copied()));
+            let az_seam: Vec<mt::Point3> = if let Some(m) = meridian {
+                seam.iter()
+                    .copied()
+                    .zip(azs.iter())
+                    .filter_map(|(p, az)| {
+                        let d = (az - m).rem_euclid(TAU);
+                        (d.min(TAU - d) < 1e-3).then_some(p)
+                    })
+                    .collect()
+            } else if phis_seam.is_some() {
+                Vec::new()
+            } else {
+                seam.to_vec()
+            };
             let f = seam_frame(&f, extent, &az_seam);
             let phis: Vec<f64> = extent.iter().map(|p| tube_angle(&f, big, *p)).collect();
             let phi0 = match (phis_seam, largest_gap(&phis)) {
