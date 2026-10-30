@@ -109,6 +109,18 @@ impl<'a> S<'a> {
     fn e(&self, id: u64) -> Result<&'a p21::Entity> {
         self.ex.get(id).ok_or_else(|| KernelError::Failed(format!("IGES export: missing #{id}")))
     }
+    /// IGES uses the spatial curve, not its STEP parameter-space representations.
+    /// Follow wrappers iteratively so malformed or cyclic references cannot exhaust the stack.
+    fn curve(&self, mut id: u64) -> Result<&'a p21::Entity> {
+        for _ in 0..64 {
+            let e = self.e(id)?;
+            if !matches!(e.name(), "SURFACE_CURVE" | "SEAM_CURVE" | "INTERSECTION_CURVE" | "BOUNDED_SURFACE_CURVE") {
+                return Ok(e);
+            }
+            id = self.r(e.params().get(1))?;
+        }
+        Err(KernelError::Failed("IGES export: curve wrapper nesting is too deep or cyclic".into()))
+    }
     fn r(&self, p: Option<&Param>) -> Result<u64> {
         p.and_then(Param::as_ref_id).ok_or_else(|| KernelError::Failed("IGES export: bad reference".into()))
     }
@@ -225,7 +237,7 @@ fn spline(s: &S, e: &p21::Entity, surface: bool) -> Result<Spline> {
 /// A curve as an IGES entity running from `a` to `b` (its direction in the STEP file), the DE
 /// pointer.
 fn curve(w: &mut W, s: &S, id: u64, a: V3, b: V3, closed: bool) -> Result<i64> {
-    let e = s.e(id)?;
+    let e = s.curve(id)?;
     match e.name() {
         "LINE" => Ok(w.add(110, 0, [a, b].iter().flatten().map(|x| real(*x)).collect())),
         "CIRCLE" | "ELLIPSE" => {
@@ -288,7 +300,7 @@ fn curve(w: &mut W, s: &S, id: u64, a: V3, b: V3, closed: bool) -> Result<i64> {
 
 /// Start point of a STEP curve (for extrusion directrices).
 fn curve_start(s: &S, id: u64) -> Result<V3> {
-    let e = s.e(id)?;
+    let e = s.curve(id)?;
     match e.name() {
         "LINE" => s.point(s.r(e.params().get(1))?),
         "CIRCLE" => {
@@ -305,7 +317,7 @@ fn curve_start(s: &S, id: u64) -> Result<V3> {
 
 /// A curve written whole (a revolution's generatrix, an extrusion's directrix).
 fn whole_curve(w: &mut W, s: &S, id: u64) -> Result<i64> {
-    let e = s.e(id)?;
+    let e = s.curve(id)?;
     match e.name() {
         "LINE" => {
             let p = e.params();
@@ -708,4 +720,83 @@ fn wrap(fields: &[&str], delim: char, end: char, width: usize) -> Vec<String> {
         lines.push(cur);
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exchange(extra: &str) -> Exchange {
+        p21::parse(&format!(
+            "ISO-10303-21; HEADER; ENDSEC; DATA;
+             #1=CARTESIAN_POINT('',(0.,0.,0.));
+             #2=DIRECTION('',(0.,0.,1.));
+             #3=DIRECTION('',(1.,0.,0.));
+             #4=AXIS2_PLACEMENT_3D('',#1,#2,#3);
+             #5=CIRCLE('',#4,5.);
+             #6=LINE('',#1,#7);
+             #7=VECTOR('',#3,1.);
+             #8=PCURVE('',$,$);
+             #9=CARTESIAN_POINT('',(1.,1.,0.));
+             #15=B_SPLINE_CURVE_WITH_KNOTS('',1,(#1,#9),.UNSPECIFIED.,.F.,.F.,(2,2),(0.,1.),.UNSPECIFIED.);
+             {extra} ENDSEC; END-ISO-10303-21;"
+        ))
+        .unwrap()
+    }
+
+    fn written_curve(ex: &Exchange, id: u64) -> Result<String> {
+        let mut w = W::default();
+        curve(&mut w, &S { ex }, id, [5.0, 0.0, 0.0], [0.0, 5.0, 0.0], false)?;
+        Ok(layout(&w, &StepHeader::default(), 5.0))
+    }
+
+    #[test]
+    fn surface_curve_wrappers_write_the_same_iges_as_their_3d_curve() {
+        for kind in ["SURFACE_CURVE", "SEAM_CURVE", "INTERSECTION_CURVE", "BOUNDED_SURFACE_CURVE"] {
+            for basis in [5, 6, 15] {
+                let ex = exchange(&format!("#10={kind}('',#{basis},(#8,#8),.PCURVE_S1.);"));
+                assert_eq!(written_curve(&ex, 10).unwrap(), written_curve(&ex, basis).unwrap(), "{kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn nested_surface_curve_wrappers_keep_their_whole_curve_and_start() {
+        for basis in [5, 6, 15] {
+            let ex = exchange(&format!("#10=SURFACE_CURVE('',#11,(#8),.CURVE_3D.); #11=SEAM_CURVE('',#{basis},(#8,#8),.PCURVE_S1.);"));
+            let s = S { ex: &ex };
+            assert_eq!(curve_start(&s, 10).unwrap(), curve_start(&s, basis).unwrap());
+            let (mut plain, mut wrapped) = (W::default(), W::default());
+            whole_curve(&mut plain, &s, basis).unwrap();
+            whole_curve(&mut wrapped, &s, 10).unwrap();
+            assert_eq!(layout(&plain, &StepHeader::default(), 5.0), layout(&wrapped, &StepHeader::default(), 5.0));
+        }
+    }
+
+    #[test]
+    fn malformed_surface_curve_wrappers_fail_without_recursing() {
+        for extra in [
+            "#10=SEAM_CURVE('',$,(#8),.CURVE_3D.);",
+            "#10=SEAM_CURVE('',#999,(#8),.CURVE_3D.);",
+            "#10=SEAM_CURVE('',#10,(#8),.CURVE_3D.);",
+            "#10=SEAM_CURVE('',#11,(#8),.CURVE_3D.); #11=SURFACE_CURVE('',#10,(#8),.CURVE_3D.);",
+        ] {
+            let ex = exchange(extra);
+            assert!(written_curve(&ex, 10).is_err());
+            assert!(curve_start(&S { ex: &ex }, 10).is_err());
+            assert!(whole_curve(&mut W::default(), &S { ex: &ex }, 10).is_err());
+        }
+    }
+
+    #[test]
+    fn surface_curve_wrapper_depth_is_bounded() {
+        let mut extra = String::new();
+        for id in 100..165 {
+            let next = if id == 164 { 5 } else { id + 1 };
+            let _ = writeln!(extra, "#{id}=SURFACE_CURVE('',#{next},(#8),.CURVE_3D.);");
+        }
+        let ex = exchange(&extra);
+        let error = written_curve(&ex, 100).unwrap_err();
+        assert!(matches!(error, KernelError::Failed(message) if message.contains("curve wrapper nesting")));
+    }
 }
