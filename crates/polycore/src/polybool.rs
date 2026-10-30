@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use solidcraft_geom::{Aabb3, Mesh, Vec3};
+use polycore_geom::{Aabb3, Mesh, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, edge_order, from_p3, p3};
@@ -471,12 +471,12 @@ pub(crate) fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Re
     let surface_tol = kind_tol(a);
     let planes: Vec<Option<Vec3>> =
         a.solid.face_iter().zip(&infos).map(|(f, info)| info.plane_normal.filter(|_| curved_kind(f, true, surface_tol).is_none())).collect();
-    let mut curved: BTreeMap<u32, solidcraft_geom::Aabb3> = BTreeMap::new();
+    let mut curved: BTreeMap<u32, polycore_geom::Aabb3> = BTreeMap::new();
     for (t, fi) in mesh.triangles.iter().zip(&mesh.tri_face) {
         if planes.get(*fi as usize)?.is_some() {
             continue;
         }
-        let bx = curved.entry(*fi).or_insert(solidcraft_geom::Aabb3::EMPTY);
+        let bx = curved.entry(*fi).or_insert(polycore_geom::Aabb3::EMPTY);
         for p in mesh.tri(t)? {
             bx.add(p);
         }
@@ -485,7 +485,7 @@ pub(crate) fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Re
     if curved.is_empty() {
         return None;
     }
-    let mut tool = solidcraft_geom::Aabb3::EMPTY;
+    let mut tool = polycore_geom::Aabb3::EMPTY;
     for p in pb.iter().flat_map(|p| &p.v) {
         tool.add(*p);
     }
@@ -541,7 +541,7 @@ pub(crate) fn sliced_planar_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Re
         let mut outside: Vec<Traced> = Vec::new();
         for (slot, (cut, keep_positive)) in [(2, (lo, true)), (4, (hi, false))] {
             let Some(x) = cut else { continue };
-            let plane = solidcraft_geom::Plane::new(axis * x, u, w).ok_or_else(|| fail("plane"))?;
+            let plane = polycore_geom::Plane::new(axis * x, u, w).ok_or_else(|| fail("plane"))?;
             // Split along the plane (an imprint: no boolean); two booleans with half boxes
             // where the split can't be sorted into one piece kept and the rest away.
             if let Some((away, kept)) = split_beside(&middle, &plane, axis, x, keep_positive) {
@@ -652,7 +652,7 @@ pub(crate) fn reassembled(
 /// and the one part on its side (positive along `axis` when `keep_positive`), each with its
 /// history over the operands `piece`'s is over. `None` when the split leaves no part on either
 /// side, or several on the tool's.
-pub(crate) fn split_beside(piece: &Traced, plane: &solidcraft_geom::Plane, axis: Vec3, x: f64, keep_positive: bool) -> Option<(Vec<Traced>, Traced)> {
+pub(crate) fn split_beside(piece: &Traced, plane: &polycore_geom::Plane, axis: Vec3, x: f64, keep_positive: bool) -> Option<(Vec<Traced>, Traced)> {
     let parts = crate::splitface::split_body(&piece.0, &crate::splitface::SplitTool::Plane(*plane)).ok()?;
     if parts.len() < 2 {
         return None;
@@ -1262,7 +1262,7 @@ mod diagnostic_tests {
 mod small_round_tests {
     use std::f64::consts::FRAC_PI_2;
 
-    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
 
     use super::*;
 

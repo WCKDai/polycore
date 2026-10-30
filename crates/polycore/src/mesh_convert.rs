@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 
 use crate::{Body, KernelError, Result};
 
@@ -83,7 +83,7 @@ fn weld(mesh: &crate::meshbody::TriMesh, tolerance: f64) -> Result<Body> {
     if mesh.positions.len() > MAX_TRIANGLES * 3 {
         return Err(invalid(&format!("the mesh has {} vertices, more than the {} conversion can take", mesh.positions.len(), MAX_TRIANGLES * 3)));
     }
-    let bounds = mesh.positions.iter().fold(solidcraft_geom::Aabb3::EMPTY, |mut b, p| {
+    let bounds = mesh.positions.iter().fold(polycore_geom::Aabb3::EMPTY, |mut b, p| {
         b.add(*p);
         b
     });
@@ -142,7 +142,7 @@ fn weld(mesh: &crate::meshbody::TriMesh, tolerance: f64) -> Result<Body> {
 fn extrusion(mesh: &crate::meshbody::TriMesh, axis: Vec3, tolerance: f64) -> Result<Option<Body>> {
     let (lo, hi) = mesh.positions.iter().map(|p| p.dot(axis)).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| (lo.min(h), hi.max(h)));
     let height = hi - lo;
-    let bounds = mesh.positions.iter().fold(solidcraft_geom::Aabb3::EMPTY, |mut b, p| {
+    let bounds = mesh.positions.iter().fold(polycore_geom::Aabb3::EMPTY, |mut b, p| {
         b.add(*p);
         b
     });
@@ -236,9 +236,10 @@ fn extrusion(mesh: &crate::meshbody::TriMesh, axis: Vec3, tolerance: f64) -> Res
             continue;
         }
         let p = plane.to_local(*p);
-        if !boundary_segments.iter().any(|&(a, b)| {
-            solidcraft_geom::Seg2::Line { a, b }.point_at(solidcraft_geom::Seg2::Line { a, b }.closest_param(p)).dist(p) <= epsilon * 3.
-        }) {
+        if !boundary_segments
+            .iter()
+            .any(|&(a, b)| polycore_geom::Seg2::Line { a, b }.point_at(polycore_geom::Seg2::Line { a, b }.closest_param(p)).dist(p) <= epsilon * 3.)
+        {
             return Ok(None);
         }
     }
@@ -388,7 +389,7 @@ fn fit_loop(points: &[Vec2], tolerance: f64, epsilon: f64) -> Loop2 {
         }
         let remove = (0..n).find(|&i| {
             let (Some(a), Some(b), Some(c)) = (points.get((i + n - 1) % n), points.get(i), points.get((i + 1) % n)) else { return false };
-            let edge = solidcraft_geom::Seg2::Line { a: *a, b: *c };
+            let edge = polycore_geom::Seg2::Line { a: *a, b: *c };
             edge.point_at(edge.closest_param(*b)).dist(*b) <= linear_tolerance
         });
         let Some(index) = remove else { break };

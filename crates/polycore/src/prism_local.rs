@@ -13,7 +13,7 @@
 //! piece beyond it goes first; otherwise one close beside the tool, which splits them (a
 //! chamfer all round a disc is split into two pieces apart, which the next cut leaves out).
 
-use solidcraft_geom::{Plane, Vec3};
+use polycore_geom::{Plane, Vec3};
 use truck_modeling as mt;
 
 use crate::body::Body;

@@ -6,7 +6,7 @@
 //! described.
 
 use mt::builder;
-use solidcraft_geom::{Grid, Plane, Region2, Seg2, Vec2, Vec3};
+use polycore_geom::{Grid, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, p3};
@@ -848,7 +848,7 @@ fn smooth_walls(plane: &Plane, profile: &NumberedLoop, st: &[Station], expected:
 mod tests {
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 
     use super::{SweepControl, SweepOrientation, sweep_path, sweep_path_with};
 

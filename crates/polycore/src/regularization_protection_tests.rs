@@ -1,5 +1,5 @@
 use super::*;
-use solidcraft_geom::Plane;
+use polycore_geom::Plane;
 
 fn stamped_stock() -> Body {
     crate::box_solid(Vec3::new(-20., -15., 0.), Vec3::new(20., 15., 24.)).unwrap().with_box_certificate(7).unwrap()

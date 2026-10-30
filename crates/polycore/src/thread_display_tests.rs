@@ -1,7 +1,7 @@
 //! Issue 1289: the display mesh of a modelled screw thread (helical B-spline flanks).
 
-use solidcraft_geom::tess::TessPlan;
-use solidcraft_geom::{Mesh, Vec3};
+use polycore_geom::tess::TessPlan;
+use polycore_geom::{Mesh, Vec3};
 
 use std::f64::consts::{PI, TAU};
 use std::sync::Arc;

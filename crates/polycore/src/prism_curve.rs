@@ -1,7 +1,7 @@
 //! Whole-span certificates for analytic planar prism boundaries.
 //! Samples propose a circle; only positive rational Bernstein bounds accept it.
 use crate::body::from_p3;
-use solidcraft_geom::{Plane, Seg2, Vec2};
+use polycore_geom::{Plane, Seg2, Vec2};
 use truck_modeling::{self as mt, BoundedCurve, Invertible, ParametricCurve};
 
 const MAX_DEGREE: usize = 32;
@@ -233,7 +233,7 @@ pub(super) fn segment_fitted(e: &mt::Edge, plane: &Plane, tol: f64, fit: f64, wo
         }
         charge(work, 64)?;
         let points: Vec<Vec2> = span.iter().map(|p| point(*p)).collect();
-        out.extend(solidcraft_geom::bezier(&points)?.fit_arcs(fit)?);
+        out.extend(polycore_geom::bezier(&points)?.fit_arcs(fit)?);
         if out.len() > MAX_CONTROLS {
             return None;
         }
@@ -334,7 +334,7 @@ fn off_chord(pts: &[Vec2]) -> f64 {
 
 /// One Bézier span that is neither a line nor an arc, as the exact free-form segment it is
 /// (a font's quadratic or cubic, a conic), its ends `a` and `b`. `None` for several spans (a
-/// curve that may wind about more than once), degrees past [`solidcraft_geom::MAX_BEZIER_DEGREE`],
+/// curve that may wind about more than once), degrees past [`polycore_geom::MAX_BEZIER_DEGREE`],
 /// rational spans other than conics, and control polygons with no area (a curve doubling back
 /// along a line).
 fn free_form(spans: &[Vec<H>], a: Vec2, b: Vec2, tol: f64) -> Option<Vec<Seg2>> {
@@ -352,7 +352,7 @@ fn free_form(spans: &[Vec<H>], a: Vec2, b: Vec2, tol: f64) -> Option<Vec<Seg2>> 
     }
     let rational = span.iter().any(|p| (p[2] - 1.).abs() > 1e-12);
     let seg = match (pts.len(), rational) {
-        (_, false) => solidcraft_geom::bezier(&pts)?,
+        (_, false) => polycore_geom::bezier(&pts)?,
         (3, true) => {
             // Weights normalised to 1 at the ends: the middle one is the conic's.
             let (w0, w1, w2) = (span[0][2], span[1][2], span[2][2]);
@@ -484,7 +484,7 @@ mod tests {
         let cap = builder::try_attach_plane(&[wire]).unwrap();
         let body = crate::body::Body::new(builder::tsweep(&cap, mt::Vector3::new(0., 0., 1.))).unwrap();
         assert!(body.validity().is_empty());
-        let tool = crate::box_solid(solidcraft_geom::Vec3::new(-1., -4., 0.5), solidcraft_geom::Vec3::new(12., 7., 1.)).unwrap();
+        let tool = crate::box_solid(polycore_geom::Vec3::new(-1., -4., 0.5), polycore_geom::Vec3::new(12., 7., 1.)).unwrap();
         assert!(
             crate::prism::prism_boolean(&body, &tool, crate::BoolOp::Cut).is_none(),
             "an actual extruded aliased spline cap must reach the generic route"
@@ -536,7 +536,7 @@ mod tests {
         // A parabola within a micron of the circle through its ends and middle.
         let e = edge(&[0., 2., 0.], &[0., 0., 0.2], &[1.], 2);
         let (a, b) = (Vec2::new(0., 0.), Vec2::new(2., 0.2));
-        assert!(from_p3(e.back().point()).dist(solidcraft_geom::Vec3::new(2., 0.2, 0.)) < 1e-12);
+        assert!(from_p3(e.back().point()).dist(polycore_geom::Vec3::new(2., 0.2, 0.)) < 1e-12);
         for tol in [1e-5, 2e-3] {
             let segs = segment(&e, &Plane::XY, tol, &mut 2_000_000).unwrap();
             let (first, last) = (segs.first().unwrap(), segs.last().unwrap());

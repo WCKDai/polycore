@@ -1,7 +1,7 @@
 //! #1080: fillets and chamfers that would run past the faces beside their edge (into a pocket,
 //! a hole, another blend) are refused with the largest size that fits, not built through it.
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 
 use crate::{Body, BoolOp, ChamferSide, KernelError, build::box_solid, ops::boolean};
 

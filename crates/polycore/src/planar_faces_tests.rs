@@ -6,7 +6,7 @@
 
 use std::f64::consts::{FRAC_PI_2, TAU};
 
-use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 
 use crate::*;
 
@@ -155,12 +155,12 @@ fn interleaved_spiral_walls_join() {
 #[test]
 fn a_cut_of_an_extruded_spline_keeps_its_spline_wall() {
     let p = Vec2::new;
-    let line = |a: Vec2, b: Vec2| solidcraft_geom::Seg2::Line { a, b };
+    let line = |a: Vec2, b: Vec2| polycore_geom::Seg2::Line { a, b };
     let outline = Loop2 {
         segs: vec![
             line(p(0.0, 0.0), p(40.0, 0.0)),
             line(p(40.0, 0.0), p(40.0, 20.0)),
-            solidcraft_geom::Seg2::Cubic { p0: p(40.0, 20.0), p1: p(30.0, 35.0), p2: p(10.0, 5.0), p3: p(0.0, 20.0) },
+            polycore_geom::Seg2::Cubic { p0: p(40.0, 20.0), p1: p(30.0, 35.0), p2: p(10.0, 5.0), p3: p(0.0, 20.0) },
             line(p(0.0, 20.0), p(0.0, 0.0)),
         ],
     };

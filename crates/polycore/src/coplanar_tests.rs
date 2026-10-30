@@ -2,7 +2,7 @@
 //! that leaves the result as it is. Every expected volume is what the two bodies define.
 #![allow(clippy::unwrap_used, clippy::panic)]
 use crate::*;
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 
 /// An l x w x h block with two bottom edges chamfered by 1 mm: no prism along any axis, so
 /// its booleans are not done on sections.

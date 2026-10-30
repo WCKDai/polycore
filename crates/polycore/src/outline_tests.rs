@@ -3,7 +3,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 
 use crate::*;
 

@@ -1,13 +1,13 @@
 //! Filling a closed loop of a body's edges that is not planar with one face, bounded by the
 //! body's own edges, whole: a B-spline height field over the loop's best-fit plane
-//! (`solidcraft_geom::fill::fill_loop`) when the patch only has to meet the edges (G0) and the
-//! loop bounds one; otherwise the general fill (`solidcraft_geom::fill_general`), developed from
+//! (`polycore_geom::fill::fill_loop`) when the patch only has to meet the edges (G0) and the
+//! loop bounds one; otherwise the general fill (`polycore_geom::fill_general`), developed from
 //! the loop itself, which also meets the faces beside the loop with G1 or G2 and passes through
 //! given points.
 
-use solidcraft_geom::Vec3;
-use solidcraft_geom::bspline::SplineError;
-use solidcraft_geom::fill_general::{Across, FillSpec, MAX_FILL_POINTS, Station};
+use polycore_geom::Vec3;
+use polycore_geom::bspline::SplineError;
+use polycore_geom::fill_general::{Across, FillSpec, MAX_FILL_POINTS, Station};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3};
@@ -42,9 +42,9 @@ pub struct PatchSpec {
     /// conditions across it do not move. A general fill needs a G1 or G2 edge to crown.
     pub crown: f64,
     /// How fast the patch leaves its G1/G2 edges, a multiple of the loop's own speed
-    /// (`solidcraft_geom::fill_general::FillSpec::speed`): the default is what patches were
+    /// (`polycore_geom::fill_general::FillSpec::speed`): the default is what patches were
     /// filled with before it was saved with them; new patches ask for
-    /// `solidcraft_geom::fill_general::FILL_SPEED`.
+    /// `polycore_geom::fill_general::FILL_SPEED`.
     pub speed: f64,
 }
 
@@ -55,7 +55,7 @@ impl Default for PatchSpec {
             edges: Vec::new(),
             points: Vec::new(),
             crown: 0.0,
-            speed: solidcraft_geom::fill_general::LEGACY_FILL_SPEED,
+            speed: polycore_geom::fill_general::LEGACY_FILL_SPEED,
         }
     }
 }
@@ -99,7 +99,7 @@ pub fn patch_edges_report(body: &Body, at: &[Vec3], spec: &PatchSpec) -> Result<
         return Err(KernelError::Invalid("pick the edges of a closed loop".into()));
     }
     // A range test also throws out NaN.
-    if !(solidcraft_geom::fill::MIN_CROWN..=solidcraft_geom::fill::MAX_CROWN).contains(&spec.crown) {
+    if !(polycore_geom::fill::MIN_CROWN..=polycore_geom::fill::MAX_CROWN).contains(&spec.crown) {
         return Err(KernelError::Invalid("a patch's crown must be between -0.9 and 3".into()));
     }
     let g3 = |g: Continuity| g == Continuity::G3;
@@ -183,7 +183,7 @@ pub(crate) fn general_fill(
     speed: f64,
 ) -> Result<(Body, PatchReport)> {
     let tol = face_tolerance(body);
-    let size = body.size().max(solidcraft_geom::LINEAR_TOL);
+    let size = body.size().max(polycore_geom::LINEAR_TOL);
     let mut sides: Vec<Side> = Vec::with_capacity(chain.len());
     for (e, order) in chain.iter().zip(orders) {
         let faces: Vec<&mt::Face> = body.solid.face_iter().filter(|f| f.edge_iter().any(|x| x.id() == e.id())).collect();
@@ -253,10 +253,10 @@ pub(crate) fn general_fill(
     // A faster leaving speed asks more of the fit: where no grid holds the loop at it (a G2 edge
     // among G0 ones can leave it 0.042 µm off a 0.036 µm tolerance), the
     // fill tries halfway to the loop's own speed, then that speed, which always held before.
-    let legacy = solidcraft_geom::fill_general::LEGACY_FILL_SPEED;
+    let legacy = polycore_geom::fill_general::LEGACY_FILL_SPEED;
     let mut fit = |speed: f64| {
         let spec = FillSpec { tol, angle_tol: PATCH_ANGLE_TOL_DEG.to_radians(), crown, points, speed };
-        solidcraft_geom::fill_general::fill_general(chain.len(), &mut stations, &spec)
+        polycore_geom::fill_general::fill_general(chain.len(), &mut stations, &spec)
     };
     let mut fill = fit(speed);
     if speed > legacy {
@@ -297,7 +297,7 @@ pub(crate) fn fill_loop(body: &Body, chain: &[mt::Edge]) -> Result<Body> {
 }
 
 /// [`fill_loop`] with a crown: positive makes the fitted patch's middle fuller, negative flatter,
-/// by `crown` times the loop's size (see `solidcraft_geom::fill::fill_loop`). The bump vanishes on
+/// by `crown` times the loop's size (see `polycore_geom::fill::fill_loop`). The bump vanishes on
 /// the loop, so the face still meets the body's own edges exactly as the plain fill does.
 pub(crate) fn fill_loop_crowned(body: &Body, chain: &[mt::Edge], crown: f64) -> Result<Body> {
     let tol = face_tolerance(body);
@@ -311,13 +311,13 @@ pub(crate) fn fill_loop_crowned(body: &Body, chain: &[mt::Edge], crown: f64) -> 
         // The loop's corners are its vertices (an imported edge's curve may end a little off).
         if t <= 0.0 { Some(*start) } else { sampler.at(t) }
     };
-    let fill = match solidcraft_geom::fill::fill_loop(chain.len(), &mut point, tol, crown) {
+    let fill = match polycore_geom::fill::fill_loop(chain.len(), &mut point, tol, crown) {
         Ok(fill) => fill,
         // Not a height field over its plane (or too wavy for one): the general fill, developed
         // from the loop itself, when no crown asks for the height field's bump.
         Err(SplineError::Unsupported(_)) if crown == 0.0 => {
             let orders = vec![Continuity::G0; chain.len()];
-            return general_fill(body, chain, &orders, &[], 0.0, solidcraft_geom::fill_general::LEGACY_FILL_SPEED).map(|(b, _)| b);
+            return general_fill(body, chain, &orders, &[], 0.0, polycore_geom::fill_general::LEGACY_FILL_SPEED).map(|(b, _)| b);
         }
         Err(e) => return Err(spline_error(e)),
     };
@@ -345,7 +345,7 @@ pub fn patch_edges_crowned(body: &Body, at: &[Vec3], crown: f64) -> Result<Body>
         return Err(KernelError::Invalid("pick the edges of a closed loop".into()));
     }
     // A range test also throws out NaN.
-    if !(solidcraft_geom::fill::MIN_CROWN..=solidcraft_geom::fill::MAX_CROWN).contains(&crown) {
+    if !(polycore_geom::fill::MIN_CROWN..=polycore_geom::fill::MAX_CROWN).contains(&crown) {
         return Err(KernelError::Invalid("a patch's crown must be between -0.9 and 3".into()));
     }
     crate::guard("patch", || {
@@ -366,7 +366,7 @@ pub fn patch_edges_crowned(body: &Body, at: &[Vec3], crown: f64) -> Result<Body>
 /// tolerance, since a planar face is exact and other operations treat it as containing its
 /// edges to that tolerance. A fitted face gets [`face_tolerance`], ten times looser.
 pub(crate) fn planarity_tolerance(body: &Body) -> f64 {
-    (body.size() * 1e-7).max(solidcraft_geom::LINEAR_TOL)
+    (body.size() * 1e-7).max(polycore_geom::LINEAR_TOL)
 }
 
 /// How far the fill's surface may be from the loop's edges: `10⁻⁶` of the body's size, at least
@@ -386,7 +386,7 @@ pub(crate) fn face_tolerance(body: &Body) -> f64 {
 #[cfg(test)]
 mod tests {
     use mt::{BoundedCurve, InnerSpace, MetricSpace, ParametricCurve, ParametricSurface};
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
     use truck_modeling as mt;
 
     use crate::body::{Body, from_p3, p3};
@@ -539,8 +539,8 @@ mod tests {
     /// vanishes on the rim, so cells across it add little error).
     fn gained(fill: &Body, corners: &[Vec2]) -> f64 {
         let s = fill.solid.face_iter().next().unwrap().surface();
-        let polygon = solidcraft_geom::Ring::from(corners.to_vec());
-        let solidcraft_geom::Aabb2 { min: lo, max: hi } = polygon.bounds();
+        let polygon = polycore_geom::Ring::from(corners.to_vec());
+        let polycore_geom::Aabb2 { min: lo, max: hi } = polygon.bounds();
         let n = 300;
         let (dx, dy) = ((hi.x - lo.x) / n as f64, (hi.y - lo.y) / n as f64);
         let inside = |x: f64, y: f64| polygon.contains(Vec2::new(x, y));

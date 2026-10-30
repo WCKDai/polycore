@@ -10,7 +10,7 @@
 //!
 //! A result that fails is refused with an error: a wrong result that looks right is worse.
 
-use solidcraft_geom::{Aabb3, Mesh, Vec3};
+use polycore_geom::{Aabb3, Mesh, Vec3};
 
 use crate::body::Body;
 use crate::{BoolOp, KernelError, Result};

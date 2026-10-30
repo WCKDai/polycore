@@ -2,8 +2,8 @@
 //! the plan stores are the ones the evaluators use), and the tolerance-driven divisions of a
 //! face's parameter box.
 
-use solidcraft_geom::Vec3;
-use solidcraft_geom::tess::EvalSurface;
+use polycore_geom::Vec3;
+use polycore_geom::tess::EvalSurface;
 
 use super::size::Rules;
 
@@ -283,7 +283,7 @@ fn limits<'a>(s: &'a EvalSurface, d: usize, across: (f64, f64), rules: &'a Rules
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solidcraft_geom::tess::EvalCurve;
+    use polycore_geom::tess::EvalCurve;
 
     fn cylinder() -> EvalSurface {
         EvalSurface::Revolved {

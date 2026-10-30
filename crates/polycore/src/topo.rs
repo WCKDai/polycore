@@ -7,8 +7,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use polycore_geom::{Mesh, UnitVec3, Vec3};
 use serde::Serialize;
-use solidcraft_geom::{Mesh, UnitVec3, Vec3};
 
 use crate::Result;
 use crate::body::{Body, from_p3};

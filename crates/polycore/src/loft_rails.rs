@@ -10,7 +10,7 @@
 //! through the sections and the stations together.
 
 use mt::{BoundedCurve, ParametricCurve};
-use solidcraft_geom::{Plane, Vec3};
+use polycore_geom::{Plane, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{from_p3, p3};
@@ -100,7 +100,7 @@ pub(crate) fn railed_wires(planes: &[Plane], wires: &[mt::Wire], closed: bool, r
         curves.iter().map(|cs| cs.iter().map(|c| c.control_points().iter().map(|p| from_p3(*p)).collect()).collect()).collect();
     let edges: Vec<Vec<mt::Edge>> = wires.iter().map(|w| w.edge_iter().cloned().collect()).collect();
     let along = crate::build::section_parameters(&edges);
-    let mut bounds = solidcraft_geom::Aabb3::EMPTY;
+    let mut bounds = polycore_geom::Aabb3::EMPTY;
     for p in ctrl.iter().flatten().flatten() {
         if !p.is_finite() {
             return Err(fail("sections"));

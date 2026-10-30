@@ -33,8 +33,8 @@ pub(crate) mod uv;
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Vec3;
-use solidcraft_geom::tess::{EvalSurface, FacePlan, TessPlan};
+use polycore_geom::Vec3;
+use polycore_geom::tess::{EvalSurface, FacePlan, TessPlan};
 use truck_modeling as mt;
 
 use crate::body::{Solid, edge_order};

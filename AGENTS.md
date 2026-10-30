@@ -10,8 +10,8 @@ phase or a release without its measured evidence.
 
 ## Repository map
 
-- `crates/polycore/` — the public kernel crate (`solidcraft-kernel` until the coordinated rename).
-- `crates/solidcraft-geom/` — geometry types and algorithms (`solidcraft-geom`).
+- `crates/polycore/` — the public kernel crate (`polycore`; `solidcraft-kernel` before Polykrom#304).
+- `crates/polycore-geom/` — geometry types and algorithms (`polycore-geom`; `solidcraft-geom` before Polykrom#304).
 - `vendor/` — the renamed, local-only Truck closure. Never reintroduce registry Truck packages.
 - `xtask/` — the authoritative fmt/check/test/wasm/dependency/corpus task runner.
 - `tests/` and `crates/*/tests/` — kernel and geometry regressions; keep the existing area's file.
@@ -54,8 +54,9 @@ below 10 GiB (CONTRIBUTING.md); use CI or a shared cache instead.
 
 ## Public compatibility
 
-- Public package names remain `solidcraft-kernel` and `solidcraft-geom` until the coordinated
-  rename stage; do not rename piecemeal.
+- The public packages are `polycore` and `polycore-geom` (renamed from `solidcraft-kernel` and
+  `solidcraft-geom` in Polykrom's second rename stage, Polykrom#304). A consumer moving its pin
+  across the rename changes its dependency keys, or keeps them with `package = "polycore"`.
 - The `Kernel` API, serialized kernel history, face/body identity and error categories are contracts.
   Add old/new fixtures for a change to them.
 - `polykrom.rev` records the consumer revision. A behavioral extraction change needs a measured

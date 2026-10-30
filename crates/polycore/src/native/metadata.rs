@@ -1,7 +1,7 @@
 //! Explicit conversions between runtime metadata and the versioned wire records.
 use super::{Result, invalid};
 use crate::{Body, FaceSource, history as h};
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3, brep::envelope as w};
+use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3, brep::envelope as w};
 
 fn index(n: usize) -> Result<u32> {
     u32::try_from(n).map_err(invalid)
@@ -32,8 +32,7 @@ fn segment(s: &Seg2) -> Result<w::Segment> {
         Seg2::Conic { a, apex, b, w } => w::Segment::Conic { points: [a, apex, b].map(point2), middle_weight: w },
         Seg2::Bezier { n, p } => {
             let count = usize::from(n) + 1;
-            if !(5..=solidcraft_geom::MAX_BEZIER_CTRL).contains(&count) || p.get(count..).is_none_or(|unused| unused.iter().any(|p| *p != Vec2::ZERO))
-            {
+            if !(5..=polycore_geom::MAX_BEZIER_CTRL).contains(&count) || p.get(count..).is_none_or(|unused| unused.iter().any(|p| *p != Vec2::ZERO)) {
                 return Err(invalid("unsupported certificate Bezier layout"));
             }
             w::Segment::Bezier { points: p.get(..count).ok_or_else(|| invalid("Bezier count"))?.iter().copied().map(point2).collect() }
@@ -47,10 +46,10 @@ fn load_segment(s: w::Segment) -> Result<Seg2> {
         w::Segment::Cubic { points: [a, b, c, d] } => Seg2::Cubic { p0: p2(a), p1: p2(b), p2: p2(c), p3: p2(d) },
         w::Segment::Conic { points: [a, apex, b], middle_weight } => Seg2::Conic { a: p2(a), apex: p2(apex), b: p2(b), w: middle_weight },
         w::Segment::Bezier { points } => {
-            if !(5..=solidcraft_geom::MAX_BEZIER_CTRL).contains(&points.len()) {
+            if !(5..=polycore_geom::MAX_BEZIER_CTRL).contains(&points.len()) {
                 return Err(invalid("certificate Bezier degree"));
             }
-            let mut p = [Vec2::ZERO; solidcraft_geom::MAX_BEZIER_CTRL];
+            let mut p = [Vec2::ZERO; polycore_geom::MAX_BEZIER_CTRL];
             let n = (points.len() - 1) as u8;
             for (slot, value) in p.iter_mut().zip(points) {
                 *slot = p2(value);
@@ -325,7 +324,7 @@ mod tests {
         for value in sources {
             assert_eq!(value, source(&load_source(value.clone(), 0).unwrap(), 0).unwrap());
         }
-        assert!(load_segment(w::Segment::Bezier { points: vec![[0., 0.]; solidcraft_geom::MAX_BEZIER_CTRL + 1] }).is_err());
+        assert!(load_segment(w::Segment::Bezier { points: vec![[0., 0.]; polycore_geom::MAX_BEZIER_CTRL + 1] }).is_err());
     }
 
     #[test]

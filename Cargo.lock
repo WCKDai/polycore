@@ -421,6 +421,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "polycore"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "polycore-geom",
+ "polycore-truck-meshalgo",
+ "polycore-truck-modeling",
+ "polycore-truck-shapeops",
+ "polycore-truck-stepio",
+ "polycore-truck-topology",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+ "spade",
+ "thiserror 2.0.21",
+ "web-time",
+]
+
+[[package]]
+name = "polycore-geom"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "polycore-matext4cgmath"
 version = "0.1.0"
 dependencies = [
@@ -827,35 +856,6 @@ name = "smallvec"
 version = "1.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
-
-[[package]]
-name = "solidcraft-geom"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "solidcraft-kernel"
-version = "0.1.0"
-dependencies = [
- "log",
- "polycore-truck-meshalgo",
- "polycore-truck-modeling",
- "polycore-truck-shapeops",
- "polycore-truck-stepio",
- "polycore-truck-topology",
- "proptest",
- "rayon",
- "serde",
- "serde_json",
- "solidcraft-geom",
- "spade",
- "thiserror 2.0.21",
- "web-time",
-]
 
 [[package]]
 name = "spade"

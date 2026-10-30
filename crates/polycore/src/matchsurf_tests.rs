@@ -6,7 +6,7 @@ use super::*;
 use crate::bridge::{Continuity, Frame};
 use crate::build::SEAM_ANGLE;
 use crate::{cylinder, stitch};
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 /// The radius of the cylinder a sheet is matched to, the radius the sheet starts at, its height,

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use polycore_geom::{Aabb3, Mesh, Plane, Region2, Vec3};
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Aabb3, Mesh, Plane, Region2, Vec3};
 use web_time::Instant;
 
 use crate::history::History;
@@ -299,8 +299,8 @@ pub struct ExtrudeSpec {
 pub struct RevolveSpec {
     pub plane: Plane,
     pub regions: Vec<Region2>,
-    pub axis_origin: solidcraft_geom::Vec2,
-    pub axis_dir: solidcraft_geom::Vec2,
+    pub axis_origin: polycore_geom::Vec2,
+    pub axis_dir: polycore_geom::Vec2,
     pub angle: f64,
 }
 

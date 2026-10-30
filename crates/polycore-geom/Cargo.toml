@@ -1,5 +1,5 @@
 [package]
-name = "solidcraft-geom"
+name = "polycore-geom"
 description = "PolyCore geometry foundation: vectors, planes, frames, meshes and their measures"
 version.workspace = true
 edition.workspace = true

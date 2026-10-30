@@ -1,7 +1,7 @@
-//! The truck adapter. Persisted data belongs to solidcraft_geom::brep, never truck.
+//! The truck adapter. Persisted data belongs to polycore_geom::brep, never truck.
 use super::{Result, invalid};
 use mt::Invertible;
-use solidcraft_geom::brep as b;
+use polycore_geom::brep as b;
 use truck_modeling as mt;
 
 #[path = "analytic.rs"]
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn intersections_and_revolutions_reload_exactly() {
-        use solidcraft_geom::Vec3;
+        use polycore_geom::Vec3;
         let cyl = crate::cylinder(Vec3::ZERO, Vec3::Z, 5., 40.).unwrap();
         let block = crate::box_solid(Vec3::new(-20., -20., 20.), Vec3::new(20., 20., 60.)).unwrap();
         let block = crate::transform(&block, Vec3::ZERO, Vec3::new(0., 0., 20.), Vec3::X, 0.4).unwrap();

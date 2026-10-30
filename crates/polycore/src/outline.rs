@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::f64::consts::TAU;
 
 use mt::{BoundedCurve, ParametricCurve};
-use solidcraft_geom::{Vec2, Vec3};
+use polycore_geom::{Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3};

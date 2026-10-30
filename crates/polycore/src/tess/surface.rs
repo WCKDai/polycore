@@ -2,9 +2,9 @@
 //! share. Surfaces the evaluators cannot express (a revolved intersection curve) or that are
 //! too large for them give `None`; their faces are evaluated here instead.
 
-use solidcraft_geom::Vec3;
-use solidcraft_geom::bspline::MAX_SPLINE_DEGREE;
-use solidcraft_geom::tess::{EvalCurve, EvalSurface, MAX_EVAL_KNOTS, MAX_EVAL_POINTS};
+use polycore_geom::Vec3;
+use polycore_geom::bspline::MAX_SPLINE_DEGREE;
+use polycore_geom::tess::{EvalCurve, EvalSurface, MAX_EVAL_KNOTS, MAX_EVAL_POINTS};
 use truck_meshalgo::prelude::*;
 use truck_modeling as mt;
 

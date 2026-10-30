@@ -15,7 +15,7 @@
 //! band, a hole that is not round all the way, a pin end inside the hole), the overlap is not
 //! answered here and the caller takes the general boolean.
 
-use solidcraft_geom::{Aabb3, UnitVec3, Vec3};
+use polycore_geom::{Aabb3, UnitVec3, Vec3};
 
 use crate::body::Body;
 use crate::{BoolOp, FaceSurface};

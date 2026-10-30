@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use solidcraft_geom::{Loop2, Mesh, Plane, Region2, Seg2, UnitVec3, Vec2, Vec3};
+use polycore_geom::{Loop2, Mesh, Plane, Region2, Seg2, UnitVec3, Vec2, Vec3};
 
 use super::{Body, DISPLAY_ANGLE};
 use crate::{FaceSurface, extrude, face_surface};

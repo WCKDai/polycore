@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Ring;
+use polycore_geom::Ring;
 
 /// Where a cut segment ends.
 #[derive(Clone, Copy, Debug, PartialEq)]

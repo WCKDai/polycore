@@ -3,7 +3,7 @@ use mt::{ParameterDivision2D, ParametricSurface, ParametricSurface3D, SearchNear
 use truck_meshalgo::prelude::*;
 
 fn wedge() -> (Body, RadiusSpline) {
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2};
     let outer = Loop2::polygon(&[Vec2::new(0., 0.), Vec2::new(40., 0.), Vec2::new(0., 20.)]);
     let body = crate::extrude(&Plane::XY, &[Region2 { outer, holes: vec![] }], 0., 15.).unwrap().pop().unwrap();
     let at = Vec3::new(20., 0., 15.);

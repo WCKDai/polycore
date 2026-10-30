@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use mt::{BoundedCurve, InnerSpace, MetricSpace, ParametricCurve, ParametricSurface, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::{Plane, Seg2, UnitVec3, Vec2, Vec3};
+use polycore_geom::{Plane, Seg2, UnitVec3, Vec2, Vec3};
 use truck_meshalgo::tessellation::RobustMeshableShape;
 use truck_modeling as mt;
 
@@ -1444,7 +1444,7 @@ thread_local! {
 /// takes by nudging the box): faces lying there are taken into the section of the side their
 /// material is on, as the box's face takes them in the boolean. An error otherwise, and where the
 /// plane only touches the body or the split is not supported.
-pub(crate) fn plane_parts(body: &Body, plane: &solidcraft_geom::Plane, tool: &Body) -> Result<[Body; 2]> {
+pub(crate) fn plane_parts(body: &Body, plane: &polycore_geom::Plane, tool: &Body) -> Result<[Body; 2]> {
     let n = plane.normal();
     let cap = tool
         .solid

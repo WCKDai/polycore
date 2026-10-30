@@ -11,7 +11,7 @@
 //! samples across its pushed place all lie outside the target's mesh, and the result is refused
 //! if any of its faces lies on a pushed wall (that wall took material after all).
 
-use solidcraft_geom::{InsideIndex, Vec3};
+use polycore_geom::{InsideIndex, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3};

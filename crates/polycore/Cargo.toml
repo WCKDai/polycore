@@ -1,5 +1,5 @@
 [package]
-name = "solidcraft-kernel"
+name = "polycore"
 description = "PolyCore B-rep kernel boundary: solids, extrude/revolve/booleans/fillets, tessellation, measures and STEP, behind our own API (implemented with truck)"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-solidcraft-geom = { workspace = true }
+polycore-geom = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

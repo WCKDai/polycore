@@ -1,4 +1,4 @@
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 
 use crate::*;
 

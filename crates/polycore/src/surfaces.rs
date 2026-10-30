@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use mt::{BoundedCurve, InnerSpace, MetricSpace, ParametricCurve, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::{Plane, Region2, Seg2, UnitVec3, Vec2, Vec3};
+use polycore_geom::{Plane, Region2, Seg2, UnitVec3, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
@@ -355,7 +355,7 @@ pub fn loft_sheet_with_rails(sections: &[(Plane, Vec<Seg2>)], rails: &[Vec<Vec3>
         crate::build::chain_wire(plane, chain)?;
     }
     let (wires, sources, reversed) = if all_closed {
-        let loops: Vec<(Plane, solidcraft_geom::Loop2)> = sections.iter().map(|(p, c)| (*p, solidcraft_geom::Loop2 { segs: c.clone() })).collect();
+        let loops: Vec<(Plane, polycore_geom::Loop2)> = sections.iter().map(|(p, c)| (*p, polycore_geom::Loop2 { segs: c.clone() })).collect();
         crate::build::loft_wires(&loops)?
     } else {
         let n = sections.iter().map(|(_, c)| c.len()).max().unwrap_or(0);
@@ -1441,7 +1441,7 @@ pub fn extend(body: &Body, at: &[Vec3], distance: f64) -> Result<Body> {
 mod tests {
     use super::*;
     use crate::{box_solid, cylinder, measure, trim};
-    use solidcraft_geom::{Loop2, Vec2};
+    use polycore_geom::{Loop2, Vec2};
 
     fn rel(a: f64, b: f64) -> f64 {
         (a - b).abs() / b.abs().max(1e-9)
@@ -1925,7 +1925,7 @@ mod tests {
     /// so the stitch leaves them apart.
     #[test]
     fn stitch_does_not_sew_a_curve_that_bows_away_between_shared_ends() {
-        use solidcraft_geom::bspline::{HPoint, NurbsSurface};
+        use polycore_geom::bspline::{HPoint, NurbsSurface};
         let square = Region2 {
             outer: Loop2::polygon(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)]),
             holes: vec![],

@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3};
@@ -1197,7 +1197,7 @@ pub(crate) fn moved_surface(f: &mt::Face, o: &Surf, n: &Surf) -> Result<mt::Surf
 /// share a corner with a drafted wall must be caps square to `pull` or walls; the rest of the
 /// body (a rounded edge elsewhere, say) is left as it is. The topology is kept, and the
 /// result's history is over `[b]` (each face and edge the one it was moved from).
-pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &solidcraft_geom::Plane, pull: Vec3, angle: f64) -> Result<Body> {
+pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &polycore_geom::Plane, pull: Vec3, angle: f64) -> Result<Body> {
     let faces: Vec<mt::Face> = b.solid.face_iter().cloned().collect();
     let size = b.size();
     let tol = (size * 1e-7).max(1e-9);

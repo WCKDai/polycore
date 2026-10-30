@@ -10,7 +10,7 @@
 //! through the touching points (the solids are unchanged), and the result's history is composed
 //! back over the operands as they were given.
 
-use solidcraft_geom::{Plane, UnitVec3, Vec3};
+use polycore_geom::{Plane, UnitVec3, Vec3};
 use truck_modeling::{ParametricCurve, SearchNearestParameter};
 
 use crate::body::{Body, from_p3, p3};
@@ -91,7 +91,7 @@ pub(crate) fn crossing(x: &Cylinder, y: &Cylinder, tol: f64) -> Option<Crossing>
 
 /// Whether `p` is on face `face` of the body whose mesh is `mesh`: within `reach` of one of the
 /// face's triangles.
-fn on_face(mesh: &solidcraft_geom::Mesh, face: usize, p: Vec3, reach: f64) -> bool {
+fn on_face(mesh: &polycore_geom::Mesh, face: usize, p: Vec3, reach: f64) -> bool {
     mesh.triangles
         .iter()
         .zip(&mesh.tri_face)

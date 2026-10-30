@@ -24,8 +24,8 @@
 //! corner is a still point of the construction and [`seam_error`] is measured clear of it. A patch
 //! that folds, or a corner with no room, is refused rather than replaced by the G1 ball.
 
-use solidcraft_geom::Vec3;
-use solidcraft_geom::bspline::{HPoint, NurbsSurface};
+use polycore_geom::Vec3;
+use polycore_geom::bspline::{HPoint, NurbsSurface};
 use truck_modeling::{self as mt, builder};
 
 use crate::blend::unsupported;

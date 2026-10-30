@@ -1,7 +1,7 @@
 //! geom's B-spline curves and surfaces as truck's NURBS geometry, weights kept (homogeneous
 //! control points carried over as they are).
 
-use solidcraft_geom::bspline::{HPoint, NurbsSurface};
+use polycore_geom::bspline::{HPoint, NurbsSurface};
 use truck_modeling as mt;
 
 use crate::body::p3;

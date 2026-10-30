@@ -17,8 +17,8 @@
 //! its curvature vector, and the third is the arclength derivative of that curvature vector.
 
 use mt::{BoundedCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::Vec3;
-use solidcraft_geom::bspline::{CurveN, HPoint, NurbsSurface};
+use polycore_geom::Vec3;
+use polycore_geom::bspline::{CurveN, HPoint, NurbsSurface};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
@@ -766,7 +766,7 @@ pub fn bridge_tangent(a: &[Frame], b: &[Frame], orders: [Continuity; 2], crown: 
     }
     let stations = a.len();
     let n = orders[0].conditions() + orders[1].conditions() - 1;
-    if n == 0 || n > solidcraft_geom::bspline::MAX_SPLINE_DEGREE {
+    if n == 0 || n > polycore_geom::bspline::MAX_SPLINE_DEGREE {
         return Err(KernelError::Failed("bridge: degree".into()));
     }
     if folds(orders, n, [tangent[0] * (1.0 + crown_a), tangent[1] * (1.0 + crown_b)])? {

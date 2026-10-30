@@ -3,7 +3,7 @@
 //! worked out from the input geometry alone (the two cylinders' axes, the arc's axis).
 
 use mt::{BoundedCurve, ParametricCurve, SearchNearestParameter};
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 
 use super::*;
 use crate::blend::vtx;

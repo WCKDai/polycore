@@ -2,7 +2,7 @@
 //! subdivision before output budgets can be checked; editing uses the normal mesh.
 use super::{Body, Result, invalid};
 use mt::{BoundedCurve, ParametricCurve};
-use solidcraft_geom::{Mesh, Vec3};
+use polycore_geom::{Mesh, Vec3};
 
 use truck_modeling as mt;
 

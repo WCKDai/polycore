@@ -2,7 +2,7 @@
 //! A boolean whose intersection loop lies wholly inside such a face takes it in two halves
 //! (exactly), where it used to end in a nudged tool or fail.
 use crate::*;
-use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 use std::f64::consts::PI;
 
 const R: f64 = 4.5;

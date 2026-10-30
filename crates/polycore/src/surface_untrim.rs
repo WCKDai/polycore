@@ -9,7 +9,7 @@
 //! Which loop is the outer one is worked out from the face's parameters ([`FaceLoops`]).
 
 use mt::{BoundedCurve, MetricSpace, ParametricCurve, ParametricSurface};
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::Body;
@@ -164,7 +164,7 @@ fn bounds_wire(surface: &mt::Surface, span: [(f64, f64); 2], ccw: bool, size: f6
 mod tests {
     use super::*;
     use crate::{extrude, measure};
-    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
     use std::f64::consts::PI;
 
     fn rel(a: f64, b: f64) -> f64 {

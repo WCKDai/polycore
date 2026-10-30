@@ -13,8 +13,8 @@
 //! [`crate::smooth_edges`] decides whether a join needs a *display* line; this module measures
 //! the join, and backs the engine's `inspect.continuity`.
 
+use polycore_geom::Vec3;
 use serde::Serialize;
-use solidcraft_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
@@ -443,7 +443,7 @@ fn vec3(p: mt::Vector3) -> Vec3 {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use solidcraft_geom::Plane;
+    use polycore_geom::Plane;
 
     fn tolerances() -> ContinuityTolerances {
         ContinuityTolerances { gap_mm: 1e-3, angle_deg: 1.0, curvature_per_mm: 0.01 }
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn a_line_tangent_into_an_arc_reports_one_over_its_radius() {
-        use solidcraft_geom::{Loop2, Region2, Seg2, Vec2};
+        use polycore_geom::{Loop2, Region2, Seg2, Vec2};
         let v = |x: f64, y: f64| Vec2::new(x, y);
         let outer = Loop2 {
             segs: vec![

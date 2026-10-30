@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 
 use super::size::Turn;
 use spade::handles::FixedVertexHandle;

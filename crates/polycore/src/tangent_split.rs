@@ -8,7 +8,7 @@
 //! other. Nothing else takes this path: other tools, and planes not through the centre, are
 //! left to the boolean's own refusal.
 
-use solidcraft_geom::{Plane, Vec3};
+use polycore_geom::{Plane, Vec3};
 
 use crate::body::Body;
 use crate::{BoolOp, FaceSurface, Result, face_surface};
@@ -89,7 +89,7 @@ fn by_planes(target: &Body, tool: &Body, a: &Body, b: &Body, boolean: &dyn Fn(&B
 
 #[cfg(test)]
 mod tests {
-    use solidcraft_geom::Vec3;
+    use polycore_geom::Vec3;
 
     use crate::{BoolOp, boolean, cylinder, measure, sphere};
 

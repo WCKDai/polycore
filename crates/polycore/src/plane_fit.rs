@@ -3,7 +3,7 @@
 //! (shared with the fill of a loop that is not planar).
 
 use mt::{BoundedCurve, EuclideanSpace, InnerSpace, MetricSpace, ParametricCurve};
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{from_p3, p3};

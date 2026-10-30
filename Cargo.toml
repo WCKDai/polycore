@@ -13,7 +13,7 @@ authors = ["PolyCore contributors"]
 repository = "https://github.com/WCKDai/polycore"
 
 [workspace.dependencies]
-solidcraft-geom = { path = "crates/solidcraft-geom" }
+polycore-geom = { path = "crates/polycore-geom" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }

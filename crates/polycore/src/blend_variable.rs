@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::blend::{plane_normal, rebuild_face, too_large, unsupported, vtx};
@@ -785,7 +785,7 @@ mod tests {
 
     /// A prism of the polygon `pts` (in xy) from z = 0 to `h`.
     fn prism(pts: &[(f64, f64)], h: f64) -> Body {
-        use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+        use polycore_geom::{Loop2, Plane, Region2, Vec2};
         let outer = Loop2::polygon(&pts.iter().map(|(x, y)| Vec2::new(*x, *y)).collect::<Vec<_>>());
         crate::extrude(&Plane::XY, &[Region2 { outer, holes: vec![] }], 0.0, h).unwrap().pop().unwrap()
     }

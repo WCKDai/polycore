@@ -2,7 +2,7 @@
 
 use std::f64::consts::FRAC_PI_2;
 
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling::{self as mt, SearchNearestParameter};
 
 use crate::*;
@@ -42,7 +42,7 @@ fn tube() -> Body {
 }
 
 /// Each face's mesh area, and how far its triangles' centroids lie off its surface at most.
-fn per_face(body: &Body, mesh: &solidcraft_geom::Mesh) -> Vec<(f64, f64)> {
+fn per_face(body: &Body, mesh: &polycore_geom::Mesh) -> Vec<(f64, f64)> {
     use mt::ParametricSurface;
     let faces: Vec<&mt::Face> = body.solid.face_iter().collect();
     let mut out = vec![(0.0, 0.0f64); faces.len()];

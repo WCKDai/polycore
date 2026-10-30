@@ -4,7 +4,7 @@
 //! value (#763: a G2 boundary surface measured half the cylinder's curvature it does carry).
 //! These pin the vendored fix, so a refresh of the crate can't quietly bring the error back.
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 use truck_modeling::ParametricSurface;
 
