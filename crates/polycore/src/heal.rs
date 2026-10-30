@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use solidcraft_geom::{Ring, Vec3};
+use polycore_geom::{Ring, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Solid, from_p3};
@@ -672,7 +672,7 @@ mod tests {
             .map(|k| builder::vertex(mt::Point3::new(k as f64, 0.0, 0.0)))
             .chain([builder::vertex(mt::Point3::new(n as f64, 3.0, 0.0)), builder::vertex(mt::Point3::new(0.0, 3.0, 0.0))])
             .collect();
-        let pts: solidcraft_geom::Ring<mt::Vertex> = pts.into();
+        let pts: polycore_geom::Ring<mt::Vertex> = pts.into();
         let edges: Vec<mt::Edge> = pts.edges().map(|(a, b)| builder::line(a, b)).collect();
         let face = builder::try_attach_plane(&[mt::Wire::from(edges)]).expect("a plane");
         builder::tsweep(&face, mt::Vector3::new(0.0, 0.0, 2.0))

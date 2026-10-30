@@ -9,7 +9,7 @@
 //! a cut whose walls take nothing from the body (all of it within the cut's depth lies over the
 //! face) is the body cut by a slab beyond the depth plane, which meets it only across that plane.
 
-use solidcraft_geom::{Mesh, Plane, Region2, Vec2, Vec3};
+use polycore_geom::{Mesh, Plane, Region2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, v3};

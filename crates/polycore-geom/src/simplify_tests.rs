@@ -131,7 +131,7 @@ fn hostile_meshes_never_panic() {
     assert!(made.iter().all(|l| l.triangles.iter().flatten().all(|i| (*i as usize) < l.positions.len())));
 }
 
-/// Timing, not a check (`SOLIDCRAFT_BENCH_STL=part.stl cargo test --release -p solidcraft-geom
+/// Timing, not a check (`SOLIDCRAFT_BENCH_STL=part.stl cargo test --release -p polycore-geom
 /// --lib simplify_timing -- --ignored --nocapture`): the levels of a binary STL.
 #[test]
 #[ignore]

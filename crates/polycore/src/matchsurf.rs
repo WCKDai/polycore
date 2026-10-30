@@ -17,7 +17,7 @@
 //! beyond that order, and no surface can be told to carry a condition the target has not got.
 
 use mt::{BoundedCurve, ParametricCurve, ParametricSurface, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};

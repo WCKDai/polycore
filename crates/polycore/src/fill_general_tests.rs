@@ -4,7 +4,7 @@
 //! surface itself, never against the mesher alone.
 
 use mt::{BoundedCurve, InnerSpace, ParametricCurve, ParametricSurface, ParametricSurface3D};
-use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use super::{PATCH_ANGLE_TOL_DEG, PatchReport, PatchSpec, face_tolerance, patch_edges_report};

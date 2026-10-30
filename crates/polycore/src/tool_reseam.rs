@@ -2,7 +2,7 @@
 //! Every curved support must be a revolution about the same axis and every planar support
 //! perpendicular to it. Turning this closed solid about that axis changes only its seams.
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling::{self as mt, InnerSpace, Transform};
 
 use super::{BoolOp, boolean_via, boolean_whole, nudged, transform};
@@ -98,7 +98,7 @@ pub(super) fn cut(target: &Body, tool: &Body) -> Option<Body> {
 mod tests {
     use super::*;
     use crate::transform_matrix;
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2};
 
     fn drill(angle: f64) -> Body {
         let profile =

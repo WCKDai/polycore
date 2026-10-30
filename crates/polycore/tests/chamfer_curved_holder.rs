@@ -3,8 +3,8 @@
 //! meets the tangent junction of the bar's straight and round walls. The chamfer must trim
 //! against the round wall instead of extending that short seam outside the solid.
 
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
-use solidcraft_kernel::{Body, BoolOp, boolean, chamfer, cylinder, extrude};
+use polycore::{Body, BoolOp, boolean, chamfer, cylinder, extrude};
+use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use std::f64::consts::PI;
 
 fn holder() -> Body {
@@ -58,7 +58,7 @@ fn chamfer_the_top_lip_at_a_tangent_wall_junction() {
     assert!(made.validity().is_empty(), "{:?}", made.validity());
     assert_eq!(made.crossed_face_loops().unwrap(), 0);
     let history = made.history().expect("the chamfer retains exact face provenance");
-    assert!(history.faces.iter().any(|f| f.origins.iter().any(|o| matches!(o, solidcraft_kernel::history::FaceOrigin::Edge { operand: 0, .. }))));
+    assert!(history.faces.iter().any(|f| f.origins.iter().any(|o| matches!(o, polycore::history::FaceOrigin::Edge { operand: 0, .. }))));
     let mesh = |body: &Body| body.tessellate_with(0.0005, true).unwrap();
     let before = mesh(&body).measure().volume;
     let after = mesh(&made);
@@ -91,7 +91,7 @@ fn a_chamfer_that_uses_up_the_holder_top_is_refused() {
 
 /// A plate of side `plate` with a 50 x 10 mm stadium boss, 10 mm tall, joined on top.
 fn plate_with_stadium(plate: f64) -> Body {
-    let base = solidcraft_kernel::box_solid(Vec3::new(-plate / 2.0, -plate / 2.0, 0.0), Vec3::new(plate / 2.0, plate / 2.0, 10.0)).unwrap();
+    let base = polycore::box_solid(Vec3::new(-plate / 2.0, -plate / 2.0, 0.0), Vec3::new(plate / 2.0, plate / 2.0, 10.0)).unwrap();
     let segs = vec![
         Seg2::Line { a: Vec2::new(-20.0, -5.0), b: Vec2::new(20.0, -5.0) },
         Seg2::Arc { center: Vec2::new(20.0, 0.0), radius: 5.0, start: -PI / 2.0, sweep: PI },

@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::blend::{ChamferSide, too_large};

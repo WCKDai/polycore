@@ -10,7 +10,7 @@ use crate::{Body, BoolOp, boolean, cylinder, fillet};
 
 #[test]
 fn issue_1303_chamfer_open_rim_after_end_chamfer() {
-    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
     let rim = Region2 {
         outer: Loop2 {
             segs: vec![
@@ -286,7 +286,7 @@ fn gap(c1: Vec3, r1: f64, c2: Vec3, r2: f64, corner: Vec3, r: f64) -> Gap {
             ring.push(c + Vec3::new(t.cos(), t.sin(), 0.0) * rr);
         }
     }
-    let area = ring.iter().map(|p| solidcraft_geom::Vec2::new(p.x, p.y)).collect::<solidcraft_geom::Ring<_>>().signed_area().abs();
+    let area = ring.iter().map(|p| polycore_geom::Vec2::new(p.x, p.y)).collect::<polycore_geom::Ring<_>>().signed_area().abs();
     let (p, q) = ((t1 - f).normalized().unwrap(), (t2 - f).normalized().unwrap());
     let arc = (0..=8).map(|i| angles[2] * i as f64 / 8.0).map(|t| f + (p * ((angles[2] - t).sin()) + q * t.sin()) * (r / angles[2].sin())).collect();
     Gap { arc, angles, area }
@@ -665,7 +665,7 @@ fn chamfer_a_chain_of_a_line_and_an_arc_into_a_slanted_end() {
     // corners, 2 − w high at w in from the edge): 2 a millimetre along the line, and along the
     // arc out to the right face, at each distance ρ from its axis, the height times the arc of
     // radius ρ inside x ≤ 40.
-    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
     let start = -std::f64::consts::FRAC_PI_2;
     let end = (-21.0f64).atan2(20.0);
     let segs = vec![
@@ -731,8 +731,8 @@ fn round_along_long_lines_and_small_turns_measures_its_volume() {
 }
 
 /// An outline of lines and quarter arcs, front (x > 0) corners `rf`, back corners `rb`.
-fn rounded_outline(x0: f64, x1: f64, y0: f64, y1: f64, rf: f64, rb: f64) -> solidcraft_geom::Region2 {
-    use solidcraft_geom::{Loop2, Region2, Seg2, Vec2};
+fn rounded_outline(x0: f64, x1: f64, y0: f64, y1: f64, rf: f64, rb: f64) -> polycore_geom::Region2 {
+    use polycore_geom::{Loop2, Region2, Seg2, Vec2};
     use std::f64::consts::{FRAC_PI_2, PI};
     let line = |a: (f64, f64), b: (f64, f64)| Seg2::Line { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1) };
     let arc = |c: (f64, f64), r: f64, start: f64| Seg2::Arc { center: Vec2::new(c.0, c.1), radius: r, start, sweep: FRAC_PI_2 };
@@ -752,7 +752,7 @@ fn rounded_outline(x0: f64, x1: f64, y0: f64, y1: f64, rf: f64, rb: f64) -> soli
 /// The four outlines TinyRex's torso is lofted through (#184): a flat belly at z 210 out to the
 /// full outline at z 288, the front corners rounder than the back.
 fn torso() -> Body {
-    use solidcraft_geom::Plane;
+    use polycore_geom::Plane;
     let sections = [
         (210.0, rounded_outline(-36.0, 32.0, -39.0, 39.0, 9.0, 9.0)),
         (224.0, rounded_outline(-52.0, 52.0, -45.0, 45.0, 24.0, 20.0)),
@@ -855,7 +855,7 @@ fn rolling_ball_round_on_a_sloped_loft_matches_its_volume() {
     // R4 on the bottom chain of a two-section loft whose walls all slope 5 in 30 (planes on the
     // lines, cones on the arcs): its section is the same all round, so Steiner's formula gives the
     // volume (tests/kernel-cases/fillets/126-fillet-loft-bottom-chain-constant-slope).
-    use solidcraft_geom::Plane;
+    use polycore_geom::Plane;
     use std::f64::consts::PI;
     let pad = crate::loft_regions(&[
         (Plane::XY, rounded_outline(-30.0, 30.0, -20.0, 20.0, 10.0, 10.0)),
@@ -892,7 +892,7 @@ fn rolling_ball_round_on_a_sloped_loft_matches_its_volume() {
 fn smooth_neighbours_are_judged_at_the_seam_through_the_vertex() {
     // Two walls sharing two seams: a 270 degree arc and a Bezier leaving its end tangentially and
     // coming back into its start at a corner. Smooth along the first seam, sharp along the other.
-    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
     let outline = Region2 {
         outer: Loop2 {
             segs: vec![
@@ -912,7 +912,7 @@ fn smooth_neighbours_are_judged_at_the_seam_through_the_vertex() {
 
 /// A mesh's sides used by one triangle (open) and by more than two (over-shared), with corners
 /// closer than `weld` as one.
-pub(crate) fn open_and_over_shared(mesh: &solidcraft_geom::Mesh, weld: f64) -> (usize, usize) {
+pub(crate) fn open_and_over_shared(mesh: &polycore_geom::Mesh, weld: f64) -> (usize, usize) {
     let key = |p: Vec3| [(p.x / weld).round() as i64, (p.y / weld).round() as i64, (p.z / weld).round() as i64];
     let mut uses: std::collections::HashMap<([i64; 3], [i64; 3]), usize> = std::collections::HashMap::new();
     for t in &mesh.triangles {
@@ -974,7 +974,7 @@ fn a_round_whose_floor_arcs_equal_its_setback_turns_on_the_spot() {
     // R = 2 + 2 sqrt 2: the ball touches the floor exactly 2 in from the edge, so at each corner
     // its centre stays on the arc's axis and the round there is a patch of its sphere.
     // tests/kernel-cases/fillets/126-fillet-flared-loft-corner-arcs-equal-to-setback
-    use solidcraft_geom::Plane;
+    use polycore_geom::Plane;
     use std::f64::consts::PI;
     let tray = crate::loft_regions(&[
         (Plane::XY, rounded_outline(-20.0, 20.0, -15.0, 15.0, 2.0, 2.0)),
@@ -1012,7 +1012,7 @@ fn a_corner_arc_whose_setback_varies_is_no_sphere() {
     // setback runs from 0.414 r to 0.618 r. With r = 1 + sqrt 5 it reaches the arc's radius only
     // at one end: the ball doesn't turn on the spot, and the corner must not be a patch of one
     // sphere. A round made anyway must keep its radius; a refusal is clean.
-    use solidcraft_geom::Plane;
+    use polycore_geom::Plane;
     let tray = crate::loft_regions(&[
         (Plane::XY, rounded_outline(-20.0, 20.0, -15.0, 15.0, 2.0, 2.0)),
         (Plane::XY.offset(20.0), rounded_outline(-40.0, 40.0, -25.0, 25.0, 22.0, 22.0)),
@@ -1037,7 +1037,7 @@ fn a_corner_arc_short_of_a_sharper_walls_setback_is_no_sphere() {
     // wall's sphere corner would need, but the contacts would run past the arcs' centres: the
     // loop blend must not take them for sphere corners, and neither it nor the rolling ball may
     // take the arcs as large enough (their setbacks compared uncapped).
-    use solidcraft_geom::Plane;
+    use polycore_geom::Plane;
     let block = crate::loft_regions(&[
         (Plane::XY, rounded_outline(-20.0, 20.0, -15.0, 15.0, 2.0, 2.0)),
         (Plane::XY.offset(10.0), rounded_outline(-12.5, 12.5, -7.5, 7.5, 0.5, 0.5)),
@@ -1065,7 +1065,7 @@ fn a_fillet_beside_walls_leaning_in_is_right_or_refused() {
     // rolling ball refuse R2 and R 4/3 as too large; the corner blend after them took the floor's
     // arc of the blend's radius for an earlier round to end in, and built a round 1.8 mm off its
     // radius. Whatever `fillet` gives must be right, else a refusal as too large.
-    use solidcraft_geom::Plane;
+    use polycore_geom::Plane;
     let block = crate::loft_regions(&[
         (Plane::XY, rounded_outline(-20.0, 20.0, -15.0, 15.0, 2.0, 2.0)),
         (Plane::XY.offset(10.0), rounded_outline(-12.5, 12.5, -7.5, 7.5, 0.5, 0.5)),
@@ -1091,7 +1091,7 @@ fn a_fillet_whose_setback_varies_along_a_floor_arc_is_right_or_refused() {
     // is about the arc's 2 at its middle only. The corner blend must not end the round in the arc
     // there as if the ball turned on the spot: whatever `fillet` gives must be right, else a
     // refusal as too large.
-    use solidcraft_geom::Plane;
+    use polycore_geom::Plane;
     let tray = crate::loft_regions(&[
         (Plane::XY, rounded_outline(-20.0, 20.0, -15.0, 15.0, 2.0, 2.0)),
         (Plane::XY.offset(20.0), rounded_outline(-40.0, 40.0, -25.0, 25.0, 22.0, 22.0)),

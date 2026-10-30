@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::{Aabb3, Vec3};
+use polycore_geom::{Aabb3, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
@@ -2523,15 +2523,15 @@ fn chamfer_tool_curved(cur: &Body, pick: Vec3, distance: f64) -> Result<Cutter> 
         if [-1.0, 1.0].into_iter().any(|side| mesh.contains(center + d * (side * (half + extension * 0.5)))) {
             return Err(unsupported("chamfers ending at a concave corner"));
         }
-        let plane = solidcraft_geom::Plane::from_normal(mid - d * (p0.dist(p1) * 0.5 + extension), d).ok_or_else(|| unsupported("chamfer plane"))?;
+        let plane = polycore_geom::Plane::from_normal(mid - d * (p0.dist(p1) * 0.5 + extension), d).ok_or_else(|| unsupported("chamfer plane"))?;
         let points = [a, b, mid + outward * reach].map(|q| plane.to_local(q));
-        let mut profile = solidcraft_geom::Loop2::polygon(&points);
+        let mut profile = polycore_geom::Loop2::polygon(&points);
         let mut segment = 0;
         if profile.signed_area() < 0.0 {
             profile = profile.reversed();
             segment = profile.segs.len().saturating_sub(1);
         }
-        let region = solidcraft_geom::Region2 { outer: profile, holes: vec![] };
+        let region = polycore_geom::Region2 { outer: profile, holes: vec![] };
         let body =
             crate::build::extrude(&plane, &[region], 0.0, p0.dist(p1) + 2.0 * extension)?.pop().ok_or_else(|| unsupported("chamfer cutter"))?;
         let face = body.history().and_then(|h| h.faces.iter().position(|f| f.origins == [FaceOrigin::Profile { segment }]));
@@ -2572,7 +2572,7 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
     let ext = (s * 2.0).max(size * 0.01) * (1.0 + 0.093 * (k % 5) as f64);
     // Cross-section at p0 - d*ext, in a plane with normal d.
     let base = f.p0 - f.d * ext;
-    let plane = solidcraft_geom::Plane::from_normal(base, f.d).ok_or_else(|| KernelError::Failed("chamfer plane".into()))?;
+    let plane = polycore_geom::Plane::from_normal(base, f.d).ok_or_else(|| KernelError::Failed("chamfer plane".into()))?;
     let a = base + f.t1 * s1;
     let b = base + f.t2 * s2;
     let ab = (a - b).normalized().ok_or_else(|| KernelError::Failed("chamfer".into()))?;
@@ -2599,15 +2599,15 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
     if [0.0, ext + len * 0.5, len + 2.0 * ext].iter().any(|t| cur.contains(e_far + f.d * *t)) {
         return Err(unsupported("the chamfer cutter reaches other material"));
     }
-    let loc: Vec<solidcraft_geom::Vec2> = [a_ext, b_ext, e_far].iter().map(|q| plane.to_local(*q)).collect();
-    let mut lp = solidcraft_geom::Loop2::polygon(&loc);
+    let loc: Vec<polycore_geom::Vec2> = [a_ext, b_ext, e_far].iter().map(|q| plane.to_local(*q)).collect();
+    let mut lp = polycore_geom::Loop2::polygon(&loc);
     // The chamfer plane is swept from the segment a → b: first, or last once turned round.
     let mut chamfer_segment = 0;
     if lp.signed_area() < 0.0 {
         lp = lp.reversed();
         chamfer_segment = lp.segs.len().saturating_sub(1);
     }
-    let region = solidcraft_geom::Region2 { outer: lp, holes: vec![] };
+    let region = polycore_geom::Region2 { outer: lp, holes: vec![] };
     let body = crate::build::extrude(&plane, &[region], 0.0, len + 2.0 * ext)?.pop().ok_or_else(|| KernelError::Failed("chamfer tool".into()))?;
     let face = body.history().and_then(|h| h.faces.iter().position(|f| f.origins == [FaceOrigin::Profile { segment: chamfer_segment }]));
     Ok(Cutter { body, face, edge, extension_inside })
@@ -2616,7 +2616,7 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2};
 
     #[test]
     fn g2_fillet_has_zero_curvature_at_both_planar_rails() {

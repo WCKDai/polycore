@@ -2,8 +2,8 @@
 //! seeded random generator, and the boolean volume identity on random pairs of primitives
 //! placed on a coarse grid, so coincident faces and tangencies come up often.
 
+use polycore_geom::Vec3;
 use serde::Serialize;
-use solidcraft_geom::Vec3;
 
 use crate::{Body, BoolOp, boolean, box_solid, cylinder, measure, sphere, torus};
 

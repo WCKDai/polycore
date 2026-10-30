@@ -3,7 +3,7 @@
 //! Trim: two surfaces cut by each other, each keeping its picked side, extended to meet first
 //! when one stops short of the other.
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::Body;
@@ -214,7 +214,7 @@ mod tests {
     use super::*;
     use crate::history::{Change, FaceOrigin};
     use crate::{extrude_sheet, measure, patch_region, stitch};
-    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
     use std::f64::consts::PI;
 
     fn rel(a: f64, b: f64) -> f64 {

@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::{Aabb3, Mesh, Vec3};
+use polycore_geom::{Aabb3, Mesh, Vec3};
 use truck_modeling as mt;
 
 use crate::body::Body;

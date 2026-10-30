@@ -1,7 +1,7 @@
 //! #324: a round on a block's top edge that would overlap a through hole is refused, and the
 //! largest radius the refusal offers fits.
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 
 use crate::{Body, BoolOp, build::box_solid, build::cylinder, ops::boolean};
 

@@ -7,8 +7,8 @@
 //! its holes first.
 
 use mt::{BoundedCurve, Cut, InnerSpace, Invertible, MetricSpace, ParametricCurve, ParametricSurface, SearchNearestParameter, Transformed};
-use solidcraft_geom::tess::EvalSurface;
-use solidcraft_geom::{Ring, Vec3};
+use polycore_geom::tess::EvalSurface;
+use polycore_geom::{Ring, Vec3};
 use truck_modeling as mt;
 
 use crate::body::from_p3;

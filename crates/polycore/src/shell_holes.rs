@@ -13,7 +13,7 @@
 use std::collections::{HashMap, HashSet};
 
 use mt::{BoundedCurve, ParametricCurve};
-use solidcraft_geom::{Aabb3, Vec3};
+use polycore_geom::{Aabb3, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, Solid, from_p3};

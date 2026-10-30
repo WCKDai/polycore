@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use solidcraft_geom::{Mesh, Vec3};
+use polycore_geom::{Mesh, Vec3};
 
 use crate::body::Body;
 use crate::{KernelError, Result};
@@ -44,7 +44,7 @@ impl TriMesh {
     /// The diagonal of the box around the vertices: a mesh body's size ([`Body::size`]),
     /// measured once when the body is made. 0 when it has none.
     pub(crate) fn span(&self) -> f64 {
-        let mut b = solidcraft_geom::Aabb3::EMPTY;
+        let mut b = polycore_geom::Aabb3::EMPTY;
         for p in &self.positions {
             b.add(*p);
         }

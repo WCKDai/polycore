@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_meshalgo::prelude::PolylineCurve;
 use truck_meshalgo::tessellation::{Deflection, TrySubs, bounded_polyline};
 use truck_modeling::{BoundedCurve, Curve, EuclideanSpace, MetricSpace, ParameterDivision1D, ParameterRange, ParametricCurve, Point3, Vector3};

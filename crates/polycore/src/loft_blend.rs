@@ -40,8 +40,8 @@
 //! to 3 fuller, down to −0.9 flatter), exactly as a bridge's crown does. It shapes the middle of
 //! each end span and leaves every joint's conditions alone.
 
-use solidcraft_geom::Vec3;
-use solidcraft_geom::bspline::{CurveN, HPoint, MAX_SPLINE_DEGREE, NurbsSurface};
+use polycore_geom::Vec3;
+use polycore_geom::bspline::{CurveN, HPoint, MAX_SPLINE_DEGREE, NurbsSurface};
 use truck_modeling as mt;
 use truck_modeling::{ParametricSurface3D, SearchNearestParameter};
 

@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_meshalgo::prelude::*;
 use truck_modeling as mt;
 
@@ -16,7 +16,7 @@ use crate::{BoolOp, build::box_solid, build::sphere, ops::boolean};
 
 /// Triangle sides in the mesh with no triangle on the other side of them, with the points
 /// within a thousandth of a millimetre taken as one.
-fn open_sides(mesh: &solidcraft_geom::Mesh) -> usize {
+fn open_sides(mesh: &polycore_geom::Mesh) -> usize {
     let key = |i: u32| {
         let p = mesh.positions[i as usize];
         [p.x, p.y, p.z].map(|c| (c * 1e3).round() as i64)

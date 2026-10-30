@@ -1,5 +1,5 @@
+use polycore_geom::{Aabb3, Mesh, Vec3};
 use serde::Serialize;
-use solidcraft_geom::{Aabb3, Mesh, Vec3};
 
 use crate::Result;
 use crate::body::Body;
@@ -279,7 +279,7 @@ mod tests {
     // A body's measured volume does not depend on where it sits: the same revolved ring of cones
     // and cylinders, moved far from the origin, measures what it measures at the origin.
     use crate::{revolve, transform};
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2};
     use std::f64::consts::{PI, TAU};
 
     /// Ring cross-section in (radius, height): cones top and bottom, cylinders inside and out.

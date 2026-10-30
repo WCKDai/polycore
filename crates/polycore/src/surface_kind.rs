@@ -1,7 +1,7 @@
 //! What surface a face lies on (plane, cylinder, cone, sphere, torus), for construction
 //! geometry: axes through round faces, centres of spheres and tori.
 
-use solidcraft_geom::{UnitVec3, Vec3};
+use polycore_geom::{UnitVec3, Vec3};
 
 use truck_modeling as mt;
 

@@ -24,7 +24,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::{Aabb3, Ring, UnitVec3, Vec3};
+use polycore_geom::{Aabb3, Ring, UnitVec3, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::shell_groups::boxes_separate;
@@ -553,7 +553,7 @@ pub(crate) fn trim_exact(b: &Body, n: Vec3, d: f64) -> Result<Body> {
         b.clone()
     } else {
         let u = n.any_perp();
-        let plane = solidcraft_geom::Plane::new(n * d, u, n.cross(u)).ok_or_else(|| fail("the plane"))?;
+        let plane = polycore_geom::Plane::new(n * d, u, n.cross(u)).ok_or_else(|| fail("the plane"))?;
         crate::splitface::split_faces(b, &curved, &crate::SplitTool::Plane(plane))?
     };
     let cut = crate::splitface::split_edges_at(&divided, &plane_crossings(&divided, n, d, tol))?;
@@ -722,14 +722,14 @@ fn slab_beyond(n: Vec3, d: f64, depth: f64, extent: f64) -> Result<Body> {
     let u = n.any_perp();
     let w = n.cross(u);
     let o = n * d;
-    let pl = solidcraft_geom::Plane::new(o, u, w).ok_or_else(|| KernelError::Failed("slab plane".into()))?;
-    let sq = solidcraft_geom::Loop2::polygon(&[
-        solidcraft_geom::Vec2::new(-extent, -extent),
-        solidcraft_geom::Vec2::new(extent, -extent),
-        solidcraft_geom::Vec2::new(extent, extent),
-        solidcraft_geom::Vec2::new(-extent, extent),
+    let pl = polycore_geom::Plane::new(o, u, w).ok_or_else(|| KernelError::Failed("slab plane".into()))?;
+    let sq = polycore_geom::Loop2::polygon(&[
+        polycore_geom::Vec2::new(-extent, -extent),
+        polycore_geom::Vec2::new(extent, -extent),
+        polycore_geom::Vec2::new(extent, extent),
+        polycore_geom::Vec2::new(-extent, extent),
     ]);
-    let r = solidcraft_geom::Region2 { outer: sq, holes: vec![] };
+    let r = polycore_geom::Region2 { outer: sq, holes: vec![] };
     crate::extrude(&pl, &[r], 0.0, depth)?.pop().ok_or_else(|| KernelError::Failed("slab".into()))
 }
 
@@ -1007,7 +1007,7 @@ pub(crate) fn faces_touch(a: &Body, b: &Body) -> bool {
 /// step beside the underside of an overhang) are not this. `mesh` is `r`'s mesh; what counts is
 /// an area of the faces with nothing behind it, so that the few triangles along an edge where the
 /// mesh of a curved neighbour cuts the corner don't.
-pub(crate) fn has_skin(r: &Body, mesh: &solidcraft_geom::Mesh) -> bool {
+pub(crate) fn has_skin(r: &Body, mesh: &polycore_geom::Mesh) -> bool {
     let size = r.size();
     let tol = (size * 1e-7).max(1e-9) * 10.0;
     let p = planes(r);
@@ -1261,7 +1261,7 @@ fn glue_impl(a: &Body, b: &Body, all_caps: bool) -> Option<Result<Body>> {
     let mut tool_sizes = HashMap::new();
     if all_caps {
         for shell in b.solid.boundaries() {
-            let mut bounds = solidcraft_geom::Aabb3::EMPTY;
+            let mut bounds = polycore_geom::Aabb3::EMPTY;
             for vertex in shell.vertex_iter() {
                 bounds.add(from_p3(vertex.point()));
             }
@@ -1467,10 +1467,9 @@ fn inset_into(outer: &Body, inner: &Body, outer_operand: usize) -> Option<Result
             }
             let u = x.n.any_perp();
             let w = x.n.cross(u);
-            let flat = |pts: &[Vec3]| {
-                solidcraft_geom::Loop2::polygon(&pts.iter().map(|p| solidcraft_geom::Vec2::new(p.dot(u), p.dot(w))).collect::<Vec<_>>())
-            };
-            let flat_point = |p: Vec3| solidcraft_geom::Vec2::new(p.dot(u), p.dot(w));
+            let flat =
+                |pts: &[Vec3]| polycore_geom::Loop2::polygon(&pts.iter().map(|p| polycore_geom::Vec2::new(p.dot(u), p.dot(w))).collect::<Vec<_>>());
+            let flat_point = |p: Vec3| polycore_geom::Vec2::new(p.dot(u), p.dot(w));
             let outer_polys: Vec<_> = outer_loops.iter().map(|l| flat(l)).collect();
             let inner_poly = flat(&inner_pts);
             let in_outer = |p: Vec3| outer_polys.iter().filter(|l| l.contains(flat_point(p))).count() % 2 == 1;
@@ -1723,7 +1722,7 @@ fn grown_boss_union(
     a: &Body,
     b: &Body,
     boss: &Boss,
-    target_inside: &solidcraft_geom::InsideIndex,
+    target_inside: &polycore_geom::InsideIndex,
     size: f64,
     accept: &dyn Fn(&Body) -> bool,
 ) -> Option<Body> {

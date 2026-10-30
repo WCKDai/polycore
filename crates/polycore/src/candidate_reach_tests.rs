@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling::{self as mt, ParametricSurface, builder};
 
 use super::{MARGIN, Reach};

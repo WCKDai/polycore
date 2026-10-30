@@ -1,5 +1,5 @@
 //! Display-only tangent joins. Unknown geometry retains its existing presentation.
-use solidcraft_geom::{Mesh, Vec3};
+use polycore_geom::{Mesh, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3};
@@ -225,7 +225,7 @@ fn classify(body: &Body, mesh: &Mesh, mut work: usize) -> (Vec<bool>, Vec<bool>)
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
 
     fn circle(radius: f64, count: usize) -> Loop2 {
         let step = std::f64::consts::TAU / count as f64;

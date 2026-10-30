@@ -37,12 +37,12 @@ fn run() -> Result<(), String> {
     let rest: Vec<&str> = args.get(1..).unwrap_or_default().iter().map(String::as_str).collect();
     match command {
         "ci" => ci(),
-        "fmt" => run_cargo(&["fmt", "-p", "solidcraft-geom", "-p", "solidcraft-kernel", "-p", "xtask", "--", "--check"]),
+        "fmt" => run_cargo(&["fmt", "-p", "polycore-geom", "-p", "polycore", "-p", "xtask", "--", "--check"]),
         "check" => run_cargo(&["check", "--workspace", "--all-targets", "--locked"]),
         "build" => run_cargo(&["build", "--workspace", "--profile", "ci", "--locked"]),
         "clippy" => run_cargo(&["clippy", "--workspace", "--all-targets", "--profile", "ci", "--locked", "--", "-D", "warnings"]),
         "test" => test(),
-        "property-test" => run_cargo(&["test", "-p", "solidcraft-kernel", "--test", "boolean_props", "--profile", "ci", "--locked"]),
+        "property-test" => run_cargo(&["test", "-p", "polycore", "--test", "boolean_props", "--profile", "ci", "--locked"]),
         "wasm" => wasm(),
         "verify-deps" => verify_deps(),
         "task-check" => task::check(rest.first().copied().ok_or("task-check needs a JSON task path")?),
@@ -54,7 +54,7 @@ fn run() -> Result<(), String> {
 }
 
 fn ci() -> Result<(), String> {
-    run_cargo(&["fmt", "-p", "solidcraft-geom", "-p", "solidcraft-kernel", "-p", "xtask", "--", "--check"])?;
+    run_cargo(&["fmt", "-p", "polycore-geom", "-p", "polycore", "-p", "xtask", "--", "--check"])?;
     run_cargo(&["clippy", "--workspace", "--all-targets", "--profile", "ci", "--locked", "--", "-D", "warnings"])?;
     test()?;
     wasm()?;
@@ -67,7 +67,7 @@ fn test() -> Result<(), String> {
 }
 
 fn wasm() -> Result<(), String> {
-    run_cargo(&["check", "--target", "wasm32-unknown-unknown", "--profile", "ci", "--locked", "-p", "solidcraft-geom", "-p", "solidcraft-kernel"])
+    run_cargo(&["check", "--target", "wasm32-unknown-unknown", "--profile", "ci", "--locked", "-p", "polycore-geom", "-p", "polycore"])
 }
 
 fn verify_deps() -> Result<(), String> {

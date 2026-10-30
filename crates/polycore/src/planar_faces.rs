@@ -6,7 +6,7 @@
 //! for faces on true planes, so it never sees them: two such walls that share a top plane were
 //! left to the general intersection, which fails on faces that coincide.
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{Body, Solid, from_p3, p3};

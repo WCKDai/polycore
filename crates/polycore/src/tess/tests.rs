@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use solidcraft_geom::{Mesh, Vec3};
+use polycore_geom::{Mesh, Vec3};
 
 use super::*;
 use crate::{Body, BoolOp};
@@ -153,7 +153,7 @@ fn faces_and_edges_keep_the_body_order() {
 }
 
 /// Side-by-side wireframes, reference mesher (left) and plan (right):
-/// `SOLIDCRAFT_TESS_SVG=<dir> cargo test -p solidcraft-kernel render_wireframes -- --ignored`.
+/// `SOLIDCRAFT_TESS_SVG=<dir> cargo test -p polycore render_wireframes -- --ignored`.
 #[test]
 #[ignore]
 fn render_wireframes() {
@@ -250,7 +250,7 @@ fn draw(m: &Mesh, x0: f64) -> String {
 /// such a triangle carried a boundary side of the cone.
 #[test]
 fn a_drill_point_apex_leaves_no_zero_area_triangles() {
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2};
     // (box size, hole position, radius, depth)
     let cases =
         [(Vec3::new(40.0, 30.0, 15.0), Vec3::new(20.0, 15.0, 15.0), 3.4, 8.0), (Vec3::new(60.0, 40.0, 15.0), Vec3::new(50.0, 20.0, 15.0), 3.0, 10.0)];
@@ -302,7 +302,7 @@ fn trace_seeds_grade_from_one_end_to_the_other() {
 /// the join is unwrapped past the range's end and must still land on the surface.
 #[test]
 fn a_closed_spline_surface_is_periodic_and_evaluates_outside_its_range() {
-    use solidcraft_geom::tess::EvalSurface;
+    use polycore_geom::tess::EvalSurface;
     // A five-sided tube: the control net's last column repeats its first.
     let corner = |k: usize| {
         let a = std::f64::consts::TAU * (k % 5) as f64 / 5.0;
@@ -390,7 +390,7 @@ fn zero_width_slits_are_dropped_from_a_boundary() {
 /// it did not have, and the whole body lost its display plan.
 #[test]
 fn a_pointed_end_read_back_from_step_is_planned() {
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2};
     let (r, tip, len) = (3.0, 4.0, 20.0);
     let Some(axis) = Plane::new(Vec3::ZERO, Vec3::X, Vec3::Z) else { panic!("plane") };
     let pts = [Vec2::new(0.0, 0.0), Vec2::new(r, tip), Vec2::new(r, len), Vec2::new(0.0, len)];

@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use mt::{BoundedCurve, ParametricCurve, SearchNearestParameter};
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};

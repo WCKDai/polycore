@@ -43,8 +43,8 @@
 //! control point that does not change the geometry at all — is reported as an error and the
 //! geometry is left alone.
 
-use solidcraft_geom::bspline::{HPoint, MAX_SPLINE_DEGREE, NurbsSurface, Side, SplineError, check_knots, local_basis};
-use solidcraft_geom::{Grid, Vec3};
+use polycore_geom::bspline::{HPoint, MAX_SPLINE_DEGREE, NurbsSurface, Side, SplineError, check_knots, local_basis};
+use polycore_geom::{Grid, Vec3};
 use truck_modeling as mt;
 
 use crate::body::Body;

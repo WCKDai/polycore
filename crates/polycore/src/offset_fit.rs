@@ -12,7 +12,7 @@
 //! moved edge has passed (the side of a loft moved in under its cap).
 
 use mt::ParametricSurface;
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::from_p3;

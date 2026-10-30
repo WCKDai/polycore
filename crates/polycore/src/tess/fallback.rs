@@ -12,8 +12,8 @@
 //! left to the body's reference mesh. The triangles turn the way the surface does, and each node
 //! keeps its parameters on the surface for its normal.
 
-use solidcraft_geom::tess::{EvalSurface, FacePlan};
-use solidcraft_geom::{Plane, Vec3};
+use polycore_geom::tess::{EvalSurface, FacePlan};
+use polycore_geom::{Plane, Vec3};
 
 use super::{cdt, uv};
 

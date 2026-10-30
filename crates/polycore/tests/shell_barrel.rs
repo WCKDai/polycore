@@ -2,9 +2,9 @@
 
 use std::f64::consts::PI;
 
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
-use solidcraft_kernel::history::FaceOrigin;
-use solidcraft_kernel::*;
+use polycore::history::FaceOrigin;
+use polycore::*;
+use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 
 const RADIUS: f64 = 24.0;
 const CENTRE: f64 = -10.0;

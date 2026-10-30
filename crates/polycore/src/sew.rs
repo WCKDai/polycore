@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mt::builder;
-use solidcraft_geom::{Ring, Vec3};
+use polycore_geom::{Ring, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, Solid, p3, v3};

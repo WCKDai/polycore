@@ -1,7 +1,7 @@
 //! #1510: a body split by a plane that a face of the body lies in: the parts meet in the plane
 //! and together are the body.
 
-use solidcraft_geom::{Plane, Vec3};
+use polycore_geom::{Plane, Vec3};
 
 use crate::{Body, BoolOp, build::box_solid, build::cylinder, ops::boolean, ops::split_by_plane};
 

@@ -3,7 +3,7 @@
 //! directly from the body's faces (the band's walls continue the walls below, which a boolean
 //! union can't join: their faces would coincide).
 
-use solidcraft_geom::{Loop2, Plane, Region2, Ring, Seg2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Ring, Seg2, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};

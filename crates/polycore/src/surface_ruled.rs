@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use mt::{BoundedCurve, ParametricCurve, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3, v3};
@@ -629,7 +629,7 @@ mod tests {
     use std::collections::HashMap;
     use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2};
 
     use super::*;
     use crate::history::FaceOrigin;

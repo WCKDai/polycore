@@ -8,7 +8,7 @@
 
 use std::borrow::Cow;
 
-use solidcraft_geom::{Aabb2, Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use polycore_geom::{Aabb2, Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3};

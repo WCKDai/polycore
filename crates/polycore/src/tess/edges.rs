@@ -1,11 +1,11 @@
 //! Edge nodes: every edge of a body sampled once, so the faces on either side share the very
 //! same boundary points (watertight by construction).
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_meshalgo::prelude::*;
 use truck_modeling as mt;
 
-use solidcraft_geom::tess::EvalSurface;
+use polycore_geom::tess::EvalSurface;
 
 use super::size::Rules;
 use crate::body::from_p3;

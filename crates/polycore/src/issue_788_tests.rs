@@ -3,7 +3,7 @@
 //! middle of a face.
 use crate::tangent_cylinders;
 use crate::*;
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use std::f64::consts::PI;
 
 const SIDE: f64 = 45.0;

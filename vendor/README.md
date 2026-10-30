@@ -229,12 +229,12 @@ Changes:
   both boxes for every pair), and runs the exact triangle tests on the rayon pool, in order
   (sequential on wasm). Same collisions in the same order. The old search is kept as
   `analyzers::collision_test_hooks`, behind a `test-hooks` feature that only
-  `solidcraft-kernel`'s tests turn on, and `crates/kernel/tests/mesh_collision_equivalence.rs`
+  `polycore`'s tests turn on, and `crates/kernel/tests/mesh_collision_equivalence.rs`
   compares the two.
 - `tessellation/triangulation.rs`: the inside test of a face's boundary also skips runs of 32
   segments whose box, grown by the tolerance, the test's ray cannot meet. Same answers. The
   old test is kept as `tessellation::include_test_hooks`, behind a `test-hooks` feature that
-  only `solidcraft-kernel`'s tests turn on, and `crates/kernel/tests/tess_include_equivalence.rs`
+  only `polycore`'s tests turn on, and `crates/kernel/tests/tess_include_equivalence.rs`
   compares the two.
 - `tessellation/triangulation.rs`: the constrained Delaunay triangulation of a trimmed face
   works in (u, v) scaled by the surface's mean speed along each (a power of two, so exact both

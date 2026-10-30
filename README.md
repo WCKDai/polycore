@@ -15,9 +15,10 @@ Phase 0 is underway. [RFC 0001](docs/rfcs/0001-polycore.md) is the extraction an
 contract; [RFC 0002](docs/rfcs/0002-ai-native-engineering-platform.md) defines the expanded
 AI-native CAD, simulation, robotics and USD architecture. This workspace contains Polykrom's kernel and geometry, extracted
 with their Git history from `crates/kernel` and `crates/geom` into `crates/polycore` and
-`crates/solidcraft-geom`, plus the vendored Truck closure, tests and regression corpus. The
-source/consumer revision is in `polykrom.rev`. The public package names remain `solidcraft-kernel`
-and `solidcraft-geom` until Polykrom's coordinated rename stage.
+`crates/polycore-geom`, plus the vendored Truck closure, tests and regression corpus. The
+source/consumer revision is in `polykrom.rev`. The public packages are `polycore` and
+`polycore-geom`; before Polykrom's second rename stage (Polykrom#304) they were `solidcraft-kernel`
+and `solidcraft-geom`.
 
 The repository also holds the [bake-off and gate harness](bench/README.md) and its first
 [scorecard](bench/scorecard.md): today's Polykrom kernel measured against OpenCASCADE on the

@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 use truck_modeling::{BoundedCurve, ParameterDivision1D};
 

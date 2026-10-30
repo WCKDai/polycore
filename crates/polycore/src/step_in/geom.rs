@@ -10,7 +10,7 @@
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use mt::{BoundedCurve, Cut, InnerSpace, Invertible, MetricSpace, ParametricCurve, ParametricSurface3D, SearchNearestParameter};
-use solidcraft_geom::Ring;
+use polycore_geom::Ring;
 use truck_modeling as mt;
 
 use super::Ctx;

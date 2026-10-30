@@ -1,5 +1,5 @@
 //! Boundary surfaces (Surface › Boundary): one B-spline face through curves in one or two
-//! directions (`solidcraft_geom::network`: a loft between curves, a Coons patch inside four, a
+//! directions (`polycore_geom::network`: a loft between curves, a Coons patch inside four, a
 //! Gordon surface through a network), made from sketch curves, 3D sketch curves or a body's
 //! edges. A boundary curve that is a chain of open edges of a surface may carry a continuity
 //! condition with the face beside it: G1 (tangent) or G2 (curvature).
@@ -14,9 +14,9 @@
 use std::collections::HashSet;
 
 use mt::{BoundedCurve, Cut, InnerSpace, ParametricCurve, ParametricSurface, SearchNearestParameter};
-use solidcraft_geom::bspline::{CurveN, NurbsSurface, SplineError};
-use solidcraft_geom::network::{self, CrossFace, FaceFrame, NetCurve, NetworkCurve, PointCurve, Tolerances};
-use solidcraft_geom::{Plane, Seg2, Vec3};
+use polycore_geom::bspline::{CurveN, NurbsSurface, SplineError};
+use polycore_geom::network::{self, CrossFace, FaceFrame, NetCurve, NetworkCurve, PointCurve, Tolerances};
+use polycore_geom::{Plane, Seg2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
@@ -472,7 +472,7 @@ mod tests {
     use super::*;
     use crate::patch_region;
     use mt::ParametricSurface3D;
-    use solidcraft_geom::{Loop2, Region2, Vec2};
+    use polycore_geom::{Loop2, Region2, Vec2};
 
     fn sketch(label: &str, plane: Plane, segs: Vec<Seg2>) -> BoundaryCurve<'static> {
         BoundaryCurve { label: label.into(), source: CurveSource::Sketch { plane, segs }, continuity: Continuity::G0 }

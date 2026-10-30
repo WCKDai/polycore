@@ -2,7 +2,7 @@
 //! cylinders encloses the whole target and only touches the sphere. Removing that
 //! redundant constraint gives the same cut without a tangent intersection.
 
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 
 use crate::boolean_record as recorded;
 use crate::history::Change;

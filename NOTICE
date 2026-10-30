@@ -4,7 +4,7 @@ Copyright (c) 2026 Polykrom contributors.
 Copyright (c) 2026 SolidCraft contributors.
 
 PolyCore includes Polykrom's former crates/kernel and crates/geom (now crates/polycore and
-crates/solidcraft-geom), their tests and the kernel regression corpus from Polykrom (https://github.com/WCKDai/polykrom) and its upstream SolidCraft project
+crates/polycore-geom), their tests and the kernel regression corpus from Polykrom (https://github.com/WCKDai/polykrom) and its upstream SolidCraft project
 (https://github.com/tangency-labs/solidcraft). That work is licensed MIT OR Apache-2.0 and is
 included here under the Apache License, Version 2.0 option. Its history and contributors'
 copyright are retained. The Phase 0 source revision is recorded in polykrom.rev.

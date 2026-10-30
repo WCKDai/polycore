@@ -16,7 +16,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
-use solidcraft_geom::Vec3;
+use polycore_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use super::{

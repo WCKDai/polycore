@@ -26,8 +26,8 @@
 use std::collections::HashMap;
 
 use mt::{BoundedCurve, ParametricCurve, ParametricSurface};
-use solidcraft_geom::tess::EvalSurface;
-use solidcraft_geom::{UnitVec3, Vec3};
+use polycore_geom::tess::EvalSurface;
+use polycore_geom::{UnitVec3, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, from_p3, p3};
@@ -1302,7 +1302,7 @@ mod tests {
     use super::*;
     use crate::{measure, patch_region};
     use mt::InnerSpace;
-    use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2};
+    use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
     use std::collections::HashSet;
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
@@ -1679,9 +1679,9 @@ mod tests {
                 .iter()
                 .map(|p| vec![[p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]])
                 .collect();
-        let before = solidcraft_geom::tess::EvalCurve { degree: 3, knots: knots.clone(), ctrl: ctrl.iter().map(|r| r[0]).collect() };
+        let before = polycore_geom::tess::EvalCurve { degree: 3, knots: knots.clone(), ctrl: ctrl.iter().map(|r| r[0]).collect() };
         let (k, c) = continue_span(&knots, 3, &ctrl, (-0.2, 1.25)).unwrap();
-        let after = solidcraft_geom::tess::EvalCurve { degree: 3, knots: k.clone(), ctrl: c.iter().map(|r| r[0]).collect() };
+        let after = polycore_geom::tess::EvalCurve { degree: 3, knots: k.clone(), ctrl: c.iter().map(|r| r[0]).collect() };
         assert_eq!((k.first().copied(), k.last().copied()), (Some(-0.2), Some(1.25)));
         // The same curve on the old range, and past it the old end spans' own polynomials
         // (which the evaluator also continues).

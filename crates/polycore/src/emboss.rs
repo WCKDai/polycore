@@ -5,7 +5,7 @@ use crate::numbered::NumberedRegion;
 use crate::offset::{Surf, surf_of};
 use crate::record::Operand;
 use crate::{KernelError, Result, guard};
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling::{self as mt, Transformed, builder};
 
 fn fail(s: &str) -> KernelError {
@@ -442,7 +442,7 @@ fn profile_interval_overlaps(plane: &Plane, regions: &[Region2], o: Vec3, axis: 
                         add(p)?;
                     }
                 }
-                Seg2::Bezier { n, p } if (1..=solidcraft_geom::MAX_BEZIER_DEGREE as u8).contains(&n) => {
+                Seg2::Bezier { n, p } if (1..=polycore_geom::MAX_BEZIER_DEGREE as u8).contains(&n) => {
                     for p in p.iter().take(usize::from(n) + 1) {
                         add(*p)?;
                     }

@@ -9,7 +9,7 @@
 //! the boolean is asked again; the result's history is composed back over the operands as they
 //! were given.
 
-use solidcraft_geom::{Plane, Vec3};
+use polycore_geom::{Plane, Vec3};
 
 use crate::body::{Body, from_p3};
 use crate::boolean_record as recorded;

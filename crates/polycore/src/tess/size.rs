@@ -6,8 +6,8 @@
 //! sags the tolerance; an edge takes the smaller size of its two faces, so a curved face and
 //! its flat neighbour meet at the same spacing.
 
-use solidcraft_geom::Vec3;
-use solidcraft_geom::tess::EvalSurface;
+use polycore_geom::Vec3;
+use polycore_geom::tess::EvalSurface;
 
 use super::uv::Domain;
 
@@ -179,7 +179,7 @@ fn planar(s: &EvalSurface) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solidcraft_geom::tess::EvalCurve;
+    use polycore_geom::tess::EvalCurve;
 
     const THIRTY: Option<Turn> = Some(Turn { angle: std::f64::consts::PI / 6.0, floor: 0.0 });
 
