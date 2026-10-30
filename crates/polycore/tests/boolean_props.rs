@@ -353,3 +353,29 @@ fn crossing_cylinders_identity_generic() {
     let b = Prim::Cyl { at: [4.950833754742164, 3.9165914022500696, 17.38691364694377], axis: 0, r: 9.204462879829133, h: 10.333681915323915 };
     check(identity(&a, &b));
 }
+
+/// Two parallel cylinders that touch along a line, the smaller inside the larger (axes 2.5 apart,
+/// radii 10 and 7.5). Found by `identity_on_grid` in the nightly run 41034783703. Union and Cut are
+/// right; Intersect has no exact fallback for curved faces that touch (#32), so this stays ignored
+/// until it does.
+fn inner_tangent_cylinders() -> (Prim, Prim) {
+    (Prim::Cyl { at: [12.5, 2.5, 20.0], axis: 1, r: 10.0, h: 15.0 }, Prim::Cyl { at: [15.0, 5.0, 20.0], axis: 1, r: 7.5, h: 15.0 })
+}
+
+#[test]
+#[ignore = "#32: Intersect of parallel cylinders touching along a line"]
+fn inner_tangent_cylinders_identity() {
+    let (a, b) = inner_tangent_cylinders();
+    check(identity(&a, &b));
+}
+
+/// The same case must fail cleanly: on the sliver where the cylinders touch, truck's face division
+/// refined its tolerance below `TOLERANCE` and panicked in `parameter_division` (#32).
+#[test]
+fn inner_tangent_cylinders_intersect_does_not_panic() {
+    let (a, b) = inner_tangent_cylinders();
+    if let Err(e) = boolean(&a.body(), &b.body(), BoolOp::Intersect) {
+        let e = e.to_string();
+        assert!(!e.contains("internal error") && !e.contains("tolerance must be"), "{e}");
+    }
+}

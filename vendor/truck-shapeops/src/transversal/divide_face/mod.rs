@@ -105,13 +105,13 @@ fn flat_polygon(poly: &PolylineCurve<Point2>) -> bool {
 /// single chord, the polygon has no area, and its sign, which tells a hole from a face piece,
 /// comes out at random: the hole became a face of its own, inside out, and the face it was cut
 /// in was left whole. The polygon only places the loop; the edges are not changed.
-fn finer_if_flat<C, S>(face: &Face<Point3, C, S>, wire: &Wire<Point3, C>, poly: PolylineCurve<Point2>, tol: f64) -> PolylineCurve<Point2>
+fn finer_if_flat<C, S>(face: &Face<Point3, C, S>, wire: &Wire<Point3, C>, poly: PolylineCurve<Point2>, tol: f64) -> Option<PolylineCurve<Point2>>
 where
     C: BoundedCurve<Point = Point3> + ParameterDivision1D<Point = Point3>,
     S: Clone + ParametricSurface3D + SearchParameter<D2, Point = Point3> + SearchNearestParameter<D2, Point = Point3>,
 {
     if !flat_polygon(&poly) {
-        return poly;
+        return Some(poly);
     }
     // The loop's extent: the diagonal of the box round its edges' ends and middles.
     let mut pts = Vec::new();
@@ -132,13 +132,20 @@ where
         if !(fine > 0.0 && fine.is_finite()) {
             break;
         }
+        // SolidCraft: `parameter_division` panics below `TOLERANCE`, which a loop smaller than
+        // 1e-4 asks for (a sliver where two surfaces touch along a line, polycore#32). The face
+        // can't be divided then: give up, as that panic did, without ending the caller's other
+        // tries (a panic is an internal error, which does).
+        if fine < TOLERANCE {
+            return None;
+        }
         let mut map = HashMap::default();
         let again = create_parameter_boundary(face, wire, &mut map, fine, false).or_else(|| create_parameter_boundary(face, wire, &mut map, fine, true));
         if let Some(again) = again.filter(|p| !flat_polygon(p)) {
-            return again;
+            return Some(again);
         }
     }
-    poly
+    Some(poly)
 }
 
 #[derive(Clone, Debug)]
@@ -164,7 +171,7 @@ where
             create_parameter_boundary(face, wire, &mut map, tol, false).or_else(|| create_parameter_boundary(face, wire, &mut map, tol, true)),
             "parameter boundary"
         );
-        let poly = finer_if_flat(face, wire, poly, tol);
+        let poly = crate::tr!(finer_if_flat(face, wire, poly, tol), "loop too small to divide");
         match poly.area() > 0.0 {
             true => pre_faces.push(vec![WireChunk { poly, wire }]),
             false => negative_wires.push(WireChunk { poly, wire }),

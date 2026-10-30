@@ -37,6 +37,9 @@ Changes:
   With no direction to go by, the edge goes where both of its ends are in one wire.
 - `transversal/divide_face/mod.rs`: a face piece whose wire is not simple makes the operation
   give up (`Face::try_new`) instead of panicking.
+- `transversal/divide_face/mod.rs`: a flat loop too small to divide again at `TOLERANCE` or more
+  (a sliver where two surfaces touch along a line) makes the operation give up instead of
+  panicking in `parameter_division` (polycore#32).
 - `transversal/divide_face/mod.rs`: a loop whose polygon in the face's parameters has no area
   (a small hole's rim divided at the tolerance of a much larger operand: one chord per half
   circle) is divided again, finer, before its area's sign tells a hole from a face piece. The
