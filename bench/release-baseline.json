@@ -1,0 +1,11 @@
+{
+  "schema": "eng-perf/v1",
+  "name": "PolyCore routed Truck scorecard",
+  "metrics": {
+    "weighted": {"value": 69.16595153094731, "direction": "higher", "unit": "score"},
+    "operation_success": {"value": 79.32330827067669, "direction": "higher", "unit": "%"},
+    "correctness": {"value": 36.5, "direction": "higher", "unit": "%"},
+    "history": {"value": 83.38050953443582, "direction": "higher", "unit": "%"},
+    "median_seconds": {"value": 0.368810042, "direction": "lower", "unit": "s"}
+  }
+}

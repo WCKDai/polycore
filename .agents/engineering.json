@@ -1,0 +1,64 @@
+{
+  "schema": "eng-config/v1",
+  "project": "polycore",
+  "commands": {
+    "fast": [
+      {
+        "name": "fmt",
+        "run": "cargo xtask fmt",
+        "timeout": 300
+      },
+      {
+        "name": "check",
+        "run": "cargo xtask check",
+        "timeout": 900
+      },
+      {
+        "name": "clippy",
+        "run": "cargo xtask clippy",
+        "timeout": 900
+      },
+      {
+        "name": "deps",
+        "run": "cargo xtask verify-deps",
+        "timeout": 300
+      }
+    ],
+    "full": [
+      {
+        "name": "xtask-ci",
+        "run": "cargo xtask ci",
+        "timeout": 3600
+      }
+    ]
+  },
+  "security": {
+    "required": [
+      "gitleaks",
+      "semgrep"
+    ],
+    "optional": [
+      "osv-scanner",
+      "actionlint"
+    ],
+    "gitleaks_config": ".agents/config/gitleaks.toml",
+    "semgrep_config": ".agents/config/semgrep.yml",
+    "gitleaks_history": false,
+    "timeout": 600,
+    "osv_lockfile": "Cargo.lock"
+  },
+  "budgets": {
+    "fast_seconds": 600,
+    "full_seconds": 3600
+  },
+  "parallel": {
+    "max_worktrees": 4
+  },
+  "impact": {
+    "base": "origin/main"
+  },
+  "release": {
+    "require_performance": true,
+    "max_regression_pct": 5
+  }
+}
