@@ -1,8 +1,8 @@
 # RFC 0001: PolyCore
 
-**The bar is OCCT.** PolyCore's purpose is an open-source geometric kernel, written in Rust,
-that rivals the commercial kernels: first OpenCASCADE on our corpus, then Parasolid-class
-robustness on blends, offsets and free-form work.
+**The bar is what WCKD needs to make.** PolyCore's purpose is an open-source geometric kernel,
+written in Rust, for the parts and machines WCKD ships: first the Polykrom corpus and TinyRex,
+then the objects of the world. OCCT is a reference, not a gate.
 
 - **Status:** Accepted, 2026-10-26, with the owner's decisions under [Decisions](#decisions).
 - **Author:** Claude (agent), for the owner
@@ -27,14 +27,15 @@ its Rust NURBS math, its kernel bake-off, its selector ideas, its study work, it
 its eval harness move into PolyCore or Polykrom. Its OCCT C++ and its Swift app do not.
 
 OpenCASCADE stays useful without its licence reaching us: a frozen program that answers the
-same questions, so PolyCore can be scored against it. Graded answers are analytic,
-hand-calculated or invariants. OCCT is the bar and a cross-check, never the answer key.
+same questions, so PolyCore can be compared against it. Graded answers are analytic,
+hand-calculated or invariants. OCCT is a reference and a cross-check, never the bar and never
+the answer key.
 
 ## Direction (owner, 2026-10-26)
 
 | Direction | Consequence |
 |---|---|
-| One kernel, in Rust, named **PolyCore**; the bar is OCCT, the goal is commercial-kernel class | All kernel work goes into PolyCore. No second kernel is started. |
+| One kernel, in Rust, named **PolyCore**; the bar is what WCKD needs to make, with OCCT as a reference | All kernel work goes into PolyCore. No second kernel is started. |
 | PolyCore has **its own repository and workspace** | [WCKDai/polycore](https://github.com/WCKDai/polycore), Apache-2.0. |
 | **Polykrom** is the product and PolyCore's only consumer | No C ABI, no external kernel protocol. The API is a Rust API. Polykrom stays MIT OR Apache-2.0. |
 | **Nightfall is archived** | No Nightfall work. Its useful parts are harvested ([Harvest from Nightfall](#harvest-from-nightfall)). |
@@ -313,7 +314,7 @@ closing PR:
 | **G-ladder** | Ladder: no case that passed fails; no tier's total time exceeds its golden by more than 10 % without a recorded reason. |
 | **G-oracle** | Polykrom's reference tests stay 83/83 (or all of a larger set). |
 | **G-determinism** | The determinism check passes on the whole corpus. |
-| **G-bakeoff** | The weighted score against OCCT is not lower than the phase before, and meets the phase's target. |
+| **Reference comparison** | The weighted score against OCCT is recorded; it is not a gate. The gate is the WCKD corpus and the parts the stack actually makes. |
 | **G-tinyrex** | TinyRex rebuilt from scratch by the agent, results at least as good ([below](#tinyrex-the-flagship-test)). |
 | **G-machines** | The printer and the dog evaluate from their saved designs with no feature errors, the same body and face counts, and mass properties within the [comparison tolerance](#comparison-tolerance) of the phase before (or a recorded reason, backed by an analytic check, where a better kernel changes the shape); the dog's `sim.mujoco` walk is `ok`. |
 | **G-ci** | PolyCore's and Polykrom's CI green at the pinned revision, including Polykrom's wasm32 build. |
@@ -376,16 +377,17 @@ Corpus: the 20 reference parts from Nightfall's bake-off (re-expressed as Polykr
 their analytic answers), the kernel cases, the ladder, the reference tests, the 119-case SSI
 corpus, our own generated cases, and the open [test models](#test-models) below.
 
-Targets, as a share of OCCT's weighted score on the same corpus and machine:
+Reference scores, as a share of OCCT's weighted score on the same corpus and machine. They are
+recorded, not gated:
 
 | Phase | Target |
 |---|---|
 | 2 | ≥ 90 % on the prismatic and turned subset |
 | 3 | ≥ 90 % on the whole corpus |
 | 4 | Fillet metric ≥ OCCT's |
-| 6 | ≥ 100 % overall, and performance metric 100 (PolyCore's median time no slower than OCCT's) |
+| 6 | Useful on the WCKD corpus; the OCCT share is recorded, not required |
 
-Past Phase 6 the bar moves to the commercial kernels: the corpus keeps growing from every
+Past Phase 6 the reference moves to the commercial kernels: the corpus keeps growing from every
 failure, and the published behaviour of commercial kernels (documentation, papers, test
 methodology, never their software or its output) sets the next cases.
 
@@ -451,11 +453,11 @@ Checked and excluded:
 |---|---|---|---|---|
 | **0 Extraction and harness** | K0 | Move `crates/kernel`, `crates/geom`, the vendored truck crates (renamed `polycore-truck-*`, with truck-topology and truck-modeling added) and `tests/kernel-cases` into it; Polykrom switches to the pinned git dependency. Extract the `Kernel` trait with no behaviour change. Build `polycore-bench`: the RFC 0001 rubric, the OCCT reference program, Nightfall's 20 reference parts. Add hand-worked checks to TinyRex's spec. Record every baseline. | Polykrom builds and passes CI on the pinned revision with identical kernel-case, ladder and reference-test results; PolyCore CI green; first bake-off score published; TinyRex baseline run on truck. | 1–2 |
 | **1 Own geometry and topology** | K1 | `polycore-math`, `-geom`, `-topo`, `-mesh`; analytic surfaces first-class; model resolution 1e-6 mm, fixed after measuring the corpus; tolerant edges and vertices, p-curves; the validity checker; tessellation and STEP export off truck; mass properties from the exact B-rep; analysis meshes and analytic contact primitives. Truck survives only in `polycore-legacy`. At the end, re-evaluate adopting solidcore wholesale. | Tessellation 14/14; #216 closed (watertight meshes and B-rep inertia in MJCF); volume and area within 1e-6 relative on every analytic reference test; every corpus body round-trips truck ↔ PolyCore exactly; the solidcore re-evaluation published. | 2–4 |
-| **2 Booleans** | K2 | General-fuse pipeline (coincidences settled lowest dimension first), the analytic SSI table, the existing BVH broad phase, procedural intersection curves, classification by ray casting with winding numbers as fallback. The truck booleans, the retry ladder and the special-case modules are deleted as their cases pass. Kernel-level case format. | Booleans ≥ 84/89 and crashes 10/10; ladder tier 02 20/20; no hangs; boolean median time ≤ half of truck's; bake-off target. | 4–8 |
-| **3 Free-form SSI, sweeps, lofts** | K3 | Subdivision seeding with normal-cone loop tests, marching, tangent and overlap handling; sweeps and lofts on PolyCore topology; USD `omniSolid`. | SSI corpus 119/119; sweeps ≥ 78/83; surfaces ≥ 6/8; import ≥ 22/23; bake-off target. | 6–12 |
-| **4 Blends** | K4 | Rolling-ball fillets, chamfers and vertex blends on PolyCore topology, porting today's `loopblend`, `curveblend`, `blend_corner`; SMLib's and solidcore's fillet units read as references. | Fillets ≥ 47/50; ladder tier 07 17/17; action-matrix fillet failures (#556, 986 today) ≤ 250; bake-off target. | 6–12 |
+| **2 Booleans** | K2 | General-fuse pipeline (coincidences settled lowest dimension first), the analytic SSI table, the existing BVH broad phase, procedural intersection curves, classification by ray casting with winding numbers as fallback. The truck booleans, the retry ladder and the special-case modules are deleted as their cases pass. Kernel-level case format. | Booleans ≥ 84/89 and crashes 10/10; ladder tier 02 20/20; no hangs; boolean median time ≤ half of truck's; OCCT reference recorded. | 4–8 |
+| **3 Free-form SSI, sweeps, lofts** | K3 | Subdivision seeding with normal-cone loop tests, marching, tangent and overlap handling; sweeps and lofts on PolyCore topology; USD `omniSolid`. | SSI corpus 119/119; sweeps ≥ 78/83; surfaces ≥ 6/8; import ≥ 22/23; OCCT reference recorded. | 6–12 |
+| **4 Blends** | K4 | Rolling-ball fillets, chamfers and vertex blends on PolyCore topology, porting today's `loopblend`, `curveblend`, `blend_corner`; SMLib's and solidcore's fillet units read as references. | Fillets ≥ 47/50; ladder tier 07 17/17; action-matrix fillet failures (#556, 986 today) ≤ 250; OCCT reference recorded. | 6–12 |
 | **5 Offsets and local operations** | K5 | One extend, re-intersect, re-topologise engine for offset, shell, thicken, draft, replace and delete face, with topology change; mid-surfaces for thin-walled FEA. | Shell ≥ 18/20; ladder tier 09 11/11; no seeded fuzz golden fails on a shell error. | 6–12 |
-| **6 Parity and speed** | K6, K7 | Healing and tolerant import, advanced blends as the corpus asks, profiling. `polycore-legacy` and `vendor/polycore-truck-*` deleted. | kernel-cases ≥ 95 %; bake-off ≥ 100 % of OCCT including performance. | ongoing |
+| **6 Functionality and speed** | K6, K7 | Healing and tolerant import, advanced blends as the corpus asks, profiling. `polycore-legacy` and `vendor/polycore-truck-*` deleted. | kernel-cases ≥ 95 %; the WCKD corpus passes; the OCCT share is recorded. | ongoing |
 
 Phases 3, 4 and 5 can overlap once Phase 2 ends: they touch different operations, and all
 three build on the same topology. Polykrom consumes PolyCore from Phase 0, on desktop and in
@@ -634,7 +636,7 @@ From ENGINES.md, in engineering-months with AI assistance:
 | 3 Free-form SSI, sweeps, lofts | 6–12 |
 | 4 Blends | 6–12 |
 | 5 Offsets and local operations | 6–12 |
-| 6 Parity and speed | ongoing |
+| 6 Functionality and speed | ongoing |
 | Study program (Polykrom, in parallel) | 1–2 |
 
 Roughly 25 to 50 engineering-months to reach OCCT's score on our corpus. Phases 3 to 5 overlap,

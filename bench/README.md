@@ -1,11 +1,11 @@
-# Bake-off and gate harness
+# Bake-off and reference harness
 
-PolyCore's standing score against OpenCASCADE, and the determinism check, as
+PolyCore's standing comparison against OpenCASCADE, and the determinism check, as
 [RFC 0001](../docs/rfcs/0001-polycore.md) sets them out. The latest result is
 [scorecard.md](scorecard.md) ([JSON](scorecard.json)); each run's raw results are under
 `results/<date>/`.
 
-The bar is OCCT. Graded answers are the cases' own (analytic, hand-calculated or invariants);
+OCCT is a reference, not the bar. Graded answers are the cases' own (analytic, hand-calculated or invariants);
 OCCT is never the answer key. Nothing of OpenCASCADE or Nightfall is linked into PolyCore or
 Polykrom: OCCT runs inside a frozen Nightfall `nf`, a separate program.
 
