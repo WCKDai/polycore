@@ -1996,6 +1996,46 @@ fn revolved_faces_skewed_never_panic_on_export() {
     }
 }
 
+/// PolyCore #27: an affine image of a revolution is still exact geometry, even when it
+/// is no longer a revolution. Keep the rational surface, face senses and source body.
+#[test]
+fn affine_revolutions_round_trip_as_exact_surfaces() {
+    let ball = sphere(Vec3::new(2.0, -3.0, 4.0), 5.0).unwrap();
+    let source = step_export(&[&ball], "unchanged source").unwrap();
+    for (x, y, z) in [(1.0, 1.0, 0.6), (-1.0, 1.0, 0.6), (1.5, 1.0, 0.6)] {
+        let body = scaled(&ball, x, y, z);
+        let text = step_export(&[&body], "ellipsoid").unwrap();
+        assert!(text.contains("RATIONAL_B_SPLINE_SURFACE"));
+        assert!(!text.contains("FACETED_BREP"));
+        assert_eq!(text, step_export(&[&body], "ellipsoid").unwrap());
+        let imported = round_trip(&body);
+        let expected = 4.0 / 3.0 * std::f64::consts::PI * 125.0 * (x * y * z).abs();
+        assert!(rel(measure(&imported.bodies[0].body).unwrap().volume, expected) < 1e-3);
+    }
+    round_trip(&scaled(&three_quarter_ring(), 1.5, 1.0, 1.0));
+    assert_eq!(source, step_export(&[&ball], "unchanged source").unwrap());
+}
+
+/// PolyCore #22: a Blender float32-noisy quarter turn must not turn a filleted box's
+/// revolved patches into a refused or faceted export. Do not snap away the affine noise.
+#[test]
+fn noisy_rotated_fillet_round_trips_exactly() {
+    let body = box_solid(Vec3::new(68.9, 26.8, 230.5), Vec3::new(71.4, 32.3, 246.4)).unwrap();
+    let edges: Vec<_> = body.edges(0.01).unwrap().iter().map(|edge| edge.mid).collect();
+    let rounded = fillet(&body, &edges, 0.3).unwrap();
+    let turned = crate::transform_matrix(
+        &rounded,
+        [
+            [5.205467e-7, 1.509956e-7, -0.9999968, 0.0],
+            [-7.86e-14, 0.9999988, 1.509953e-7, 0.0],
+            [0.9999982, 1.48e-15, 5.205477e-7, 0.0],
+            [-222.61427, 2.25e-6, 8.0998058, 1.0],
+        ],
+    )
+    .unwrap();
+    round_trip(&turned);
+}
+
 /// Weights of a rational quadratic full circle through nine control points.
 const CIRCLE_WEIGHTS: &str = "1.,0.707106781187,1.,0.707106781187,1.,0.707106781187,1.,0.707106781187,1.";
 /// Angle knots as OpenCascade writes a closed (periodic) quadratic circle: the end knots
