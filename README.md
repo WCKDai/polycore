@@ -33,9 +33,15 @@ The repository also holds the [bake-off and gate harness](bench/README.md) and i
 [scorecard](bench/scorecard.md): today's Polykrom kernel measured against OpenCASCADE on the
 kernel cases and ladder, with determinism and per-engine evidence.
 
-The standalone native/wasm workspace and development tasks are the first extraction arc.
-Polykrom's pinned git dependency, the complete corpus gate, the OCCT reference comparison and the remaining
-Phase 0 baselines are not claimed complete yet. At `polykrom.rev` the tree has 400 regression
+The standalone native/wasm workspace and development tasks are the first extraction arc. Polykrom
+builds on PolyCore through a pinned git dependency (since 2026-10-27; its CI refuses a pin whose
+kernel CI isn't green), and every boolean or fallback change is gated on Polykrom's 96
+robustness goldens. The complete corpus gate, the OCCT reference comparison and the remaining
+Phase 0 baselines are not claimed complete yet: the baseline is #38.
+
+**Next: exact booleans** ([Phase 2 plan, #41](https://github.com/WCKDai/polycore/issues/41)): the
+analytic intersection table (#39) and the general-fuse pipeline (#40), with truck as the fallback
+until each case passes. At `polykrom.rev` the tree has 400 regression
 cases and 116 ladder cases; the imported generated report still covers its older 382-case run,
 so the added cases need a fresh measured baseline rather than an assumed pass.
 
