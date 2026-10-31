@@ -2033,7 +2033,11 @@ fn noisy_rotated_fillet_round_trips_exactly() {
         ],
     )
     .unwrap();
-    round_trip(&turned);
+    let imported = round_trip(&turned);
+    let expected = measure(&turned).unwrap().bbox;
+    let actual = measure(&imported.bodies[0].body).unwrap().bbox;
+    assert!(actual.min.dist(expected.min) < 1e-3, "{actual:?} vs {expected:?}");
+    assert!(actual.max.dist(expected.max) < 1e-3, "{actual:?} vs {expected:?}");
 }
 
 /// Weights of a rational quadratic full circle through nine control points.
