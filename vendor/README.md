@@ -136,6 +136,11 @@ Changes:
   transformed axis. Only uniform scales were taken. Other transforms are still refused: the
   writer stops with a formatting error, which SolidCraft's `step.rs` now reports as an export
   error (`to_string` panicked on it).
+- `out/geometry.rs`, `out/mod.rs`: expose the same revolution-preserving transform check to
+  PolyCore's exporter. Non-preserving affine placements are converted on an export-only copy
+  to exact rational B-spline surfaces, rather than snapping the transform or writing facets
+  (PolyCore #22, #27). This accepts line, B-spline and NURBS profiles; an intersection-curve
+  profile is still refused. The low-level writer still refuses unsupported revolutions.
 - `lib.rs`: compiler warnings no longer fail the build. Example and test targets are dropped
   (their sources are not vendored).
 

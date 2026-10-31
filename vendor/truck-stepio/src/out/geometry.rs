@@ -745,6 +745,29 @@ impl<C> StepSurface for RevolutedCurve<C> {
     fn same_sense(&self) -> bool { false }
 }
 
+// PolyCore: shared with the kernel's exact spline export path, so the two paths cannot
+// disagree about whether a transformed surface is still a surface of revolution.
+/// Whether this processor can be written as a transformed profile and revolution axis.
+pub fn preserves_revolution<C>(processor: &Processor<RevolutedCurve<C>, Matrix4>) -> bool {
+    let transform = *processor.transform();
+    let a = processor.entity().axis().normalize();
+    let la = transform.transform_vector(a);
+    if transform.determinant().so_small() || la.so_small() {
+        return false;
+    }
+    let axis = la.normalize();
+    let seed = if a.x.abs() < 0.9 { Vector3::unit_x() } else { Vector3::unit_y() };
+    let u = (seed - a * a.dot(seed)).normalize();
+    let v = a.cross(u);
+    let (lu, lv) = (transform.transform_vector(u), transform.transform_vector(v));
+    let s = lu.magnitude();
+    !s.so_small()
+        && (lu.dot(axis) / s).so_small()
+        && (lv.dot(axis) / s).so_small()
+        && (lu.dot(lv) / (s * s)).so_small()
+        && (lv.magnitude() / s).near(&1.0)
+}
+
 impl<C> DisplayByStep for Processor<RevolutedCurve<C>, Matrix4>
 where C: StepLength + Transformed<Matrix4> + DisplayByStep
 {
@@ -767,19 +790,7 @@ where C: StepLength + Transformed<Matrix4> + DisplayByStep
             return ERR;
         }
         let axis = la.normalize();
-        // Two directions across the axis, and their images.
-        let seed = if a.x.abs() < 0.9 { Vector3::unit_x() } else { Vector3::unit_y() };
-        let u = (seed - a * a.dot(seed)).normalize();
-        let v = a.cross(u);
-        let (lu, lv) = (transform.transform_vector(u), transform.transform_vector(v));
-        let s = lu.magnitude();
-        // Across the axis: a similarity onto the plane across the image axis.
-        let commutes = !s.so_small()
-            && (lu.dot(axis) / s).so_small()
-            && (lv.dot(axis) / s).so_small()
-            && (lu.dot(lv) / (s * s)).so_small()
-            && (lv.magnitude() / s).near(&1.0);
-        if !commutes {
+        if !preserves_revolution(self) {
             f.write_str("Transform does not keep the surface one of revolution.")?;
             return ERR;
         }
