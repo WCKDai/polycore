@@ -1,9 +1,18 @@
 # PolyCore
 
-**The bar is OCCT.** PolyCore is an open-source geometric kernel in Rust that aims to rival the
-commercial kernels: exact B-rep geometry and topology (NURBS and analytic), booleans, blends,
-offsets, shells, sweeps and lofts, exact face and edge history, watertight tessellation, mass
-properties, and analysis-ready geometry for simulation.
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/brand/polycore-dark.svg"><img src="assets/brand/polycore-light.svg" height="44" alt="polycore"></picture>
+
+[polycore.dev](https://polycore.dev) · [Polykrom](https://polykrom.app) · [WCKD](https://wckd.ai) · [Creed / engineering for agents](https://creed.sh/creed.md)
+
+PolyCore is the current 3D-kernel project; Nightfall is archived research. Public presentation follows
+the [WCKD brand guide](https://wckd.ai/brand/). The phase gates below remain authoritative: a website
+or brand refresh is not evidence of kernel readiness.
+
+**The bar is what WCKD needs to make.** PolyCore is an open-source geometric kernel in Rust:
+exact B-rep geometry and topology (NURBS and analytic), booleans, blends, offsets, shells, sweeps
+and lofts, exact face and edge history, watertight tessellation, mass properties, and
+analysis-ready geometry for simulation. It exists to make the parts and machines WCKD needs, not
+to win a benchmark. OCCT is a reference, not a gate.
 
 PolyCore is the kernel of [Polykrom](https://github.com/WCKDai/polykrom), an open,
 agent-drivable parametric CAD app. Polykrom is its only consumer. Parameters, features, names
@@ -24,9 +33,15 @@ The repository also holds the [bake-off and gate harness](bench/README.md) and i
 [scorecard](bench/scorecard.md): today's Polykrom kernel measured against OpenCASCADE on the
 kernel cases and ladder, with determinism and per-engine evidence.
 
-The standalone native/wasm workspace and development tasks are the first extraction arc.
-Polykrom's pinned git dependency, the complete corpus gate, the OCCT bake-off and the remaining
-Phase 0 baselines are not claimed complete yet. At `polykrom.rev` the tree has 400 regression
+The standalone native/wasm workspace and development tasks are the first extraction arc. Polykrom
+builds on PolyCore through a pinned git dependency (since 2026-10-27; its CI refuses a pin whose
+kernel CI isn't green), and every boolean or fallback change is gated on Polykrom's 96
+robustness goldens. The complete corpus gate, the OCCT reference comparison and the remaining
+Phase 0 baselines are not claimed complete yet: the baseline is #38.
+
+**Next: exact booleans** ([Phase 2 plan, #41](https://github.com/WCKDai/polycore/issues/41)): the
+analytic intersection table (#39) and the general-fuse pipeline (#40), with truck as the fallback
+until each case passes. At `polykrom.rev` the tree has 400 regression
 cases and 116 ladder cases; the imported generated report still covers its older 382-case run,
 so the added cases need a fresh measured baseline rather than an assumed pass.
 
@@ -38,7 +53,7 @@ so the added cases need a fresh measured baseline rather than an assumed pass.
 | 3 | Free-form intersections, sweeps, lofts |
 | 4 | Blends |
 | 5 | Offsets and local operations |
-| 6 | Parity with OCCT, speed, truck removed |
+| 6 | The parts WCKD needs, speed, truck removed |
 
 ## Build and verify
 
@@ -66,8 +81,8 @@ Every phase ends only when all of these hold:
   (288 / 382 and 102 / 116 at the start).
 - **Reference tests:** Polykrom's analytic and reference cases all pass (83 / 83 at the start).
 - **Determinism:** identical results on one thread and on all cores.
-- **Bake-off:** the score against OCCT, on Nightfall's RFC 0001 rubric, does not drop and meets
-  the phase's target (100 % of OCCT, including speed, by Phase 6).
+- **Reference comparison:** the score against OCCT on Nightfall's RFC 0001 rubric is recorded as
+  a reference, not a gate. The gate is the WCKD corpus and the parts the stack actually makes.
 - **TinyRex:** an agent rebuilds the [TinyRex](https://github.com/wckdboy/tinyrex) robot from
   scratch through Polykrom's own tools, with results at least as good as the phase before
   (median of three runs).
@@ -79,6 +94,12 @@ Every phase ends only when all of these hold:
 Graded answers are analytic, hand-calculated or invariants. OCCT runs only as a separate
 program and is a cross-check, never the answer key. No OCCT, FreeCAD or other GPL/LGPL source
 is read or used, and no model made in commercial CAD is used for testing.
+
+## Where this fits
+
+PolyCore is the geometry kernel: exact B-rep, history and watertight tessellation for Polykrom, TinyRex and the world's objects. The bar is what WCKD needs to make; OCCT is a reference, not a gate.
+
+[The brick map](https://wckd.ai/architecture/) · WCKD
 
 ## Licence
 

@@ -1,4 +1,4 @@
-# Reuse survey: open-source code that shortens PolyCore's path to OCCT
+# Reuse survey: open-source code that shortens PolyCore's path to the kernel WCKD needs
 
 - **Date:** 2026-10-27
 - **Author:** Claude (agent), for the owner

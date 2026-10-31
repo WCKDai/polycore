@@ -370,9 +370,9 @@ Optimize **cost per verified merge**, not raw tokens:
 | 1 | Own geometry/topology/tessellation/exact mass; analysis meshes; native FEA solver; MJCF exact inertia | Phase 1 RFC 0001 gates plus simulation analytic suite |
 | 2 | General-fuse booleans, analytic SSI, contact primitives, initial USD B-rep | Booleans ≥ target, determinism, MuJoCo/Drake checks |
 | 3 | Free-form SSI, sweeps/lofts, STEP/USD breadth, CFD adapters | SSI and interchange gates |
-| 4 | General blends and vertex blends | Fillet gate and bake-off target |
+| 4 | General blends and vertex blends | Fillet gate; OCCT reference recorded |
 | 5 | Offsets, shell, thicken, local operations, mid-surfaces | Shell/offset gates |
-| 6 | OCCT parity and speed, all legacy/sidecar defaults retired | ≥100 % OCCT score, performance target, all product gates |
+| 6 | Functionality and speed for the parts WCKD makes, all legacy/sidecar defaults retired | The WCKD corpus passes, performance target, all product gates; OCCT share recorded |
 
 Stages may overlap only when they touch independent operations and the integration graph shows
 no blocking ownership conflict.
