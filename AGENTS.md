@@ -20,6 +20,14 @@ phase or a release without its measured evidence.
 - `docs/rfcs/` — RFC 0001 (phase gates) and RFC 0002 (AI-native platform).
 - `.github/workflows/ci.yml` — PR/full/trusted/property gates.
 
+## Work tracking
+
+GitHub issues on WCKDai/polycore hold the kernel work (the Phase 2 plan is #41). Plane, workspace
+`wckd`, is the overview across all projects: this repository's project is **PolyCore** (`PC`). Work
+you take has a PC item that links its issue; put the issue number or the PC ID in the PR title, and
+move the item to Done with the PR link when it merges. WCKDai/.github/PLANE.md maps repositories
+to projects.
+
 ## Authoritative commands
 
 ```sh
