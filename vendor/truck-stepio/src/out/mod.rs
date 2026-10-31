@@ -385,4 +385,4 @@ impl<T> CompleteStepDisplay<T> {
 
 mod geometry;
 mod topology;
-pub use geometry::VectorAsDirection;
+pub use geometry::{VectorAsDirection, preserves_revolution};
