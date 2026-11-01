@@ -105,6 +105,8 @@ jobs:
           shared-key: polycore-trusted-linux
           cache-on-failure: true
           cache-targets: false
+          # alpha's home persists: rust-cache must not clean the runner user's ~/.cargo/bin.
+          cache-bin: false
       - name: Format, check, Clippy, tests, wasm and dependency boundary
         run: cargo xtask ci
 
@@ -140,6 +142,8 @@ jobs:
         with:
           shared-key: polycore-properties-linux
           cache-on-failure: true
+          # alpha's home persists: rust-cache must not clean the runner user's ~/.cargo/bin.
+          cache-bin: false
       - run: cargo xtask property-test
         env:
           PROPTEST_CASES: 200
