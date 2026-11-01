@@ -17,7 +17,8 @@ phase or a release without its measured evidence.
 - `tests/` and `crates/*/tests/` — kernel and geometry regressions; keep the existing area's file.
 - `bench/` — the OCCT bake-off, scorecard, determinism checks and corpus runs.
 - `agent/` — bounded multi-agent task packets and the ownership/budget rules.
-- `docs/rfcs/` — RFC 0001 (phase gates) and RFC 0002 (AI-native platform).
+- `docs/rfcs/` — RFC 0001 (phase gates), RFC 0002 (AI-native platform) and RFC 0003 (a second
+  consumer, Trigon; sections and drawing projection; proposed).
 - `.github/workflows/ci.yml` — PR/full/trusted/property gates.
 
 ## Work tracking
