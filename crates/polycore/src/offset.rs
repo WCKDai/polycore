@@ -426,6 +426,43 @@ pub(crate) fn span_step(ns: &[Vec3], s: &[f64]) -> Option<Vec3> {
     Some(v)
 }
 
+/// Where the moved ends `a` and `c` of an edge lie along its moved curve, as parameters of the
+/// old curve: `moved(t)` is the old curve's point at `t` moved onto the moved faces, and the
+/// moved curve is tracked through [`MOVED_TRACK`] of them over `range`. Each end's parameter is
+/// that of the nearest point of the track; an end beyond the track's own ends (an edge made
+/// longer by the move) keeps the old end's parameter. `None` when fewer than two points of the
+/// track could be moved.
+fn moved_span(moved: &dyn Fn(f64) -> Result<Vec3>, range: (f64, f64), a: Vec3, c: Vec3) -> Option<(f64, f64)> {
+    let (t0, t1) = range;
+    let track: Vec<(f64, Vec3)> = (0..=MOVED_TRACK)
+        .filter_map(|j| {
+            let t = t0 + (t1 - t0) * j as f64 / MOVED_TRACK as f64;
+            moved(t).ok().map(|p| (t, p))
+        })
+        .collect();
+    if track.len() < 2 {
+        return None;
+    }
+    let along = |p: Vec3| -> f64 {
+        let mut best = (f64::INFINITY, t0);
+        for w in track.windows(2) {
+            let (Some(&(ti, qi)), Some(&(tj, qj))) = (w.first(), w.get(1)) else { continue };
+            let d = qj - qi;
+            let len2 = d.dot(d);
+            let s = if len2 > 0.0 { ((p - qi).dot(d) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            let dist = p.dist(qi + d * s);
+            if dist < best.0 {
+                best = (dist, ti + (tj - ti) * s);
+            }
+        }
+        best.1
+    };
+    Some((along(a), along(c)))
+}
+
+/// Points along a moved edge's curve from which its ends are placed ([`moved_span`]).
+const MOVED_TRACK: usize = 64;
+
 /// Most faces round one corner that [`split_corner`] takes on.
 const MAX_SPLIT_FACES: usize = 48;
 
@@ -1063,21 +1100,32 @@ pub(crate) fn offset_body(b: &Body, shift: impl Fn(usize, Vec3) -> f64) -> Resul
             }
             let Some(kind) = arc_mid(&e, size * 1e-6) else {
                 // Another curve (where two cylinders meet): its points moved onto the moved
-                // faces, through a smooth curve.
+                // faces, through a smooth curve. The moved ends are where the faces at the ends
+                // cut that curve after the move, not where the old ends land on it: a plate's
+                // top and bottom moved in take a slice off each end of the edge between its
+                // hole and its round side (polycore#42). The points between the ends are taken
+                // from the stretch of the moved curve between them.
                 use mt::{BoundedCurve, ParametricCurve};
                 let fs = efaces.get(&e.id()).ok_or_else(|| fail("edge faces"))?;
                 let (o, s, n) = pick(fs);
                 let cv = e.curve();
                 let (t0, t1) = cv.range_tuple();
-                let k = 16;
-                let mut pts = vec![from_p3(a.point())];
-                for j in 1..k {
-                    let p = from_p3(cv.subs(t0 + (t1 - t0) * j as f64 / k as f64));
-                    pts.push(
-                        move_point(p, &o, &s, &n, size * 1e-6).ok_or_else(|| fail("an edge whose faces don't meet the same way after the move"))?,
-                    );
+                let moved = |t: f64| {
+                    move_point(from_p3(cv.subs(t)), &o, &s, &n, size * 1e-6)
+                        .ok_or_else(|| fail("an edge whose faces don't meet the same way after the move"))
+                };
+                let (pa, pc) = (from_p3(a.point()), from_p3(c.point()));
+                let (ta, tc) =
+                    moved_span(&moved, (t0, t1), pa, pc).ok_or_else(|| fail("an edge whose faces don't meet the same way after the move"))?;
+                if !(tc > ta) {
+                    return Err(fail("not supported yet: the move is larger than a wall or step is thick (faces would cross)"));
                 }
-                pts.push(from_p3(c.point()));
+                let k = 16;
+                let mut pts = vec![pa];
+                for j in 1..k {
+                    pts.push(moved(ta + (tc - ta) * j as f64 / k as f64)?);
+                }
+                pts.push(pc);
                 let curve = crate::build::interpolate_cubic(&pts).ok_or_else(|| fail("edge curve"))?;
                 let ne = mt::Edge::new(a, c, mt::Curve::BSplineCurve(curve));
                 rec.piece(&ne, &e);

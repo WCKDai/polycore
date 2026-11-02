@@ -1783,6 +1783,70 @@ fn shell_with_cylindrical_faces() {
     assert!(rel(v, outer - cavity) < 1e-4, "{v} vs {}", outer - cavity);
 }
 
+/// A plate 7.5 thick whose left side bulges out in an arc, with a hole of radius 10 cut along X
+/// that leaves through the bulge (Polykrom robustness seed 61): the edge where the hole's wall
+/// meets the round side is a free curve from the bottom face to the top.
+fn plate_with_a_hole_through_its_round_side() -> Body {
+    // The arc from (0, 20) to (0, 0) through (-12.5, 10): centre (-2.25, 10), radius 10.25.
+    let start = 10f64.atan2(2.25);
+    let segs = vec![
+        Seg2::Line { a: Vec2::ZERO, b: Vec2::new(47.5, 0.0) },
+        Seg2::Line { a: Vec2::new(47.5, 0.0), b: Vec2::new(47.5, 20.0) },
+        Seg2::Line { a: Vec2::new(47.5, 20.0), b: Vec2::new(0.0, 20.0) },
+        Seg2::Arc { center: Vec2::new(-2.25, 10.0), radius: 10.25, start, sweep: 2.0 * PI - 2.0 * start },
+    ];
+    let plate = extrude(&Plane::XY, &[Region2 { outer: Loop2 { segs }, holes: vec![] }], 0.0, 7.5).unwrap().pop().unwrap();
+    let hole = cylinder(Vec3::new(-12.5, -0.2286902286902297, 2.5), Vec3::X, 10.0, 20.0).unwrap();
+    boolean(&plate, &hole, BoolOp::Cut).unwrap().unwrap()
+}
+
+/// Every face of the plate moved in by 2: the top and bottom take a slice off each end of the
+/// edge between the hole's wall and the round side, so its moved curve has to be taken between
+/// the moved ends. Taken over the whole of the old edge, it ran out past the moved top and bottom
+/// and back again, and the walls on it meshed outside the body (polycore#42).
+#[test]
+fn offset_of_an_edge_cut_shorter_at_its_ends_stays_between_the_moved_faces() {
+    use truck_modeling::{BoundedCurve, ParametricCurve};
+    let b = plate_with_a_hole_through_its_round_side();
+    let moved = crate::offset::offset_body(&b, |_, _| -2.0).unwrap();
+    for edge in moved.solid.edge_iter() {
+        let c = edge.curve();
+        let (t0, t1) = c.range_tuple();
+        for j in 0..=64 {
+            let p = c.subs(t0 + (t1 - t0) * j as f64 / 64.0);
+            assert!((2.0 - 1e-6..=5.5 + 1e-6).contains(&p.z), "an edge runs outside the moved top and bottom at ({}, {}, {})", p.x, p.y, p.z);
+        }
+    }
+    let bb = moved.tessellate(0.01).unwrap().bounds();
+    assert!(bb.min.z > 2.0 - 1e-6 && bb.max.z < 5.5 + 1e-6, "the mesh runs outside the moved top and bottom: {:?}..{:?}", bb.min, bb.max);
+}
+
+/// The plate shelled 2 thick, open at its right end: closed, inside the plate, and lined 2 from
+/// every outer face (up to 2√2 where walls meet at the hole's end, a concave corner of the
+/// plate). This ended with the shell's cavity refused for reaching outside the plate ("boolean
+/// Cut: implausible result volume NaN", polycore#42).
+#[test]
+fn shell_of_a_plate_with_a_hole_through_its_round_side() {
+    let b = plate_with_a_hole_through_its_round_side();
+    let open = Vec3::new(47.5, 10.0, 3.75);
+    let s = shell(&b, &[open], 2.0).unwrap();
+    assert!(s.validity().is_empty(), "{:?}", s.validity());
+    let (outer, inner) = (measure(&b).unwrap(), measure(&s).unwrap());
+    assert!(inner.volume > 0.0 && inner.volume < outer.volume, "{} of {}", inner.volume, outer.volume);
+    let bb = s.tessellate(0.01).unwrap().bounds();
+    assert!(
+        outer.bbox.inflated(1e-3).contains(bb.min) && outer.bbox.inflated(1e-3).contains(bb.max),
+        "the shell reaches outside the plate: {:?}..{:?}",
+        bb.min,
+        bb.max
+    );
+    let walls = shell_walls(&s, &b, open, 2.0);
+    assert!(!walls.is_empty());
+    for (p, d) in walls {
+        assert!((2.0 - 0.02..=2.0 * 2f64.sqrt() + 0.02).contains(&d), "the wall is {d} thick at ({}, {}, {})", p.x, p.y, p.z);
+    }
+}
+
 #[test]
 fn draft_of_a_round_ended_pocket() {
     use polycore_geom::Seg2;
