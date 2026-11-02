@@ -132,13 +132,15 @@ pub fn measure_mass(b: &Body) -> Result<MassMeasure> {
 /// The topology mesh is unchanged, so merged face counts stay the tessellation's.
 fn mass(b: &Body, topology: bool) -> Result<(MassMeasure, Option<Mesh>)> {
     if let Some(exact) = analytic_solid(b) {
-        let topo = if topology {
-            let coarse_tol = (b.size() * 1e-3).max(1e-3);
-            Some(b.tessellate_with(coarse_tol, false)?)
-        } else {
-            None
-        };
-        return Ok((exact, topo));
+        // The surfaces fit, but a face turned inside out (a file with a wrong sense) still does:
+        // take the closed form only where a coarse mesh of the body's own faces agrees with it.
+        let coarse_tol = (b.size() * 1e-3).max(1e-3);
+        let coarse = b.tessellate_with(coarse_tol, true)?;
+        let v6: f64 = face_sums(&coarse, b.face_count(), exact.centroid).iter().map(|f| f.1).sum();
+        if (v6 / 6.0 - exact.volume).abs() <= 0.05 * exact.volume.abs() {
+            let topo = if topology { Some(b.tessellate_with(coarse_tol, false)?) } else { None };
+            return Ok((exact, topo));
+        }
     }
     let size = b.size();
     let coarse_tol = (size * 1e-3).max(1e-3);
