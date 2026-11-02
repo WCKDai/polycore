@@ -17,7 +17,7 @@ use crate::history::History;
 use crate::{Body, BoolOp, KernelError};
 
 /// Version of the typed facade. It changes when the meaning of a request or result changes.
-pub const API_VERSION: u32 = 1;
+pub const API_VERSION: u32 = 2;
 
 /// Name, version and build identity of a kernel backend. It belongs in every cache key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,6 +358,10 @@ pub trait Kernel: Send + Sync {
     fn primitive(&self, cx: &Cx, primitive: &Primitive) -> Outcome<Body>;
     fn extrude(&self, cx: &Cx, spec: &ExtrudeSpec) -> Outcome<Vec<Body>>;
     fn revolve(&self, cx: &Cx, spec: &RevolveSpec) -> Outcome<Vec<Body>>;
+    /// With tools, Union folds the first target with all tools and then the remaining
+    /// targets; disconnected material may remain in one compound body. Cut and Intersect
+    /// apply the tools sequentially to each target independently, in input order.
+    /// Empty tools preserve the target list unchanged. At least one target is required.
     fn boolean(&self, cx: &Cx, op: BoolOp, targets: &[Body], tools: &[Body]) -> Outcome<Vec<Body>>;
     fn blend(&self, cx: &Cx, body: &Body, spec: &BlendSpec) -> Outcome<Body>;
     fn offset(&self, cx: &Cx, body: &Body, spec: &OffsetSpec) -> Outcome<Body>;
@@ -487,12 +491,16 @@ impl Kernel for TruckKernel {
 
     fn boolean(&self, cx: &Cx, op: BoolOp, targets: &[Body], tools: &[Body]) -> Outcome<Vec<Body>> {
         cx.ensure_active("boolean")?;
-        if targets.is_empty() {
+        let Some((first, others)) = targets.split_first() else {
             return Err(Refusal::invalid("boolean", "at least one target body is required"));
-        }
+        };
         let started = Instant::now();
-        let mut current: Vec<Body> = targets.to_vec();
-        for tool in tools {
+        // Union owns the shared tool material once. Preserve the original one-target
+        // tool order, then fold in the remaining targets with the same binary path.
+        let fold_targets = op == BoolOp::Union && !tools.is_empty();
+        let mut current: Vec<Body> = if fold_targets { vec![first.clone()] } else { targets.to_vec() };
+        let extra_targets = if fold_targets { others } else { &[] };
+        for tool in tools.iter().chain(extra_targets) {
             let mut next = Vec::new();
             let mut touched = false;
             for target in current {
@@ -642,6 +650,18 @@ mod tests {
     }
 
     #[test]
+    fn kernel_identity_versions_round_trip_and_separate_cached_results() {
+        let legacy_json = r#"{"name":"polycore","version":"0.1.0","backend":"truck","build":"fixture","api_version":1}"#;
+        let current_json = r#"{"name":"polycore","version":"0.1.0","backend":"truck","build":"fixture","api_version":2}"#;
+        let legacy: KernelId = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), legacy_json, "old identity data remains readable without being relabelled");
+        let current = KernelId::new("polycore", "0.1.0", "truck", "fixture");
+        assert_eq!(serde_json::to_string(&current).unwrap(), current_json);
+        assert_eq!(serde_json::from_str::<KernelId>(current_json).unwrap(), current);
+        assert_ne!(legacy, current, "changed Union grouping must not reuse a version-1 cache key");
+    }
+
+    #[test]
     fn identity_capabilities_and_cancellation_are_explicit() {
         let k = kernel();
         assert_eq!(k.identity().backend, "truck");
@@ -698,6 +718,131 @@ mod tests {
         assert!(read.evidence.validity.as_ref().is_some_and(|validity| validity.valid));
         let measured = k.mass(&cx, &read.value[0]).unwrap();
         assert!((measured.value.volume - 8_000.0).abs() < 1e-3, "{}", measured.value.volume);
+    }
+
+    fn boolean_box(k: &TruckKernel, cx: &Cx, lo: f64, hi: f64) -> Body {
+        k.primitive(cx, &Primitive::Box { min: Vec3::new(lo, 0.0, 0.0), max: Vec3::new(hi, 20.0, 20.0) }).unwrap().value
+    }
+
+    fn boolean_volume(k: &TruckKernel, cx: &Cx, bodies: &[Body]) -> f64 {
+        bodies
+            .iter()
+            .map(|body| {
+                assert!(k.check(body).valid);
+                k.mass(cx, body).unwrap().value.volume
+            })
+            .sum()
+    }
+
+    #[test]
+    fn union_of_multiple_targets_does_not_duplicate_a_bridging_tool() {
+        let k = kernel();
+        let cx = Cx::new();
+        let bodies = [boolean_box(&k, &cx, 0.0, 20.0), boolean_box(&k, &cx, 40.0, 60.0), boolean_box(&k, &cx, 10.0, 50.0)];
+        let control = k.boolean(&cx, BoolOp::Union, &bodies[..1], &[bodies[2].clone(), bodies[1].clone()]).unwrap();
+        let expected = boolean_volume(&k, &cx, &control.value);
+        assert!((expected - 24_000.0).abs() < 1e-4);
+        for [a, b, tool] in [[0, 1, 2], [1, 0, 2], [0, 2, 1], [2, 0, 1], [1, 2, 0], [2, 1, 0]] {
+            let grouped = k.boolean(&cx, BoolOp::Union, &[bodies[a].clone(), bodies[b].clone()], &[bodies[tool].clone()]).unwrap();
+            let actual = boolean_volume(&k, &cx, &grouped.value);
+            assert!((actual - expected).abs() < 1e-4, "target order {a},{b}, tool {tool}: {actual} vs {expected}");
+            assert_eq!(grouped.value.len(), 1, "the connected bridge is one body");
+            assert_eq!(grouped.value[0].lumps().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn union_of_separate_targets_keeps_each_disconnected_lump_once() {
+        let k = kernel();
+        let cx = Cx::new();
+        let targets = [boolean_box(&k, &cx, 0.0, 20.0), boolean_box(&k, &cx, 40.0, 60.0)];
+        let tools = [boolean_box(&k, &cx, 80.0, 100.0)];
+        let result = k.boolean(&cx, BoolOp::Union, &targets, &tools).unwrap();
+        assert!((boolean_volume(&k, &cx, &result.value) - 24_000.0).abs() < 1e-4);
+        assert_eq!(result.value.len(), 1, "a body may contain several disconnected lumps");
+        let lumps = result.value[0].lumps().unwrap();
+        assert_eq!(lumps.len(), 3);
+        for lump in lumps {
+            assert!((boolean_volume(&k, &cx, &[lump]) - 8_000.0).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn union_history_matches_the_ordered_single_target_fold() {
+        let k = kernel();
+        let cx = Cx::new();
+        for (lo, hi) in [(10.0, 50.0), (80.0, 100.0)] {
+            let a = boolean_box(&k, &cx, 0.0, 20.0);
+            let b = boolean_box(&k, &cx, 40.0, 60.0);
+            let tool = boolean_box(&k, &cx, lo, hi);
+            // The preserved binary API is the provenance reference for the final
+            // accumulator/tool pair; no flat original-array origins are promised.
+            let accumulator = crate::boolean(&a, &tool, BoolOp::Union).unwrap().unwrap();
+            let reference = crate::boolean(&accumulator, &b, BoolOp::Union).unwrap().unwrap();
+            let expected = reference.history().unwrap();
+            expected.check(&reference, &[&accumulator, &b]).unwrap();
+            let legacy_control = k.boolean(&cx, BoolOp::Union, std::slice::from_ref(&a), &[tool.clone(), b.clone()]).unwrap();
+            assert_eq!(legacy_control.history.as_ref(), Some(expected), "the existing single-target fold keeps its history");
+            let grouped = k.boolean(&cx, BoolOp::Union, &[a, b.clone()], &[tool]).unwrap();
+            assert_eq!(grouped.history.as_ref(), Some(expected), "remaining target B must be the final history operand, not the original tool");
+            assert_eq!(grouped.value.len(), 1);
+            let result = &grouped.value[0];
+            assert_eq!(grouped.history.as_ref(), result.history());
+            grouped.history.as_ref().unwrap().check(result, &[&accumulator, &b]).unwrap();
+            let serialized = serde_json::to_vec(expected).unwrap();
+            let reopened: History = serde_json::from_slice(&serialized).unwrap();
+            assert_eq!(reopened, *expected, "the existing history schema remains readable");
+            reopened.check(result, &[&accumulator, &b]).unwrap();
+        }
+    }
+
+    #[test]
+    fn boolean_without_tools_preserves_every_target_for_each_operation() {
+        let k = kernel();
+        let cx = Cx::new();
+        let targets = [boolean_box(&k, &cx, 0.0, 20.0), boolean_box(&k, &cx, 10.0, 30.0)];
+        let original: Vec<_> = targets.iter().map(|body| crate::encode_native_body(body).unwrap()).collect();
+        for op in [BoolOp::Union, BoolOp::Cut, BoolOp::Intersect] {
+            let result = k.boolean(&cx, op, &targets, &[]).unwrap();
+            let actual: Vec<_> = result.value.iter().map(|body| crate::encode_native_body(body).unwrap()).collect();
+            assert_eq!(actual, original, "empty tools remain a list identity for {op:?}");
+        }
+    }
+
+    #[test]
+    fn cut_and_intersect_keep_sequential_per_target_semantics() {
+        let k = kernel();
+        let cx = Cx::new();
+        let targets = [boolean_box(&k, &cx, 0.0, 20.0), boolean_box(&k, &cx, 40.0, 60.0)];
+        let cut_tools = [boolean_box(&k, &cx, 10.0, 50.0), boolean_box(&k, &cx, 0.0, 5.0)];
+        let cut = k.boolean(&cx, BoolOp::Cut, &targets, &cut_tools).unwrap();
+        assert_eq!(cut.value.len(), 2);
+        assert!((boolean_volume(&k, &cx, &cut.value[..1]) - 2_000.0).abs() < 1e-4);
+        assert!((boolean_volume(&k, &cx, &cut.value[1..]) - 4_000.0).abs() < 1e-4);
+        let intersect_tools = [boolean_box(&k, &cx, 5.0, 55.0), boolean_box(&k, &cx, 10.0, 50.0)];
+        let intersection = k.boolean(&cx, BoolOp::Intersect, &targets, &intersect_tools).unwrap();
+        assert_eq!(intersection.value.len(), 2);
+        assert!((boolean_volume(&k, &cx, &intersection.value) - 8_000.0).abs() < 1e-4);
+        // Sequential intersections with disjoint tools are empty. Unioning those
+        // tools first would instead retain both complete targets, which is wrong.
+        let empty = k.boolean(&cx, BoolOp::Intersect, &targets, &targets).unwrap();
+        assert!(empty.value.is_empty());
+        let removed = k.boolean(&cx, BoolOp::Cut, &targets[..1], &targets[..1]).unwrap();
+        assert!(removed.value.is_empty());
+    }
+
+    #[test]
+    fn boolean_refusals_keep_their_precedence_and_categories() {
+        let k = kernel();
+        let body = unit_box();
+        let cancelled = Cx::new();
+        cancelled.cancel();
+        let expired = Cx::new().with_timeout(Duration::ZERO);
+        for op in [BoolOp::Union, BoolOp::Cut, BoolOp::Intersect] {
+            assert_eq!(k.boolean(&Cx::new(), op, &[], std::slice::from_ref(&body)).unwrap_err().kind, RefusalKind::InvalidInput);
+            assert_eq!(k.boolean(&cancelled, op, &[], &[]).unwrap_err().kind, RefusalKind::Cancelled);
+            assert_eq!(k.boolean(&expired, op, std::slice::from_ref(&body), &[]).unwrap_err().kind, RefusalKind::OutOfBudget);
+        }
     }
 
     #[test]

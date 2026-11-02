@@ -130,6 +130,23 @@ determinism mode and a trace sink. Bodies are immutable, `Send + Sync`, content-
 cheap to clone. Selectors use durable history plus geometric predicates and state expected
 cardinality; an index alone is never an agent-facing durable reference.
 
+### Boolean arrays and facade version 2
+
+With nonempty tools, `Kernel::boolean(Union, targets, tools)` folds the first target with
+all tools, then the remaining targets in input order. Shared tool material is represented once.
+Disconnected material may remain in one compound `Body`; callers can inspect its `lumps()`.
+`Cut` and `Intersect` still apply tools sequentially to each target independently. Empty tools
+preserve the exact target list for every operation, even when targets overlap. At least one
+target is required; cancellation, deadline and refusal categories are unchanged.
+
+This corrects duplicate material in multi-target Union ([#50](https://github.com/WCKDai/polycore/issues/50)).
+Its result count and ordered binary history can change, so `API_VERSION` is 2 and consumers
+must invalidate version-1 facade cache entries. History describes the binary fold rather than
+a flat mapping over the original arrays. Serialized version-1 `KernelId` values still round-trip
+without being relabelled. This is not a native-body or document-format migration; the legacy
+binary `polycore::boolean` function is unchanged. Consumers pinning a new revision must replay
+their saved designs and identity/history checks before upgrading.
+
 ### Capabilities and routing
 
 Capabilities are versioned data, not documentation claims: surface and curve types, operations,
