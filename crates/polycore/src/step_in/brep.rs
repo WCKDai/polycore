@@ -577,7 +577,7 @@ fn whole_sphere(cx: &Ctx, file_face: u64, face: &mt::Face) -> Option<Vec<mt::Fac
 /// the face is a patch, a horn or a spindle.
 fn whole_torus(cx: &Ctx, file_face: u64, face: &mt::Face) -> Option<Vec<mt::Face>> {
     use mt::{ParametricSurface3D, SearchParameter};
-    use solidcraft_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
     let surface = entity(cx, file_face).ok()?.params().get(2).and_then(Param::as_ref_id)?;
     let surf = entity(cx, surface).ok()?;
     if surf.name() != "TOROIDAL_SURFACE" {
