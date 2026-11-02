@@ -67,12 +67,13 @@ fn several_contact_regions_and_edge_contact() {
 fn a_pad_half_past_the_edge_of_its_face_fuses() {
     let block = rect(0., 0., 25., 47.5, 0., 37.5);
     let pad = cylinder(Vec3::new(7.5, 0., 0.), -Vec3::Y, 5.0, 2.5).unwrap();
-    // Measured as the result is (the round side's volume from its mesh).
+    // The whole pad is its closed form; the fused result's round side is measured from its mesh,
+    // which keeps it within about 3e-4 of the pad's own volume (0.05 mm³ here).
     let want = measure(&block).unwrap().volume + measure(&pad).unwrap().volume;
-    assert!((want - (25.0 * 47.5 * 37.5 + std::f64::consts::PI * 25.0 * 2.5)).abs() < 0.1);
+    assert!((want - (25.0 * 47.5 * 37.5 + std::f64::consts::PI * 25.0 * 2.5)).abs() < 1e-9);
     for (a, b) in [(&block, &pad), (&pad, &block)] {
         let (r, d) = fused(a, b);
-        assert_one_solid(&r, want, 1e-6 * want, "#674");
+        assert_one_solid(&r, want, 2e-6 * want, "#674");
         assert!(d.events.is_empty(), "an exact join: {d:?}");
         let bounds = r.tessellate(0.01).unwrap().bounds();
         assert!((bounds.min.y + 2.5).abs() < 1e-9 && (bounds.min.z + 5.0).abs() < 0.01, "{bounds:?}");

@@ -496,11 +496,15 @@ impl Builder {
             return Err("no face could be imported".into());
         }
         let read = out.len();
-        let ball = match (out.as_slice(), origin.as_slice()) {
-            ([face], [file_face]) => whole_sphere(cx, *file_face, face).map(|patches| (*file_face, patches)),
+        // A seam loop around a whole sphere or torus encloses nothing in parameter space, so
+        // truck cannot mesh that one face. The kernel's own patches replace it.
+        let rebuilt = match (out.as_slice(), origin.as_slice()) {
+            ([face], [file_face]) => {
+                whole_sphere(cx, *file_face, face).or_else(|| whole_torus(cx, *file_face, face)).map(|patches| (*file_face, patches))
+            }
             _ => None,
         };
-        if let Some((file_face, patches)) = ball {
+        if let Some((file_face, patches)) = rebuilt {
             origin = vec![file_face; patches.len()];
             out = patches;
         }
@@ -560,6 +564,70 @@ fn whole_sphere(cx: &Ctx, file_face: u64, face: &mt::Face) -> Option<Vec<mt::Fac
     let c = crate::body::from_p3(center);
     let mut patches = guard("step sphere", || crate::build::sphere_patch_faces(c, radius, [x, z.cross(x), z])).ok()?;
     if !outward {
+        for f in &mut patches {
+            f.invert();
+        }
+    }
+    Some(patches)
+}
+
+/// A ring torus written as one face bounded only by seam circles (the outer equator and a
+/// meridian, each used both ways). That loop is the parameter square, which encloses nothing
+/// the mesher can fill, so the ring is built as the kernel's own torus instead. `None` when
+/// the face is a patch, a horn or a spindle.
+fn whole_torus(cx: &Ctx, file_face: u64, face: &mt::Face) -> Option<Vec<mt::Face>> {
+    use mt::{ParametricSurface3D, SearchParameter};
+    use polycore_geom::{Loop2, Plane, Region2, Vec2, Vec3};
+    let surface = entity(cx, file_face).ok()?.params().get(2).and_then(Param::as_ref_id)?;
+    let surf = entity(cx, surface).ok()?;
+    if surf.name() != "TOROIDAL_SURFACE" {
+        return None;
+    }
+    let wires = face.boundaries();
+    let edges: Vec<&mt::Edge> = wires.iter().flat_map(|w| w.edge_iter()).collect();
+    let mut uses: HashMap<mt::EdgeID, usize> = HashMap::new();
+    for e in &edges {
+        *uses.entry(e.id()).or_default() += 1;
+    }
+    if uses.is_empty() || uses.values().any(|n| *n != 2) {
+        return None;
+    }
+    let (big, small) = (surf.params().get(2).and_then(Param::as_f64)? * cx.len, surf.params().get(3).and_then(Param::as_f64)? * cx.len);
+    if !(small > 1e-9 && big > small && big.is_finite() && small.is_finite()) {
+        return None;
+    }
+    let frame = geom::frame(cx, surf.params().get(1).and_then(Param::as_ref_id)?).ok()?;
+    let center = crate::body::from_p3(frame.o);
+    let axis = Vec3::new(frame.z.x, frame.z.y, frame.z.z);
+    let radial = Vec3::new(frame.x.x, frame.x.y, frame.x.z);
+    let tol = cx.tol.max((big + small) * 1e-6);
+    let on_ring = |p: mt::Point3| {
+        let d = p - frame.o;
+        let height = d.dot(frame.z);
+        let rho = (d - frame.z * height).magnitude();
+        ((rho - big).hypot(height) - small).abs() <= tol
+    };
+    let samples = |e: &&mt::Edge| {
+        let c = e.curve();
+        let (t0, t1) = c.range_tuple();
+        (0..=8).map(move |i| c.subs(t0 + (t1 - t0) * i as f64 / 8.0))
+    };
+    if !edges.iter().flat_map(samples).all(on_ring) {
+        return None;
+    }
+    let plane = Plane::new(center, axis, radial)?;
+    let region = Region2 { outer: Loop2::circle(Vec2::new(0.0, big), small), holes: vec![] };
+    let built = guard("step torus", || crate::revolve(&plane, &[region], Vec2::ZERO, Vec2::X, std::f64::consts::TAU)).ok()?;
+    let body = built.into_iter().next()?;
+    let mut patches: Vec<mt::Face> = body.solid.face_iter().cloned().collect();
+    if patches.is_empty() {
+        return None;
+    }
+    // The file face's normal at the outer equator, against the direction away from the tube.
+    let probe = frame.o + frame.x * (big + small);
+    let oriented = face.oriented_surface();
+    let (u, v) = oriented.search_parameter(probe, mt::SPHint2D::None, 100)?;
+    if !(oriented.normal(u, v).dot(frame.x) > 0.0) {
         for f in &mut patches {
             f.invert();
         }

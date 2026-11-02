@@ -282,6 +282,8 @@ fn curve(w: &mut W, s: &S, id: u64, a: V3, b: V3, closed: bool) -> Result<i64> {
             p.extend([real(t0), real(t1), real(0.0), real(0.0), real(0.0)]);
             Ok(w.add(126, 0, p))
         }
+        // A seam (a whole torus's equator or meridian) is its 3D curve; IGES has no seam entity.
+        "SEAM_CURVE" | "SURFACE_CURVE" => curve(w, s, s.r(e.params().get(1))?, a, b, closed),
         n => Err(KernelError::Failed(format!("IGES export: curve {n} is not written yet"))),
     }
 }
