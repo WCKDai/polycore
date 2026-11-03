@@ -1170,19 +1170,37 @@ fn blend(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str) -> Resul
 /// a curved face (the last resort, after the corner build for an earlier round there).
 fn blend_with(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, curved_ends: bool) -> Result<Body> {
     let sound = |b: &Body| crate::tess::boundaries_on_surfaces(&b.solid, (b.size() * 1e-4).max(1e-6));
-    let first = blend_in_order(body, edges, r, shape, what, curved_ends);
+    try_orders(edges, sound, |order, progress| blend_in_order(body, order, r, shape, what, curved_ends, progress))
+}
+
+/// Run `blend_one_order` on `edges`, then on their other orders when it is refused (or leaves an
+/// unsound face). `sound` says whether a result is acceptable as it is; `blend_one_order` sets its
+/// flag once it has blended an edge.
+fn try_orders<F>(edges: &[Vec3], sound: impl Fn(&Body) -> bool, mut blend_one_order: F) -> Result<Body>
+where
+    F: FnMut(&[Vec3], &mut bool) -> Result<Body>,
+{
+    let mut progress = false;
+    let first = blend_one_order(edges, &mut progress);
     let reorder = (2..=MAX_REORDERED).contains(&edges.len())
         && match &first {
             Ok(b) => !sound(b),
-            Err(KernelError::Failed(_)) => true,
+            // A refusal before any edge was blended is order-independent: every order is refused alike.
+            Err(KernelError::Failed(_)) => progress,
             Err(_) => false,
         };
     if !reorder {
         return first;
     }
     let mut fallback: Option<Body> = None;
+    let mut tried: Vec<Vec<Vec3>> = vec![edges.to_vec()];
     for order in orders(edges).into_iter().skip(1) {
-        if let Ok(done) = blend_in_order(body, &order, r, shape, what, curved_ends) {
+        // Picks repeated (the same point twice) give the same order again.
+        if tried.contains(&order) {
+            continue;
+        }
+        tried.push(order.clone());
+        if let Ok(done) = blend_one_order(&order, &mut false) {
             if sound(&done) {
                 return Ok(done);
             }
@@ -1199,7 +1217,8 @@ fn blend_with(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, cur
     }
 }
 
-fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, curved_ends: bool) -> Result<Body> {
+/// `progress` is set once an edge has been blended (so a refusal after that depends on the order).
+fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, curved_ends: bool, progress: &mut bool) -> Result<Body> {
     if !(r.is_finite() && r > 1e-6 && r < 1e6) {
         return Err(KernelError::Invalid(format!("{what} size must be positive")));
     }
@@ -1252,8 +1271,9 @@ fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str,
     {
         let _ = groups;
         let loop_pts: Vec<Vec3> = edges.iter().filter(|p| !rest.iter().any(|q| q.dist(**p) < 1e-12)).copied().collect();
-        cur = record::after(blend_in_order(&cur, &rest, r, shape, what, curved_ends)?, &cur, &counts);
-        return Ok(record::after(blend_in_order(&cur, &loop_pts, r, shape, what, curved_ends)?, &cur, &counts));
+        cur = record::after(blend_in_order(&cur, &rest, r, shape, what, curved_ends, progress)?, &cur, &counts);
+        *progress = true;
+        return Ok(record::after(blend_in_order(&cur, &loop_pts, r, shape, what, curved_ends, progress)?, &cur, &counts));
     }
     // A loop the loop blend refuses for its shape (seams that aren't straight, walls it can't
     // trim) is blended edge by edge below instead: a ball rolls along its smooth chain.
@@ -1275,17 +1295,29 @@ fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str,
             Ok(lc)
         };
         match whole() {
-            Ok(b) => return Ok(b),
+            Ok(b) => {
+                *progress = true;
+                return Ok(b);
+            }
             // Too large for the loop (or using up some of its walls) is so edge by edge too.
             Err(e) if size_refusal(&e) => return Err(e),
             Err(_) => {}
         }
     }
-    blend_each(cur, edges, r, shape, what, &counts, curved_ends)
+    blend_each(cur, edges, r, shape, what, &counts, curved_ends, progress)
 }
 
 /// The edges blended one at a time (see [`blend`]), `cur` being the healed body.
-fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, counts: &[(usize, usize)], curved_ends: bool) -> Result<Body> {
+fn blend_each(
+    mut cur: Body,
+    edges: &[Vec3],
+    r: f64,
+    shape: Shape,
+    what: &str,
+    counts: &[(usize, usize)],
+    curved_ends: bool,
+    progress: &mut bool,
+) -> Result<Body> {
     let counts = counts.to_vec();
     // One at a time, in whatever order works: a run along a planar face's loop (bridging arcs
     // that earlier blends left between selected edges, so corners round off), a single edge,
@@ -1335,6 +1367,7 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
             let near = edges_box(&solid, &ids, r + tol);
             refused.retain(|(_, b, _)| !boxes_meet(b, &near));
             cur = record::after(b, &cur, &counts);
+            *progress = true;
             todo.retain(|p| !covered.iter().any(|q| q.dist(*p) < 1e-12));
             continue;
         }
@@ -1457,6 +1490,7 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
             Some((b, js, near)) => {
                 refused.retain(|(_, b2, _)| !boxes_meet(b2, &near));
                 cur = record::after(b, &cur, &counts);
+                *progress = true;
                 let mut k = 0;
                 todo.retain(|_| {
                     let keep = !js.contains(&k);
@@ -2616,6 +2650,106 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn picks() -> Vec<Vec3> {
+        vec![Vec3::new(1.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0)]
+    }
+
+    fn unit() -> Body {
+        crate::build::box_solid(Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0)).unwrap()
+    }
+
+    #[test]
+    fn a_refusal_before_any_edge_is_blended_is_tried_in_one_order() {
+        let mut orders_tried = 0;
+        let e = try_orders(
+            &picks(),
+            |_| true,
+            |_, _| {
+                orders_tried += 1;
+                Err(KernelError::Failed("not supported yet: x".into()))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(orders_tried, 1);
+        assert!(matches!(&e, KernelError::Failed(m) if m == "not supported yet: x"), "{e}");
+    }
+
+    #[test]
+    fn a_refusal_after_an_edge_is_blended_tries_the_other_orders() {
+        let mut seen: Vec<Vec<Vec3>> = Vec::new();
+        let e = try_orders(
+            &picks(),
+            |_| true,
+            |order, progress| {
+                seen.push(order.to_vec());
+                *progress = true;
+                Err(KernelError::Failed(format!("order {}", seen.len())))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(seen.len(), 6);
+        assert_eq!(seen.first(), Some(&picks()));
+        assert!(matches!(&e, KernelError::Failed(m) if m == "order 1"), "the first order's error is kept: {e}");
+        // A later order that works is taken.
+        let mut n = 0;
+        let ok = try_orders(
+            &picks(),
+            |_| true,
+            |_, progress| {
+                n += 1;
+                *progress = true;
+                if n == 3 { Ok(unit()) } else { Err(KernelError::Failed("x".into())) }
+            },
+        );
+        assert!(ok.is_ok());
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn repeated_picks_do_not_repeat_an_order() {
+        let p = picks();
+        let dup = vec![p[0], p[0], p[1]];
+        let mut n = 0;
+        let _ = try_orders(
+            &dup,
+            |_| true,
+            |_, progress| {
+                n += 1;
+                *progress = true;
+                Err(KernelError::Failed("x".into()))
+            },
+        );
+        assert_eq!(n, 3, "3 distinct orders of a, a, b");
+    }
+
+    #[test]
+    fn other_refusals_never_reorder() {
+        let mut n = 0;
+        let _ = try_orders(
+            &picks(),
+            |_| true,
+            |_, progress| {
+                n += 1;
+                *progress = true;
+                Err(KernelError::TooLarge("x".into()))
+            },
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn a_fillet_that_blends_nothing_before_refusal_sets_no_progress() {
+        // A box edge pick away from any edge is refused (Invalid) before anything is blended.
+        let body = unit();
+        let mut progress = false;
+        let far = Vec3::new(50.0, 50.0, 50.0);
+        assert!(blend_in_order(&body, &[far], 0.1, Shape::Round, "fillet", false, &mut progress).is_err());
+        assert!(!progress);
+        // A blendable edge sets it.
+        assert!(blend_in_order(&body, &[Vec3::new(1.0, 0.0, 0.5)], 0.1, Shape::Round, "fillet", false, &mut progress).is_ok());
+        assert!(progress);
+    }
     use polycore_geom::{Loop2, Plane, Region2, Vec2};
 
     #[test]
