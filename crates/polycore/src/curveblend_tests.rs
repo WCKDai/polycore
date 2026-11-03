@@ -1109,12 +1109,16 @@ fn a_fillet_whose_setback_varies_along_a_floor_arc_is_right_or_refused() {
     }
 }
 
-/// An L-shaped body and four of its edges: a refused fillet that tries many edge orders.
+/// An L-shaped body and three of its edges: the vertical edge in its inside corner, the top edge
+/// running into that corner and the outer vertical edge at the top edge's other end. A fillet of
+/// 3 blends the first edges of any order, then the last is refused for ending in an earlier round,
+/// so every order is tried before the fillet is refused: a refused fillet that tries many edge
+/// orders after blending something (a refusal before any blend is tried in one order only).
 fn l_body_and_picks() -> (Body, Vec<Vec3>) {
-    let a = crate::box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
-    let b = crate::box_solid(Vec3::new(5.0, 5.0, 0.0), Vec3::new(20.0, 20.0, 10.0)).unwrap();
+    let a = crate::box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
+    let b = crate::box_solid(Vec3::new(10.0, 10.0, 0.0), Vec3::new(40.0, 40.0, 20.0)).unwrap();
     let body = boolean(&a, &b, BoolOp::Union).unwrap().unwrap();
-    let picks = vec![Vec3::new(5.0, 10.0, 10.0), Vec3::new(10.0, 5.0, 10.0), Vec3::new(10.0, 10.0, 5.0), Vec3::new(0.0, 5.0, 5.0)];
+    let picks = vec![Vec3::new(20.0, 10.0, 10.0), Vec3::new(20.0, 5.0, 20.0), Vec3::new(20.0, 0.0, 10.0)];
     (body, picks)
 }
 
