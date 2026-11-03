@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use crate::body::{Body, Solid, from_p3};
 use crate::boolean_diagnostics::{BooleanFallback, BooleanStrategy, capture_boolean_diagnostics, merge, record, reject};
 use crate::boolean_record::{self as recorded, Traced};
-use crate::{KernelError, Result, guard, record};
+use crate::{KernelError, Result, budget, guard, record};
 
 #[cfg(test)]
 #[path = "bore_union_tests.rs"]
@@ -963,42 +963,55 @@ fn take_attempt() -> bool {
 /// The result carries its exact history ([`Body::history`]) over the operands `[a, b]`,
 /// whichever way it was made, or none where a step it took does not report one.
 pub fn boolean(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
-    crate::profile::timed(crate::profile::Kind::Boolean, || boolean_untimed(a, b, op))
+    crate::profile::timed(crate::profile::Kind::Boolean, || budget::stop_or(boolean_untimed(a, b, op)))
 }
 
+/// The retry ladder of a boolean. Each stage takes one unit of the work budget and checks the
+/// watch before it starts, so cancelled or spent work stops between stages; an error that is
+/// such a stop ends the ladder instead of being tried around.
 fn boolean_untimed(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
+    budget::checkpoint("boolean hollow tool")?;
     if let Some(r) = with_hollow_tool(a, b, op) {
         return finished(a, b, op, Ok(r));
     }
     // Earlier coarse bores can leave a junction a later pattern copy cannot intersect.
     // Resolve conical-cut junctions from the first copy, while the operands are unchanged.
     if op == BoolOp::Cut && !APART.with(|c| c.get()) && conical_cut_junction(a, b) {
+        budget::checkpoint("boolean conical junction")?;
         let refined = |a: &Body, b: &Body, op| boolean_whole_with_refinement(a, b, op, true);
-        if let Ok(result) = boolean_via(a, b, op, &refined) {
-            return Ok(result);
+        match boolean_via(a, b, op, &refined) {
+            Ok(result) => return Ok(result),
+            Err(e) if budget::is_stop(&e) => return Err(e),
+            Err(_) => {}
         }
     }
+    budget::checkpoint("boolean whole")?;
     let r = boolean_via(a, b, op, &boolean_whole);
-    if r.is_err()
-        && op == BoolOp::Cut
-        && !APART.with(|c| c.get())
-        && let Some(result) = tool_reseam::cut(a, b)
+    if let Err(e) = &r
+        && budget::is_stop(e)
     {
-        return Ok(Some(result));
+        return r;
+    }
+    if r.is_err() && op == BoolOp::Cut && !APART.with(|c| c.get()) {
+        budget::checkpoint("boolean tool reseam")?;
+        if let Some(result) = tool_reseam::cut(a, b) {
+            return Ok(Some(result));
+        }
     }
     // A tool tangent to the target along a curve in one of its planes (a sphere capping a
     // cylinder of its radius): once more with the tool split along that plane. Only after a
     // failure: a refusal (a join along an edge alone) stands.
-    if matches!(r, Err(KernelError::Failed(_)))
-        && op == BoolOp::Union
-        && !APART.with(|c| c.get())
-        && let Some(result) = crate::tangent_split::union(a, b, &boolean)
-    {
-        return Ok(Some(result));
+    if matches!(r, Err(KernelError::Failed(_))) && op == BoolOp::Union && !APART.with(|c| c.get()) {
+        budget::checkpoint("boolean tangent split")?;
+        if let Some(result) = crate::tangent_split::union(a, b, &boolean) {
+            return Ok(Some(result));
+        }
+        budget::halted()?;
     }
     if r.is_ok() || !crate::tangent_cylinders::needed(a, b) {
         return r;
     }
+    budget::checkpoint("boolean tangent cylinders")?;
     // Equal cylinders crossing each other touch at two points the boolean cannot take in the
     // middle of a face (#788): once more with the faces split along them.
     let split = |a: &Body, b: &Body, op| {
@@ -1023,6 +1036,11 @@ fn conical_cut_junction(a: &Body, b: &Body) -> bool {
 /// [`boolean`], the boolean of the whole bodies taken by `whole`.
 fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, BoolOp) -> Result<Option<Body>>) -> Result<Option<Body>> {
     let (mut r, mut diagnostics) = capture_boolean_diagnostics(|| whole(a, b, op));
+    if let Err(e) = &r
+        && budget::is_stop(e)
+    {
+        return r;
+    }
     // Bodies in several pieces: when the whole failed (or came out empty), a piece at a time.
     let retry = match &r {
         Err(_) => true,
@@ -1030,6 +1048,7 @@ fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, Bool
         Ok(Some(_)) => false,
     };
     if retry && (a.solid.boundaries().len() > 1 || b.solid.boundaries().len() > 1) {
+        budget::checkpoint("boolean piecewise")?;
         let (la, lb) = (a.lumps()?, b.lumps()?);
         if la.len() > 1 || lb.len() > 1 {
             let (pieces, report) = capture_boolean_diagnostics(|| by_lumps(a, b, la, lb, op));
@@ -1042,6 +1061,7 @@ fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, Bool
     }
     // A piece with sealed voids, cut clear of them: the outer shell alone, the voids put back.
     if op == BoolOp::Cut && r.is_err() {
+        budget::checkpoint("boolean around voids")?;
         let (cut, report) = capture_boolean_diagnostics(|| cut_around_voids(a, b, whole));
         if let Ok(Some(x)) = cut {
             r = Ok(Some(x));
@@ -1056,6 +1076,7 @@ fn boolean_via(a: &Body, b: &Body, op: BoolOp, whole: &dyn Fn(&Body, &Body, Bool
         // Numerical retries must not quietly alter a planar design's dimensions.
         // Prefer the exact polygon result; reject an edge-only pinch if it cannot
         // form a closed solid without displacing either operand.
+        budget::checkpoint("boolean faceted fallback")?;
         r = match crate::polybool::planar_boolean(a, b, op) {
             Ok(Some(exact)) if preserves_planar_surfaces(a, b, &exact) => {
                 diagnostics = Default::default();
@@ -2070,6 +2091,8 @@ pub(crate) fn truck_boolean(a: &Body, b: &Body, op: BoolOp, shift: Option<mt::Ve
     // small feature's refinement (TinyRex's claws), panicked into an internal error that ended
     // the boolean instead of letting it try at the finest it can.
     let tol = tol.max(TRUCK_TOLERANCE);
+    // One unit per intersection march; a spent budget or a cancelled watch is its own error.
+    budget::checkpoint("boolean intersection")?;
     if !take_attempt() {
         return Err(KernelError::Failed("no result in the tries it was given".into()));
     }

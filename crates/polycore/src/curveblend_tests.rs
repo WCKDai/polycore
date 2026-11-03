@@ -1108,3 +1108,68 @@ fn a_fillet_whose_setback_varies_along_a_floor_arc_is_right_or_refused() {
         Err(e) => assert!(matches!(e, crate::KernelError::TooLarge(_)), "{e:?}"),
     }
 }
+
+/// An L-shaped body and four of its edges: a refused fillet that tries many edge orders.
+fn l_body_and_picks() -> (Body, Vec<Vec3>) {
+    let a = crate::box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
+    let b = crate::box_solid(Vec3::new(5.0, 5.0, 0.0), Vec3::new(20.0, 20.0, 10.0)).unwrap();
+    let body = boolean(&a, &b, BoolOp::Union).unwrap().unwrap();
+    let picks = vec![Vec3::new(5.0, 10.0, 10.0), Vec3::new(10.0, 5.0, 10.0), Vec3::new(10.0, 10.0, 5.0), Vec3::new(0.0, 5.0, 5.0)];
+    (body, picks)
+}
+
+/// Cancels once `trigger` says so (read on the calling thread: the tests run single-threaded).
+struct CancelWhen<F: Fn() -> bool + Send + Sync>(F);
+impl<F: Fn() -> bool + Send + Sync> crate::watch::Watch for CancelWhen<F> {
+    fn cancelled(&self) -> bool {
+        (self.0)()
+    }
+    fn progress(&self, _: &'static str, _: usize, _: usize) {}
+}
+
+#[test]
+fn a_cancelled_fillet_stops_after_at_most_one_more_edge_order() {
+    let (body, picks) = l_body_and_picks();
+    crate::blend::ORDERS.with(|n| n.set(0));
+    let plain = fillet(&body, &picks, 3.0);
+    let all = crate::blend::ORDERS.with(|n| n.get());
+    assert!(all > 3, "the fillet should try many edge orders, tried {all}");
+    // Cancelled once the first order has begun.
+    crate::blend::ORDERS.with(|n| n.set(0));
+    let watch = std::sync::Arc::new(CancelWhen(|| crate::blend::ORDERS.with(|n| n.get()) >= 1));
+    let r = crate::watch::watching(watch, || fillet(&body, &picks, 3.0));
+    let tried = crate::blend::ORDERS.with(|n| n.get());
+    assert!(tried <= 2, "{tried} of {all} orders were tried after the cancel");
+    assert_eq!(r.unwrap_err(), crate::watch::cancelled_error("operation"), "cancelled, not refused like {:?}", plain.map(|_| ()));
+}
+
+fn on_threads<R: Send>(threads: usize, f: impl FnOnce() -> R + Send) -> R {
+    rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(f)
+}
+
+#[test]
+fn a_work_budget_stops_a_fillet_at_the_same_stage_on_every_run_and_thread_count() {
+    let (body, picks) = l_body_and_picks();
+    let unbudgeted = format!("{:?}", fillet(&body, &picks, 3.0).map(|b| b.size()));
+    let run = |units: u64| format!("{:?}", crate::with_work_budget(units, || fillet(&body, &picks, 3.0).map(|b| b.size())));
+    for units in [1, 2, 3, 5] {
+        let first = run(units);
+        assert!(first.contains("BudgetSpent"), "{units} units: {first}");
+        assert_eq!(first, run(units), "{units} units, second run");
+        assert_eq!(first, on_threads(1, || run(units)), "{units} units, 1 thread");
+        assert_eq!(first, on_threads(4, || run(units)), "{units} units, 4 threads");
+    }
+    // The stage is named, and a budget of one stops at the first order's attempt.
+    assert!(matches!(crate::with_work_budget(1, || fillet(&body, &picks, 3.0)), Err(KernelError::BudgetSpent { stage: "blend edge", limit: 1 })));
+    // Plenty of units, or none installed: the old result, and it is not a budget error.
+    assert_eq!(run(1_000_000), unbudgeted);
+    assert_eq!(on_threads(4, || run(1_000_000)), unbudgeted);
+    // A fillet that works gives the same body, and the budget counts what it took.
+    let cube = crate::box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
+    let edge = [Vec3::new(5.0, 0.0, 0.0)];
+    let plain = fillet(&cube, &edge, 1.0).unwrap();
+    let (budgeted, spent) = crate::with_work_budget(1_000_000, || (fillet(&cube, &edge, 1.0).unwrap(), crate::work_spent()));
+    assert_eq!((budgeted.size(), budgeted.solid.face_iter().count()), (plain.size(), plain.solid.face_iter().count()));
+    assert!(spent.is_some_and(|n| n >= 2), "{spent:?}");
+    assert_eq!(crate::work_spent(), None, "no budget lingers");
+}
