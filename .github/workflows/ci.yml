@@ -46,9 +46,11 @@ jobs:
       - name: Format, check, Clippy, tests, wasm and dependency boundary
         run: cargo xtask ci
 
+  # macOS on pull requests too, so a change that breaks or changes results on macOS is caught before
+  # it merges (Polykrom ships on macOS). Like the Ubuntu job, a pull request restores main's cache
+  # entries but never writes them.
   full:
     name: Rust / wasm (${{ matrix.os }})
-    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -67,6 +69,7 @@ jobs:
           shared-key: polycore-full-${{ matrix.os }}
           cache-on-failure: true
           cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Format, check, Clippy, tests, wasm and dependency boundary
         run: cargo xtask ci
 
