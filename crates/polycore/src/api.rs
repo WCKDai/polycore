@@ -235,6 +235,7 @@ impl Refusal {
             KernelError::TooLarge(_) => RefusalKind::Unsupported,
             KernelError::Internal(_) => RefusalKind::Internal,
             KernelError::Failed(_) => RefusalKind::Failed,
+            KernelError::BudgetSpent { .. } => RefusalKind::OutOfBudget,
         };
         Self::new(kind, stage, Vec::new(), error.to_string())
     }

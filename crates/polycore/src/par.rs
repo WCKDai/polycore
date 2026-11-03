@@ -8,7 +8,8 @@ use crate::{Result, guard};
 /// thread. Waking the pool's workers costs tens of microseconds, so callers ask for it only
 /// when the items carry more work than that (decided from the work, not the item count).
 pub(crate) fn map<T: Sync, R: Send>(what: &'static str, items: &[T], parallel: bool, f: impl Fn(&T) -> Result<R> + Sync) -> Vec<Result<R>> {
-    let one = |item: &T| guard(what, || f(item));
+    let fork = crate::budget::Fork::capture();
+    let one = |item: &T| fork.run(|| guard(what, || f(item)));
     // The browser build has no worker pool: everything runs on the calling thread.
     #[cfg(target_arch = "wasm32")]
     let _ = parallel;
@@ -16,10 +17,14 @@ pub(crate) fn map<T: Sync, R: Send>(what: &'static str, items: &[T], parallel: b
     {
         use rayon::prelude::*;
         if parallel && items.len() > 1 && rayon::current_num_threads() > 1 {
-            return items.par_iter().map(one).collect();
+            let out = items.par_iter().map(one).collect();
+            fork.settle();
+            return out;
         }
     }
-    items.iter().map(one).collect()
+    let out = items.iter().map(one).collect();
+    fork.settle();
+    out
 }
 
 /// Run `f` on every item, spread over plain threads (one per core, at most `max_threads`),
@@ -67,7 +72,8 @@ pub fn map_with_local_pools<T: Sync, R: Send>(items: &[T], max_threads: usize, f
 /// `f` over `items` as [`for_each_on_threads`] runs it, results in item order (`None` where an
 /// item panicked).
 pub fn map_on_threads<T: Sync, R: Send>(items: &[T], max_threads: usize, f: impl Fn(&T) -> R + Sync) -> Vec<Option<R>> {
-    let one = |item: &T| guard("parallel item", || Ok(f(item))).ok();
+    let fork = crate::budget::Fork::capture();
+    let one = |item: &T| fork.run(|| guard("parallel item", || Ok(f(item))).ok());
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -105,11 +111,14 @@ pub fn map_on_threads<T: Sync, R: Send>(items: &[T], max_threads: usize, f: impl
                     }
                 }
             });
+            fork.settle();
             return out;
         }
     }
     let _ = max_threads;
-    items.iter().map(one).collect()
+    let out = items.iter().map(one).collect();
+    fork.settle();
+    out
 }
 
 #[cfg(test)]

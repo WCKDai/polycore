@@ -33,6 +33,12 @@ pub fn watching<R>(watch: Arc<dyn Watch>, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Whether this thread's watch has cancelled its work (no watch: never). Borrows the watch, so
+/// it is cheap enough for the inside of loops.
+pub fn is_cancelled() -> bool {
+    CURRENT.with(|c| c.borrow().as_ref().is_some_and(|w| w.cancelled()))
+}
+
 /// The watch over this thread's work, to hand to the worker threads it starts.
 pub fn current() -> Option<Arc<dyn Watch>> {
     CURRENT.with(|c| c.borrow().clone())

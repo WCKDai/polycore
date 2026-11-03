@@ -13,6 +13,7 @@ use polycore_geom::{Aabb3, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
+use crate::budget;
 use crate::history::{FaceOrigin, History};
 use crate::record::{self, Rebuild};
 use crate::{KernelError, Result, guard};
@@ -1156,6 +1157,12 @@ fn orders<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
     out
 }
 
+/// The refusal `e` stands over a later try's `e2`, unless that try was stopped (its budget spent
+/// or its watch cancelled): the stop is what the caller must see.
+fn keep_stop(e: KernelError, e2: KernelError) -> KernelError {
+    if budget::is_stop(&e2) { e2 } else { e }
+}
+
 /// Blend the edges nearest the points, one at a time in an order that works. A blend ends in an
 /// earlier round where they meet, which not every order allows (a blend over a round that an
 /// edge it runs into left, or past a crease). So when the order given is refused for a reason
@@ -1181,7 +1188,14 @@ where
     F: FnMut(&[Vec3], &mut bool) -> Result<Body>,
 {
     let mut progress = false;
+    // One unit per order tried; cancelled work stops before the next one.
+    budget::checkpoint("blend edge order")?;
     let first = blend_one_order(edges, &mut progress);
+    if let Err(e) = &first
+        && budget::is_stop(e)
+    {
+        return budget::stop_or(first);
+    }
     let reorder = (2..=MAX_REORDERED).contains(&edges.len())
         && match &first {
             Ok(b) => !sound(b),
@@ -1200,7 +1214,14 @@ where
             continue;
         }
         tried.push(order.clone());
-        if let Ok(done) = blend_one_order(&order, &mut false) {
+        budget::checkpoint("blend edge order")?;
+        let attempt = blend_one_order(&order, &mut false);
+        if let Err(e) = &attempt
+            && budget::is_stop(e)
+        {
+            return budget::stop_or(attempt);
+        }
+        if let Ok(done) = attempt {
             if sound(&done) {
                 return Ok(done);
             }
@@ -1219,6 +1240,8 @@ where
 
 /// `progress` is set once an edge has been blended (so a refusal after that depends on the order).
 fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, curved_ends: bool, progress: &mut bool) -> Result<Body> {
+    #[cfg(test)]
+    ORDERS.with(|n| n.set(n.get() + 1));
     if !(r.is_finite() && r > 1e-6 && r < 1e6) {
         return Err(KernelError::Invalid(format!("{what} size must be positive")));
     }
@@ -1281,6 +1304,7 @@ fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str,
         let whole = || -> Result<Body> {
             let mut lc = cur.clone();
             for g in groups {
+                budget::checkpoint("loop blend")?;
                 let size = lc.size();
                 let solid = lc.deep_copy();
                 let ids = edge_ids(&lc, &solid, &g)?;
@@ -1300,7 +1324,7 @@ fn blend_in_order(body: &Body, edges: &[Vec3], r: f64, shape: Shape, what: &str,
                 return Ok(b);
             }
             // Too large for the loop (or using up some of its walls) is so edge by edge too.
-            Err(e) if size_refusal(&e) => return Err(e),
+            Err(e) if size_refusal(&e) || budget::is_stop(&e) => return Err(e),
             Err(_) => {}
         }
     }
@@ -1356,6 +1380,7 @@ fn blend_each(
         if todo.is_empty() {
             return Ok(cur);
         }
+        budget::cancel_point("blend")?;
         let size = cur.size();
         let tol = (size * 2e-3).max(1e-3);
         let solid = cur.deep_copy();
@@ -1396,6 +1421,9 @@ fn blend_each(
                 }
                 continue;
             }
+            // One unit per edge attempted; cancelled work tries no more. Outside the attempt, so
+            // the stop is not taken for a refusal of the edge.
+            budget::checkpoint("blend edge")?;
             // Roll a ball along the edge's smooth chain (the points of `todo` on it go with it).
             let roll = |ids: &[mt::EdgeID]| {
                 let on_chain: Vec<usize> = todo
@@ -1506,6 +1534,8 @@ fn blend_each(
 
 #[cfg(test)]
 thread_local! {
+    /// Edge orders tried by [`blend_with`] on this thread (tests count them).
+    pub(crate) static ORDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Rolling-ball attempts made by [`blend`] on this thread (tests count them).
     pub(crate) static ROLLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1885,7 +1915,8 @@ pub fn fillet(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     let size = crate::blend_fit::Size::Round(radius);
     match fillet_built(body, edges, radius) {
         Ok(b) => crate::blend_fit::accept(body, b, edges, size),
-        Err(e) => Err(crate::blend_fit::explain(body, edges, size, e)),
+        Err(e) if budget::is_stop(&e) => budget::stop_or(Err(e)),
+        Err(e) => budget::stop_or(Err(crate::blend_fit::explain(body, edges, size, e))),
     }
 }
 
@@ -1895,6 +1926,7 @@ fn fillet_built(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     blend(body, edges, radius, Shape::Round, "fillet")
         .and_then(|b| closed(body, b))
         .or_else(|e| {
+            budget::halted()?;
             let sel: Vec<(Vec3, f64)> = edges.iter().map(|p| (*p, radius)).collect();
             // The local blend's refusal, unless only the corner build found the radius too large.
             crate::blend_corner::fillet_radii(body, &sel)
@@ -1902,8 +1934,9 @@ fn fillet_built(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
                 .map_err(|e2| keep_size(e, e2))
                 // Three edges at a vertex of any faces end in a sphere.
                 .or_else(|e| {
+                    budget::halted()?;
                     if edges.len() >= 3 {
-                        crate::blend_vertex::fillet_ball_vertices(body, edges, radius).and_then(|b| closed(body, b)).map_err(|_| e)
+                        crate::blend_vertex::fillet_ball_vertices(body, edges, radius).and_then(|b| closed(body, b)).map_err(|e2| keep_stop(e, e2))
                     } else {
                         Err(e)
                     }
@@ -1911,13 +1944,22 @@ fn fillet_built(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
         })
         // Straight edges ending at a curved face that isn't an earlier round's: a rolling ball
         // trimmed by the face. Refused, the refusal above stands.
-        .or_else(|e| blend_with(body, edges, radius, Shape::Round, "fillet", true).and_then(|b| closed(body, b)).map_err(|_| e))
+        .or_else(|e| {
+            budget::halted()?;
+            blend_with(body, edges, radius, Shape::Round, "fillet", true).and_then(|b| closed(body, b)).map_err(|e2| keep_stop(e, e2))
+        })
         // Blends meeting at corners on curved faces: all at once.
-        .or_else(|e| corners(body, edges, radius, Shape::Round, "fillet", false).and_then(|b| closed(body, b)).map_err(|e2| keep_size(e, e2)))
+        .or_else(|e| {
+            budget::halted()?;
+            corners(body, edges, radius, Shape::Round, "fillet", false).and_then(|b| closed(body, b)).map_err(|e2| keep_size(e, e2))
+        })
 }
 
 /// The first refusal, unless only the second found the blend too large (a smaller one may fit).
 fn keep_size(e: KernelError, e2: KernelError) -> KernelError {
+    if budget::is_stop(&e2) {
+        return e2;
+    }
     match (&e, e2) {
         (KernelError::TooLarge(_), _) => e,
         (_, e2 @ KernelError::TooLarge(_)) => e2,
@@ -2127,7 +2169,8 @@ pub fn chamfer(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
     let size = crate::blend_fit::Size::Chamfer(distance);
     match chamfer_built(body, edges, distance) {
         Ok(b) => crate::blend_fit::accept(body, b, edges, size),
-        Err(e) => Err(crate::blend_fit::explain(body, edges, size, e)),
+        Err(e) if budget::is_stop(&e) => budget::stop_or(Err(e)),
+        Err(e) => budget::stop_or(Err(crate::blend_fit::explain(body, edges, size, e))),
     }
 }
 
@@ -2159,12 +2202,14 @@ fn chamfer_built(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
         let h = cut_history(crate::boolean_record::through(&r, 1, h.as_ref()), body, tools);
         Some(r.with_checked_history(h, &counts))
     };
+    budget::checkpoint("chamfer cutters")?;
     if !notch
         && let Ok(tools) = &tools
         && let Some(r) = batch(tools)
     {
         return Ok(r);
     }
+    budget::halted()?;
     // At a pocket rim the cutters cannot extend beyond the selected edges. Rebuild
     // the corners locally, allowing adjacent chamfers to reach different depths
     // on their common wall seam.
@@ -2180,6 +2225,7 @@ fn chamfer_built(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
         let whole = || -> Result<Body> {
             let mut lc = cur.clone();
             for g in groups {
+                budget::checkpoint("loop blend")?;
                 let size = lc.size();
                 let solid = lc.deep_copy();
                 let ids = edge_ids(&lc, &solid, &g)?;
@@ -2197,7 +2243,7 @@ fn chamfer_built(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
         // the same way); too large stays too large.
         match whole() {
             Ok(b) => return Ok(b),
-            Err(e) if size_refusal(&e) => return Err(e),
+            Err(e) if size_refusal(&e) || budget::is_stop(&e) => return Err(e),
             Err(_) => {}
         }
     }
@@ -2224,7 +2270,7 @@ fn chamfer_built(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
         // A chain running on into curved faces, or an edge ending at one: as for fillets.
         let blend_or_curved = |cur: &Body, p: &Vec3| -> Result<Body> {
             blend(cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer")
-                .or_else(|e| blend_with(cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer", true).map_err(|_| e))
+                .or_else(|e| blend_with(cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer", true).map_err(|e2| keep_stop(e, e2)))
                 .or_else(|e| {
                     chamfer_tool_curved(cur, *p, distance)
                         .and_then(|tool| cut_one(cur, &tool)?.ok_or_else(|| KernelError::Failed("the chamfer removed everything".into())))
@@ -2232,6 +2278,7 @@ fn chamfer_built(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
                 })
         };
         for p in edges {
+            budget::checkpoint("chamfer edge")?;
             let tool = chamfer_tool(&cur, *p, distance, 0);
             // The extension is inside the wall. The local blend is one bevel on a hole corner.
             // Where that blend cannot build the edge, the cutter is what used to succeed (#814).
@@ -2268,7 +2315,10 @@ fn chamfer_built(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
         Ok(cur)
     };
     // Chamfers meeting at corners on curved faces: all at once.
-    one_by_one().or_else(|e| corners(body, edges, distance, Shape::Flat, "chamfer", false).map_err(|e2| keep_size(e, e2)))
+    one_by_one().or_else(|e| {
+        budget::halted()?;
+        corners(body, edges, distance, Shape::Flat, "chamfer", false).map_err(|e2| keep_size(e, e2))
+    })
 }
 
 /// `cur` cut by one cutter, with its history over `[cur]` (`None`: nothing left).
