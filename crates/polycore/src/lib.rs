@@ -28,6 +28,7 @@ mod bore_guard;
 mod boundary;
 mod boundary_network;
 mod bridge;
+mod budget;
 mod build;
 mod candidate_reach;
 #[cfg(test)]
@@ -171,6 +172,7 @@ pub use bridge::{
     BLEND_TANGENT, BLEND_TANGENT_RANGE, Continuity, Frame, LEGACY_BLEND_TANGENT, blend_between, blend_between_tangent, bridge, bridge_tangent, chain,
     chain_closes, frames, frames_across, sample_grid,
 };
+pub use budget::{with_work_budget, work_spent};
 pub use build::{
     PathSeg, box_solid, canonical_revolve_axis, cylinder, extrude, extrude_tapered, extrude_tapered_between, extrude_whole_sides, loft, loft_regions,
     loft_with_rails, path_polyline, revolve, revolve_whole, sphere, sweep, sweep_with, torus,
@@ -244,6 +246,12 @@ pub enum KernelError {
     /// The third-party kernel panicked; the model is unchanged.
     #[error("kernel internal error: {0}")]
     Internal(String),
+    /// The work budget installed with [`with_work_budget`] ran out at `stage` (`limit` units
+    /// were allowed). Not a refusal of the input and not a cancellation: the same input with
+    /// the same budget stops at the same stage on every machine. Added after the variants above,
+    /// whose meaning is unchanged.
+    #[error("the operation stopped: the work budget of {limit} units was spent at {stage}")]
+    BudgetSpent { stage: &'static str, limit: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, KernelError>;
