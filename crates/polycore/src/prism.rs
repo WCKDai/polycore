@@ -2450,14 +2450,21 @@ fn stack_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>>
 }
 
 /// [`prism_boolean`] of stepped prisms, the operands' indexes given. A union is taken of
-/// operands that end at a common level when `common_cap` is set, else of those that don't (see
-/// [`prism_union_between_caps`]).
+/// operands that end at a common level when `common_cap` is set, else of those that don't, and
+/// an intersection only when it is unset (see [`prism_boolean_between_caps`]).
 fn stack_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2], common_cap: bool) -> Option<Result<Option<Body>>> {
     // Common-cap joins and overlapping partial-depth cuts of aligned stepped prisms can
     // retain their exact section boundaries instead of intersecting meshes.
     // Nonaligned bodies retain their existing B-rep path.
-    if !matches!(op, BoolOp::Union | BoolOp::Cut) {
-        return None;
+    // An intersection takes this route only once the B-rep boolean has failed
+    // ([`prism_boolean_between_caps`], `common_cap` unset): two cylinders with parallel axes
+    // that touch along a line, one reaching past the other's cap (polycore#32), meet in a
+    // contact inside their walls that no mesh intersection can trace. In 2D their sections
+    // are two tangent circles, which the arc boolean takes exactly.
+    match op {
+        BoolOp::Union | BoolOp::Cut => {}
+        BoolOp::Intersect if !common_cap => {}
+        BoolOp::Intersect => return None,
     }
     if op == BoolOp::Cut && a.face_count().saturating_add(b.face_count()) > 2048 {
         return None;
@@ -2478,7 +2485,8 @@ fn stack_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2], comm
             BoolOp::Union if shared != common_cap => return None,
             // A cut tool may extend past a cap into empty space. Exact slab sections
             // discard that space rather than intersecting coincident cylinder walls.
-            BoolOp::Cut if ea.1 <= eb.0 + tol || eb.1 <= ea.0 + tol => return None,
+            // Operands apart along the direction share nothing: the B-rep boolean's own answer.
+            BoolOp::Cut | BoolOp::Intersect if ea.1 <= eb.0 + tol || eb.1 <= ea.0 + tol => return None,
             _ => {}
         }
         Some((d, plane, pa, pb))
@@ -2491,13 +2499,14 @@ fn stack_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2], comm
     let mut output_edges = 0usize;
     let area =
         |rs: &[Region2]| rs.iter().map(|r| r.outer.signed_area().abs() - r.holes.iter().map(|h| h.signed_area().abs()).sum::<f64>()).sum::<f64>();
-    // Whether some slab's section came out other than the target's (else the tool missed it).
-    let mut changed = false;
+    // Whether some slab's section came out other than the target's (else the tool missed it),
+    // and other than the tool's (else an intersection is the tool whole).
+    let (mut changed, mut changed_tool) = (false, false);
     let edges = |regions: &[Region2]| regions.iter().flat_map(|r| std::iter::once(&r.outer).chain(&r.holes)).map(|l| l.segs.len()).sum::<usize>();
     for w in levels.windows(2) {
         let (lo, hi) = (*w.first()?, *w.get(1)?);
         let (x, y) = (section(&pa, lo, hi, tol), section(&pb, lo, hi, tol));
-        let before = area(&x.regions);
+        let (before, before_tool) = (area(&x.regions), area(&y.regions));
         if op == BoolOp::Cut {
             let count = edges(&x.regions).saturating_add(edges(&y.regions));
             work = work.saturating_add(count.saturating_mul(count));
@@ -2511,7 +2520,9 @@ fn stack_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2], comm
             (_, true, _) => x,
             _ => boolean2d_tagged(&x, &y, op, tol)?,
         };
-        changed |= !same_area(area(&s.regions), before, tol);
+        let after = area(&s.regions);
+        changed |= !same_area(after, before, tol);
+        changed_tool |= !same_area(after, before_tool, tol);
         if op == BoolOp::Cut {
             output_edges = output_edges.saturating_add(edges(&s.regions));
             if output_edges > 8192 {
@@ -2523,9 +2534,10 @@ fn stack_indexed(a: &Body, b: &Body, op: BoolOp, [ia, ib]: [&LazyIndex; 2], comm
     if slabs.iter().all(|s| s.regions.is_empty()) {
         return Some(Ok(None));
     }
-    // A cut that takes nothing leaves the target as it is: the B-rep boolean reuses it itself,
-    // where this would rebuild it.
-    if op == BoolOp::Cut && !changed {
+    // A cut that takes nothing leaves the target as it is, and an intersection that is one
+    // operand whole leaves that operand as it is: the B-rep boolean reuses it itself, where
+    // this would rebuild it.
+    if (op == BoolOp::Cut && !changed) || (op == BoolOp::Intersect && (!changed || !changed_tool)) {
         return None;
     }
     let history = lineage::Context::new(op, [a, b], [ia.get(), ib.get()], plane, tol, None);
@@ -2570,12 +2582,17 @@ pub(crate) fn prism_boolean(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Opt
 }
 
 /// [`prism_boolean`] of a union of stepped prisms along one direction that end at different
-/// levels (a barrel joined between two faces of a wider part, its ends flush with them), which
-/// that route leaves to the B-rep boolean: for when that boolean has failed. `None` for other
-/// operations and operands.
-pub(crate) fn prism_union_between_caps(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
-    if op != BoolOp::Union {
-        return None;
+/// levels (a barrel joined between two faces of a wider part, its ends flush with them), or of
+/// an intersection of stepped prisms (two cylinders with parallel axes touching along a line,
+/// one reaching past the other's cap, polycore#32), which that route leaves to the B-rep
+/// boolean: for when that boolean has failed. The intersection is taken only for operands with
+/// such cylinders ([`crate::tangent_cylinders::parallel_touching`]): any other intersection the
+/// B-rep boolean failed stays refused as before. `None` for a cut and for other operands.
+pub(crate) fn prism_boolean_between_caps(a: &Body, b: &Body, op: BoolOp) -> Option<Result<Option<Body>>> {
+    match op {
+        BoolOp::Union => {}
+        BoolOp::Intersect if crate::tangent_cylinders::parallel_touching(a, b) => {}
+        _ => return None,
     }
     let index = [&LazyIndex::new(a, 0), &LazyIndex::new(b, 1)];
     crate::guard("prism boolean", || Ok(stack_indexed(a, b, op, index, false))).ok().flatten()
@@ -2995,6 +3012,42 @@ mod planar_tests {
         assert!(over_budget.face_count() > 2048);
         assert!(stack_boolean(&over_budget, &interior, BoolOp::Cut).is_none());
         assert_eq!(crate::step_export(&[&stock], "unchanged source").unwrap(), before);
+    }
+    /// Two cylinders with parallel axes touching along a line, the smaller reaching past the
+    /// larger's cap (polycore#32): their intersection is taken in 2D once the B-rep boolean has
+    /// failed (`common_cap` unset), and only then. One that is an operand whole, or of operands
+    /// apart along the axis, is left to the B-rep boolean, which answers it with that operand.
+    #[test]
+    fn stepped_prism_intersection_is_the_fallback_of_touching_cylinders() {
+        let pi = std::f64::consts::PI;
+        let big = crate::cylinder(Vec3::new(12.5, 2.5, 20.0), Vec3::Y, 10.0, 15.0).unwrap();
+        let small = crate::cylinder(Vec3::new(15.0, 5.0, 20.0), Vec3::Y, 7.5, 15.0).unwrap();
+        let fallback = |a: &Body, b: &Body| stack_indexed(a, b, BoolOp::Intersect, [&LazyIndex::new(a, 0), &LazyIndex::new(b, 1)], false);
+        assert!(stack_boolean(&big, &small, BoolOp::Intersect).is_none(), "asked early, the B-rep boolean keeps its path");
+        for (a, b) in [(&big, &small), (&small, &big)] {
+            let body = fallback(a, b).expect("stepped prisms").unwrap().unwrap();
+            assert!(body.validity().is_empty(), "{:?}", body.validity());
+            assert_eq!(body.shell_count(), 1);
+            let want = pi * 7.5 * 7.5 * 12.5;
+            let got = crate::measure(&body).unwrap().volume;
+            assert!((got - want).abs() < 1e-6 * want, "{got} vs {want}");
+            assert_eq!(body.history().map(|h| h.faces.len()), Some(body.face_count()));
+        }
+        // Wholly inside along the axis too: the intersection is the smaller cylinder itself.
+        let inside = crate::cylinder(Vec3::new(15.0, 5.0, 20.0), Vec3::Y, 7.5, 10.0).unwrap();
+        assert!(fallback(&big, &inside).is_none());
+        assert!(fallback(&inside, &big).is_none());
+        // Apart along the axis: nothing shared.
+        let above = crate::cylinder(Vec3::new(15.0, 20.0, 20.0), Vec3::Y, 7.5, 10.0).unwrap();
+        assert!(fallback(&big, &above).is_none());
+        // The fallback takes the touching cylinders and leaves other intersections alone, such
+        // as a cylinder clear of the other's wall (the B-rep boolean's own case).
+        assert!(prism_boolean_between_caps(&big, &small, BoolOp::Intersect).is_some());
+        let clear = crate::cylinder(Vec3::new(14.0, 5.0, 20.0), Vec3::Y, 7.5, 15.0).unwrap();
+        assert!(prism_boolean_between_caps(&big, &clear, BoolOp::Intersect).is_none());
+        let bx = crate::box_solid(Vec3::new(10.0, 5.0, 15.0), Vec3::new(20.0, 25.0, 25.0)).unwrap();
+        assert!(prism_boolean_between_caps(&big, &bx, BoolOp::Intersect).is_none());
+        assert!(prism_boolean_between_caps(&big, &small, BoolOp::Cut).is_none());
     }
     #[test]
     fn curved_prism_wall_requires_positive_separable_rational_weights() {

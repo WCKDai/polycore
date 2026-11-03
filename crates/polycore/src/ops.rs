@@ -1308,9 +1308,31 @@ fn plausible(v: f64, op: BoolOp, va: f64, vb: f64, slack: f64) -> bool {
 type Route = fn(&Body, &Body, BoolOp) -> Option<Result<Option<Body>>>;
 
 /// A prism route's result (`route`: [`crate::prism::prism_boolean`] or
-/// [`crate::prism::prism_union_between_caps`]): `Some` when both operands are prisms along one
+/// [`crate::prism::prism_boolean_between_caps`]): `Some` when both operands are prisms along one
 /// direction, with a union's slab seams healed as the general B-rep boolean does.
 fn prism_result(a: &Body, b: &Body, op: BoolOp, size: f64, counts: &[(usize, usize)], route: Route) -> Option<Result<Option<Body>>> {
+    // Far from the origin (a hundred times the bodies' size and more) the sections lose their
+    // digits, and truck fits no plane to the wires of the sewn caps: the route works on copies
+    // moved to the origin, and its result is moved back (as `truck_boolean` shifts its
+    // operands). A move keeps the face and edge order, so the history holds for the operands as
+    // given.
+    if let Some(shift) = far_from_origin(a, b, size) {
+        let moved = |x: &Body| {
+            let lines: Vec<Vec<Vec3>> = x.split_keep().iter().map(|l| l.iter().map(|p| *p + shift).collect()).collect();
+            transform(x, shift, Vec3::ZERO, Vec3::Z, 0.0).ok().map(|m| m.with_split_lines((!lines.is_empty()).then(|| std::sync::Arc::new(lines))))
+        };
+        let (ma, mb) = (moved(a)?, moved(b)?);
+        return prism_result(&ma, &mb, op, size, counts, route).map(|r| {
+            r.and_then(|result| {
+                result
+                    .map(|body| {
+                        let history = body.history().cloned();
+                        Ok(transform(&body, shift * -1.0, Vec3::ZERO, Vec3::Z, 0.0)?.with_checked_history(history, counts))
+                    })
+                    .transpose()
+            })
+        });
+    }
     // Slab-by-slab prism booleans sew a closed solid, but leave cap and wall pieces along slab
     // boundaries: a cut along Z through a box whose side wall already has a port in it splits
     // that wall into strips at the port's top and bottom, though the cut never touches it. Merge
@@ -1333,6 +1355,24 @@ fn prism_result(a: &Body, b: &Body, op: BoolOp, size: f64, counts: &[(usize, usi
         })
     })
 }
+
+/// The move that brings bodies far from the origin to it, for [`prism_result`]: `None` for
+/// bodies within a hundred times their size of it, which keep their digits as they are.
+fn far_from_origin(a: &Body, b: &Body, size: f64) -> Option<Vec3> {
+    if a.is_mesh() || b.is_mesh() || !(size > 0.0 && size.is_finite()) {
+        return None;
+    }
+    let mut bx = polycore_geom::Aabb3::EMPTY;
+    for v in a.solid.vertex_iter().chain(b.solid.vertex_iter()) {
+        bx.add(from_p3(v.point()));
+    }
+    if bx.is_empty() {
+        return None;
+    }
+    let centre = bx.center();
+    (centre.is_finite() && centre.len() > 100.0 * size).then(|| centre * -1.0)
+}
+
 /// Walls swept along splines have flat B-spline tops and bottoms. With those made planes the
 /// operands are prisms, and two of them (same height, one direction) are decided in 2D: fast, and
 /// with no intersection of spline surfaces, which is what fails on them. The outlines are fitted
@@ -1832,8 +1872,11 @@ where
     // Prisms along one direction that end at different levels (a barrel joined between two
     // faces of a wider part, its ends flush with them) were left to the B-rep boolean, which
     // the coincident ends defeat, with no room to push them apart (the part goes on past
-    // them). In 2D they join exactly: asked before the tool is moved.
-    if let Some(Ok(Some(body))) = prism_result(a, b, op, size, &counts, crate::prism::prism_union_between_caps) {
+    // them). In 2D they join exactly: asked before the tool is moved. So is the intersection
+    // of such prisms (two cylinders with parallel axes touching along a line, one reaching
+    // past the other's cap, polycore#32), whose touching walls the mesh intersection cannot
+    // trace.
+    if let Some(Ok(Some(body))) = prism_result(a, b, op, size, &counts, crate::prism::prism_boolean_between_caps) {
         let (ok, v) = check(&body);
         if ok {
             return Ok(Some(body));

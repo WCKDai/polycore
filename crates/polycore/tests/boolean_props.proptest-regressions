@@ -8,3 +8,4 @@ cc 739d5cbd9e471e0ff65bc2b7c1b9a323c2e769939c73def2e74fb17b0536c1d0 # shrinks to
 cc 0f8ee4d4597db6bdec2ad2cc7e5cfe7d4ebba351e24642118135da34bf489d0c # shrinks to a = Sph { at: [20.0, 10.0, 27.5], r: 3.75 }, b = Box { at: [15.0, 0.0, 22.5], size: [7.5, 20.0, 5.0] }
 cc 2adfe5ac6b6916fa22a415348bdd7ece29ad33e8114b94dea86ba8bc39156dee # shrinks to a = Box { at: [15.0, 22.5, 0.0], size: [5.0, 5.0, 17.5] }, b = Box { at: [2.5, 12.5, 0.0], size: [12.5, 10.0, 5.0] }
 cc 3aefbe60091f4d25d21146ab674b99854e823260c85db26299692824cc25295e # shrinks to a = Cyl { at: [12.5, 2.5, 20.0], axis: 1, r: 10.0, h: 15.0 }, b = Cyl { at: [15.0, 5.0, 20.0], axis: 1, r: 7.5, h: 15.0 }
+cc c6e01b35c6a7c6f2ac5999c9f9301d6549223a80ca598920af36dbd389b24252 # shrinks to a = Sph { at: [7.5, 25.0, 22.5], r: 15.0 }, b = Sph { at: [5.0, 10.0, 15.0], r: 12.5 }
