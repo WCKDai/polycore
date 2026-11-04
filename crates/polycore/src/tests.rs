@@ -3094,6 +3094,67 @@ fn loft_circle_to_non_star_profile_splits_circle_once() {
     }
 }
 
+fn crossing_cylinders() -> (Body, Body) {
+    (cylinder(Vec3::new(0.0, 0.0, -10.0), Vec3::Z, 3.0, 20.0).unwrap(), cylinder(Vec3::new(-10.0, 0.0, 0.0), Vec3::X, 2.0, 20.0).unwrap())
+}
+
+/// The boolean retry ladder takes its stages in order, and a cancelled watch ends it between two
+/// of them: no stage after the one that saw the cancel runs.
+#[test]
+fn a_cancelled_boolean_ladder_stops_between_stages() {
+    use crate::budget::TRAIL;
+    let (a, b) = crossing_cylinders();
+    // With no tries left every attempt fails, so a cut goes down the ladder.
+    let ladder = || with_attempt_budget(0, || boolean(&a, &b, BoolOp::Cut));
+    TRAIL.with(|t| t.borrow_mut().clear());
+    assert!(ladder().is_err());
+    let full = TRAIL.with(|t| t.borrow().clone());
+    assert!(full.contains(&"boolean whole") && full.contains(&"boolean tool reseam"), "{full:?}");
+    // Cancelled as soon as the whole-body stage has begun: the next stage never starts.
+    TRAIL.with(|t| t.borrow_mut().clear());
+    struct Cancelled;
+    impl crate::watch::Watch for Cancelled {
+        fn cancelled(&self) -> bool {
+            TRAIL.with(|t| t.borrow().contains(&"boolean whole"))
+        }
+        fn progress(&self, _: &'static str, _: usize, _: usize) {}
+    }
+    let e = crate::watch::watching(std::sync::Arc::new(Cancelled), ladder).unwrap_err();
+    let stopped = TRAIL.with(|t| t.borrow().clone());
+    assert_eq!(e, crate::watch::cancelled_error("operation"));
+    assert!(!stopped.contains(&"boolean tool reseam"), "{stopped:?}");
+    assert!(stopped.len() < full.len(), "{stopped:?} vs {full:?}");
+}
+
+/// The same boolean under the same small work budget stops with the same error naming the same
+/// stage, run after run and on one thread or many; unbudgeted it gives the old result.
+#[test]
+fn a_work_budget_stops_a_boolean_at_the_same_stage_on_every_run_and_thread_count() {
+    let (a, b) = crossing_cylinders();
+    let run = |units: u64, op| format!("{:?}", crate::with_work_budget(units, || boolean(&a, &b, op).map(|r| r.map(|x| x.size()))));
+    let on = |threads: usize, f: &(dyn Fn() -> String + Sync)| rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(f);
+    for op in [BoolOp::Cut, BoolOp::Union, BoolOp::Intersect] {
+        let plain = format!("{:?}", boolean(&a, &b, op).map(|r| r.map(|x| x.size())));
+        for units in [1, 2] {
+            let first = run(units, op);
+            assert!(first.contains("BudgetSpent"), "{op:?} {units}: {first}");
+            assert_eq!(first, run(units, op));
+            assert_eq!(first, on(1, &|| run(units, op)));
+            assert_eq!(first, on(4, &|| run(units, op)));
+        }
+        assert_eq!(run(1_000_000, op), plain, "{op:?}: a budget that is not spent changes nothing");
+    }
+    assert!(matches!(
+        crate::with_work_budget(1, || boolean(&a, &b, BoolOp::Cut)),
+        Err(KernelError::BudgetSpent { stage: "boolean whole", limit: 1 })
+    ));
+    // Spending the budget is not a refusal and not a cancellation.
+    let e = crate::with_work_budget(2, || boolean(&a, &b, BoolOp::Cut)).unwrap_err();
+    assert!(matches!(e, KernelError::BudgetSpent { .. }), "{e}");
+    assert!(e.to_string().contains("work budget"), "{e}");
+    assert_eq!(crate::api::Refusal::from_kernel("boolean", e).kind, crate::api::RefusalKind::OutOfBudget);
+}
+
 /// Two cylinders crossing at right angles need the kernel's own intersection: with no tries
 /// left the boolean fails at once, a budget inside another uses the outer one's up, and none
 /// lingers after.
