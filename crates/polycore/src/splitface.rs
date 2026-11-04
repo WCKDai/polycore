@@ -32,12 +32,15 @@ pub enum SplitTool<'a> {
 }
 
 /// Which side of the tool a point is on (zero on the tool).
-enum Field {
+pub(crate) enum Field {
     Plane {
         o: Vec3,
         n: Vec3,
     },
-    Surface(mt::Surface),
+    /// A surface, with the grid its searches from no starting point begin with: the field is
+    /// evaluated at every corner of a finely divided face, and evaluating the grid again for each
+    /// was all of a split's time.
+    Surface(mt::Surface, Option<truck_shapeops::Presearch>),
     /// A circular cylinder (radius `r` about the line through `o` along unit `axis`); `out` is
     /// +1 when the tool's normal points away from the axis.
     Cylinder {
@@ -57,10 +60,14 @@ enum Field {
 }
 
 impl Field {
-    fn eval(&self, p: Vec3) -> f64 {
+    pub(crate) fn surface(s: &mt::Surface) -> Field {
+        Field::Surface(s.clone(), truck_shapeops::Presearch::of(s))
+    }
+
+    pub(crate) fn eval(&self, p: Vec3) -> f64 {
         match self {
             Field::Plane { o, n } => (p - *o).dot(*n),
-            Field::Surface(s) => match s.search_nearest_parameter(p3(p), None, 50) {
+            Field::Surface(s, grid) => match s.search_nearest_parameter(p3(p), grid.as_ref().map(|g| g.nearest(p3(p))), 50) {
                 Some((u, v)) => {
                     let q = from_p3(s.subs(u, v));
                     let n = s.normal(u, v);
@@ -939,9 +946,9 @@ fn split_one(
 /// The plane or circular cylinder a (B-spline) surface is, as a field with the surface's
 /// normal; other surfaces as they are.
 fn surface_field(s: &mt::Surface) -> Field {
-    let (Some((u0, u1)), Some((v0, v1))) = s.try_range_tuple() else { return Field::Surface(s.clone()) };
+    let (Some((u0, u1)), Some((v0, v1))) = s.try_range_tuple() else { return Field::surface(s) };
     if !matches!(s, mt::Surface::Plane(_) | mt::Surface::BSplineSurface(_) | mt::Surface::NurbsSurface(_)) {
-        return Field::Surface(s.clone());
+        return Field::surface(s);
     }
     let at = |a: f64, b: f64| from_p3(s.subs(u0 + (u1 - u0) * a, v0 + (v1 - v0) * b));
     let nrm = |a: f64, b: f64| {
@@ -987,7 +994,7 @@ fn surface_field(s: &mt::Surface) -> Field {
             return Field::Cylinder { o: centre, axis, r, out };
         }
     }
-    Field::Surface(s.clone())
+    Field::surface(s)
 }
 
 /// A plane or circular cylinder behind a surface (for offsetting).
@@ -1522,7 +1529,7 @@ fn split_sides(body: &Body, tool: &SplitTool) -> Result<Option<Sides>> {
             let line = mt::Curve::Line(mt::Line(p3(a), p3(b)));
             crate::step_in::geom::revolved_oriented(line, p3(*o), crate::body::v3(axis.vec()), 0.5, crate::body::v3(x * *out))
         }
-        Field::Surface(s) => s.clone(),
+        Field::Surface(s, _) => s.clone(),
         Field::Curve { .. } => return Err(KernelError::Invalid("a body is split by a plane or a face".into())),
     };
     // Faces lying in a plane tool, and faces that only touch it (all of the face on one side, a

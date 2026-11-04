@@ -39,7 +39,7 @@ pub use transversal::{
 };
 // SolidCraft: exercised by kernel regressions in the workspace CI.
 #[doc(hidden)]
-pub use transversal::IntersectionCurveWithParameters;
+pub use transversal::{IntersectionCurveWithParameters, Presearch};
 // SolidCraft: the brute-force boolean, for the kernel's equivalence tests.
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]

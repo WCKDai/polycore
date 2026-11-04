@@ -160,14 +160,16 @@ where S: ParametricSurface3D + SearchNearestParameter<D2, Point = Point3>
 /// (`SearchNearestParameter` with no hint) takes the nearest of first (`algo::surface::presearch`):
 /// truck-modeling's B-spline and NURBS surfaces over their parameter ranges in 50 divisions, its
 /// revolved curves in 100; a plane is searched in closed form, and any other surface is not
-/// known here (`None`).
-pub(crate) struct Presearch {
+/// known here (`None`). Searching from [`Presearch::nearest`] finds what the search from no
+/// starting point finds, without evaluating the grid again for every point.
+#[derive(Clone, Debug)]
+pub struct Presearch {
     grid: Vec<((f64, f64), Point3)>,
 }
 
 impl Presearch {
     /// The grid of `surface`, evaluated as the presearch evaluates it.
-    pub(crate) fn of<S: ParametricSurface3D + 'static>(surface: &S) -> Option<Self> {
+    pub fn of<S: ParametricSurface3D + 'static>(surface: &S) -> Option<Self> {
         if !caching_enabled() {
             return None;
         }
@@ -192,7 +194,7 @@ impl Presearch {
     }
 
     /// The grid's parameters nearest `point`, the first of equals in the presearch's order.
-    pub(crate) fn nearest(&self, point: Point3) -> (f64, f64) {
+    pub fn nearest(&self, point: Point3) -> (f64, f64) {
         let mut res = (0.0, 0.0);
         let mut min = f64::INFINITY;
         for &(uv, q) in &self.grid {

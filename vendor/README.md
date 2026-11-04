@@ -88,6 +88,14 @@ Changes:
   of a polyline. The grids are now evaluated once per polyline and each point's nearest found
   among them as the presearch finds it, so every search goes on from where it would have and
   gives the same answer, bit for bit (#125). The `test-hooks` feature can turn it off (`uncached`).
+- `transversal/intersection_curve/mod.rs`, `transversal/mod.rs`, `lib.rs`: that grid
+  (`Presearch`, with `of` and `nearest`) is public but hidden, for the kernel's split by a face:
+  the split evaluates its tool's field at every corner of a finely divided face, and a curved
+  tool's search from no starting point evaluated the whole grid again for each (all of a split's
+  time; Polykrom#261). The split keeps the grid with its field and starts each search from its
+  nearest point, which is the start the search from no point takes, so the answers are the same
+  bit for bit. `crates/polycore/src/tests.rs` (`split_field_searches_from_one_grid`) holds it to
+  that.
 
 ## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
