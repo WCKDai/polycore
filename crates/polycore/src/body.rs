@@ -474,15 +474,15 @@ fn rephase_revolved(solid: Solid) -> Solid {
                     faces.push(f.clone());
                     continue;
                 };
-                let phi = v.rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
-                if phi.abs() < 0.3 {
+                let phi = snap_angle(v.rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI);
+                if !phi.is_finite() || phi.abs() < 0.3 {
                     faces.push(f.clone());
                     continue;
                 }
                 let new_proc = proc_.map_ref(|rc| {
                     let (o, a) = (rc.origin(), rc.axis());
                     let rot = mt::Matrix4::from_translation(mt::EuclideanSpace::to_vec(o))
-                        * mt::Matrix4::from_axis_angle(a, mt::Rad(phi))
+                        * axis_angle(a, phi)
                         * mt::Matrix4::from_translation(-mt::EuclideanSpace::to_vec(o));
                     mt::RevolutedCurve::by_revolution(mt::Transformed::transformed(rc.entity_curve(), rot), o, a)
                 });
@@ -508,6 +508,76 @@ fn rephase_revolved(solid: Solid) -> Solid {
         Ok(Some(s)) => s,
         _ => solid,
     }
+}
+
+/// `phi` on a grid of 2⁻²⁰ radians (about a microradian), so that the angle `rephase_revolved`
+/// turns a face by does not carry the last bits of the search that found it: that search ends in
+/// the platform's `acos`, whose result differs by an ULP between libms, and the turn only decides
+/// where the face's seam goes. An exact operation (scaling by a power of two and rounding to an
+/// integer), so every platform snaps to the same grid point.
+pub(crate) fn snap_angle(phi: f64) -> f64 {
+    const GRID: f64 = 1048576.0; // 2^20
+    (phi * GRID).round() / GRID
+}
+
+/// sin and cos of `x` (meant for |x| ≤ π) from additions, multiplications and rounding alone, so
+/// that every platform gets the same bits. `f64::sin` and `f64::cos` are the platform's libm,
+/// and macOS returns `sin(-2.0943951023931957)` an ULP off glibc's correctly rounded value;
+/// that ULP in a rotation moved a revolved ring's mesh bounds to 25.000000000000007 and Polykrom's
+/// robustness seed 36 built a different body there than on Linux. `x` is reduced about the
+/// nearest multiple of π/2 to |r| ≤ π/4 (the multiple is exact, π/2 is split in two so the
+/// reduction loses nothing), where the Taylor series to r¹⁹ and r²⁰ are below 10⁻²¹ of the
+/// result; Horner evaluation keeps the rounding within an ULP of the correctly rounded value
+/// (see `rephase_tests`). Rust does not contract `a * b + c` into a fused multiply-add, and this
+/// function must not use `f64::mul_add`, which is the platform's too.
+pub(crate) fn sin_cos(x: f64) -> (f64, f64) {
+    const PIO2_HI: f64 = std::f64::consts::FRAC_PI_2; // π/2 to the f64
+    const PIO2_LO: f64 = 6.123_233_995_736_766e-17; // and the rest of it
+    let q = (x * std::f64::consts::FRAC_2_PI).round();
+    let r = (x - q * PIO2_HI) - q * PIO2_LO;
+    let z = r * r;
+    // sin r = r + r·z·(−1/3! + z·(1/5! − z·(1/7! − …))), to the r¹⁹ term.
+    let ps = -1.0 / 6.0
+        + z * (1.0 / 120.0
+            + z * (-1.0 / 5040.0
+                + z * (1.0 / 362_880.0
+                    + z * (-1.0 / 39_916_800.0
+                        + z * (1.0 / 6_227_020_800.0
+                            + z * (-1.0 / 1_307_674_368_000.0 + z * (1.0 / 355_687_428_096_000.0 + z * (-1.0 / 121_645_100_408_832_000.0))))))));
+    let s = r + (r * z) * ps;
+    // cos r = 1 − (z/2 − z²·(1/4! − z·(1/6! − …))), to the r²⁰ term.
+    let pc = 1.0 / 24.0
+        + z * (-1.0 / 720.0
+            + z * (1.0 / 40_320.0
+                + z * (-1.0 / 3_628_800.0
+                    + z * (1.0 / 479_001_600.0
+                        + z * (-1.0 / 87_178_291_200.0
+                            + z * (1.0 / 20_922_789_888_000.0 + z * (-1.0 / 6_402_373_705_728_000.0 + z * (1.0 / 2_432_902_008_176_640_000.0))))))));
+    let c = 1.0 - (0.5 * z - (z * z) * pc);
+    // Turn back by the quarter turns taken out.
+    match q.rem_euclid(4.0) {
+        1.0 => (c, -s),
+        2.0 => (-s, -c),
+        3.0 => (-c, s),
+        _ => (s, c),
+    }
+}
+
+/// The rotation by `phi` about the unit vector `axis` through the origin (Rodrigues' formula,
+/// laid out as cgmath's `Matrix4::from_axis_angle`), with the sine and cosine of [`sin_cos`]
+/// rather than the platform's, so the same angle gives the same matrix on every platform.
+pub(crate) fn axis_angle(axis: mt::Vector3, phi: f64) -> mt::Matrix4 {
+    let (s, c) = sin_cos(phi);
+    let k = 1.0 - c;
+    let (x, y, z) = (axis.x, axis.y, axis.z);
+    #[rustfmt::skip]
+    let m = mt::Matrix4::new(
+        k * x * x + c,      k * x * y + s * z,  k * x * z - s * y,  0.0,
+        k * x * y - s * z,  k * y * y + c,      k * y * z + s * x,  0.0,
+        k * x * z + s * y,  k * y * z - s * x,  k * z * z + c,      0.0,
+        0.0,                0.0,                0.0,                1.0,
+    );
+    m
 }
 
 pub(crate) fn p3(v: Vec3) -> mt::Point3 {
@@ -2010,6 +2080,10 @@ mod lump_tests;
 #[cfg(test)]
 #[path = "mesh_memo_tests.rs"]
 mod mesh_memo_tests;
+
+#[cfg(test)]
+#[path = "rephase_tests.rs"]
+mod rephase_tests;
 
 #[cfg(test)]
 #[path = "refine_cache_tests.rs"]
