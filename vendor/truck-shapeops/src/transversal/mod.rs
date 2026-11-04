@@ -9,7 +9,7 @@ mod integrate;
 mod intersection_curve;
 // SolidCraft: expose the constructor for workspace regression coverage of the vendored fix.
 #[doc(hidden)]
-pub use intersection_curve::IntersectionCurveWithParameters;
+pub use intersection_curve::{IntersectionCurveWithParameters, Presearch};
 mod loops_store;
 mod polyline_construction;
 // SolidCraft: the brute-force boolean, for the kernel's equivalence tests.

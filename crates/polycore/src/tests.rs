@@ -3979,6 +3979,33 @@ fn presearch_grids_once_per_polyline_change_nothing() {
     }
 }
 
+/// A split's field searches each point of a curved tool from the tool's presearch grid, made
+/// once, and finds what the search from no starting point finds, to the bit (evaluating the grid
+/// again for every point is what kept Polykrom's kernel cases 3830 and 3936 from finishing;
+/// WCKDai/polykrom#261).
+#[test]
+fn split_field_searches_from_one_grid() {
+    use crate::splitface::Field;
+    use truck_modeling::{BSplineSurface, KnotVec, Point3, Surface};
+    use truck_shapeops::broad_phase_test_hooks::uncached;
+    let ring = torus(Vec3::ZERO, 10.0, 4.0).unwrap();
+    let revolved = ring.solid.face_iter().map(|f| f.surface()).find(|s| matches!(s, Surface::RevolutedCurve(_))).unwrap();
+    let rows = (0..4).map(|i| (0..3).map(|j| Point3::new(f64::from(i) * 5.0, f64::from(j) * 6.0, f64::from((i + j) % 3) * 2.0)).collect()).collect();
+    let spline = Surface::BSplineSurface(BSplineSurface::new((KnotVec::bezier_knot(3), KnotVec::bezier_knot(2)), rows));
+    for s in [revolved, spline] {
+        let (cached, plain) = (Field::surface(&s), uncached(|| Field::surface(&s)));
+        assert!(matches!(cached, Field::Surface(_, Some(_))) && matches!(plain, Field::Surface(_, None)));
+        for i in 0..5 {
+            for j in 0..5 {
+                for k in 0..5 {
+                    let p = Vec3::new(-15.0 + 7.5 * f64::from(i), -15.0 + 7.5 * f64::from(j), -5.0 + 2.5 * f64::from(k));
+                    assert_eq!(cached.eval(p).to_bits(), plain.eval(p).to_bits(), "at {p:?}");
+                }
+            }
+        }
+    }
+}
+
 /// A boolean whose watch was cancelled stops at its next third-party call (WCKDai/polykrom#264);
 /// unwatched, the same boolean works.
 #[test]
