@@ -12,6 +12,8 @@
 //! proptest saves every failing seed in `tests/boolean_props.proptest-regressions`. Commit it, and
 //! copy the shrunk case into a `#[test]` below (ignored, with its issue, until the kernel is fixed).
 
+use std::f64::consts::PI;
+
 use polycore::{Body, BoolOp, boolean, box_solid, cylinder, measure, sphere, transform};
 use polycore_geom::Vec3;
 use proptest::prelude::*;
@@ -355,17 +357,143 @@ fn crossing_cylinders_identity_generic() {
 }
 
 /// Two parallel cylinders that touch along a line, the smaller inside the larger (axes 2.5 apart,
-/// radii 10 and 7.5). Found by `identity_on_grid` in the nightly run 41034783703. Union and Cut are
-/// right; Intersect has no exact fallback for curved faces that touch (#32), so this stays ignored
-/// until it does.
+/// radii 10 and 7.5), the smaller reaching past the larger's cap. Found by `identity_on_grid` in
+/// the nightly run 41034783703. Union and Cut were right; Intersect had no exact fallback for
+/// curved faces that touch (#32), until the intersection of stepped prisms was taken in 2D as
+/// the union and the cut are.
 fn inner_tangent_cylinders() -> (Prim, Prim) {
     (Prim::Cyl { at: [12.5, 2.5, 20.0], axis: 1, r: 10.0, h: 15.0 }, Prim::Cyl { at: [15.0, 5.0, 20.0], axis: 1, r: 7.5, h: 15.0 })
 }
 
 #[test]
-#[ignore = "#32: Intersect of parallel cylinders touching along a line"]
 fn inner_tangent_cylinders_identity() {
     let (a, b) = inner_tangent_cylinders();
+    check(identity(&a, &b));
+    check(identity(&b, &a));
+}
+
+/// The #32 case against its closed forms: the intersection is the smaller cylinder over the
+/// 12.5 mm the two share along the axis, a single sound body.
+#[test]
+fn inner_tangent_cylinders_closed_form() {
+    let (a, b) = inner_tangent_cylinders();
+    let (va, vb) = (PI * 10.0 * 10.0 * 15.0, PI * 7.5 * 7.5 * 15.0);
+    let vi = PI * 7.5 * 7.5 * 12.5;
+    closed_form(&a, &b, [vi, va + vb - vi, va - vi]);
+    let body = boolean(&a.body(), &b.body(), BoolOp::Intersect).unwrap().expect("the cylinders share material");
+    assert_eq!(body.shell_count(), 1);
+}
+
+/// The #32 case moved far away and scaled, as `translation_invariant` and `scale_invariant`
+/// shrank to it.
+#[test]
+fn inner_tangent_cylinders_moved_and_scaled() {
+    let (a, b) = inner_tangent_cylinders();
+    for k in [0.05, 1.0, 40.0] {
+        check(scale(&a, &b, k));
+    }
+    let (ba, bb) = (a.body(), b.body());
+    let s = vol(&ba) + vol(&bb);
+    for off in [1.0e3, 1.0e5] {
+        let t = Vec3::new(off, -off * 0.7, off * 0.3);
+        let mv = |x: &Body| transform(x, t, Vec3::ZERO, Vec3::Z, 0.0).expect("translate");
+        let (ta, tb) = (mv(&ba), mv(&bb));
+        for op in [BoolOp::Union, BoolOp::Intersect, BoolOp::Cut] {
+            let (here, there) = (run(&ba, &bb, op).unwrap(), run(&ta, &tb, op).unwrap());
+            assert!(close(here, there, s), "{op:?} at origin {here:.4}, moved by {off} gives {there:.4}");
+        }
+    }
+}
+
+/// The larger cylinder as the tool, reaching into the smaller one from both ends (what the saved
+/// #32 seed draws for `translation_invariant`), near the origin and a hundred thousand millimetres
+/// away: far from the origin, the prism route's sections and the plane fitted to the sewn caps
+/// lost their digits, so the intersection was refused there and taken near the origin.
+#[test]
+fn inner_tangent_cylinders_larger_tool_moved_far() {
+    let a = Prim::Cyl { at: [17.5, 2.5, 20.0], axis: 1, r: 10.0, h: 15.0 };
+    let b = Prim::Cyl { at: [15.0, 5.0, 20.0], axis: 1, r: 12.5, h: 10.0 };
+    let (va, vb) = (PI * 10.0 * 10.0 * 15.0, PI * 12.5 * 12.5 * 10.0);
+    let vi = PI * 10.0 * 10.0 * 10.0;
+    closed_form(&a, &b, [vi, va + vb - vi, va - vi]);
+    let (ba, bb) = (a.body(), b.body());
+    let s = va + vb;
+    for off in [1.0e3, 1.0e5] {
+        let t = Vec3::new(off, -off * 0.7, off * 0.3);
+        let mv = |x: &Body| transform(x, t, Vec3::ZERO, Vec3::Z, 0.0).expect("translate");
+        let (ta, tb) = (mv(&ba), mv(&bb));
+        for (x, y) in [(&ta, &tb), (&tb, &ta)] {
+            for (op, want) in [(BoolOp::Intersect, vi), (BoolOp::Union, va + vb - vi)] {
+                let got = run(x, y, op).unwrap_or_else(|e| panic!("{op:?} moved by {off}: {e}"));
+                assert!(close(got, want, s), "{op:?} moved by {off} gives {got:.4}, closed form {want:.4}");
+            }
+        }
+        assert!(close(run(&ta, &tb, BoolOp::Cut).unwrap(), va - vi, s));
+        assert!(close(run(&tb, &ta, BoolOp::Cut).unwrap(), vb - vi, s));
+    }
+}
+
+/// Union, Intersect and Cut of `a` and `b` against closed-form volumes `[intersect, union,
+/// cut]`, in both operand orders where the operation commutes.
+fn closed_form(a: &Prim, b: &Prim, [vi, vu, vc]: [f64; 3]) {
+    let (ba, bb) = (a.body(), b.body());
+    let s = vol(&ba) + vol(&bb);
+    for (op, want) in [(BoolOp::Intersect, vi), (BoolOp::Union, vu), (BoolOp::Cut, vc)] {
+        let got = run(&ba, &bb, op).unwrap_or_else(|e| panic!("{op:?} of {a:?} and {b:?}: {e}"));
+        assert!(close(got, want, s), "{op:?} of {a:?} and {b:?} gives {got:.4}, closed form {want:.4}");
+        if op != BoolOp::Cut {
+            let swapped = run(&bb, &ba, op).unwrap_or_else(|e| panic!("{op:?} of {b:?} and {a:?}: {e}"));
+            assert!(close(swapped, want, s), "{op:?} of {b:?} and {a:?} gives {swapped:.4}, closed form {want:.4}");
+        }
+    }
+}
+
+/// Two parallel cylinders touching along a line from outside (axes r1 + r2 apart): they share
+/// no material, the join keeps both whole and the cut takes nothing.
+#[test]
+fn outer_tangent_cylinders_closed_form() {
+    let a = Prim::Cyl { at: [12.5, 2.5, 20.0], axis: 1, r: 10.0, h: 15.0 };
+    let b = Prim::Cyl { at: [30.0, 5.0, 20.0], axis: 1, r: 7.5, h: 15.0 };
+    let (va, vb) = (PI * 10.0 * 10.0 * 15.0, PI * 7.5 * 7.5 * 15.0);
+    closed_form(&a, &b, [0.0, va + vb, va]);
+}
+
+/// A second internal tangency, other radii (12.5 and 5, axes 7.5 apart along Y) and other
+/// offsets along the axis (the smaller reaching 5 mm into the larger from below).
+#[test]
+fn inner_tangent_cylinders_other_radii_closed_form() {
+    let a = Prim::Cyl { at: [0.0, 0.0, 0.0], axis: 2, r: 12.5, h: 20.0 };
+    let b = Prim::Cyl { at: [0.0, 7.5, -5.0], axis: 2, r: 5.0, h: 10.0 };
+    let (va, vb) = (PI * 12.5 * 12.5 * 20.0, PI * 5.0 * 5.0 * 10.0);
+    let vi = PI * 5.0 * 5.0 * 5.0;
+    closed_form(&a, &b, [vi, va + vb - vi, va - vi]);
+    check(identity(&a, &b));
+}
+
+/// Coaxial neighbours on the same path: walls on one cylinder, and a smaller one inside it,
+/// each reaching past the other's cap.
+#[test]
+fn coaxial_cylinders_closed_form() {
+    let a = Prim::Cyl { at: [12.5, 2.5, 20.0], axis: 1, r: 10.0, h: 15.0 };
+    let same = Prim::Cyl { at: [12.5, 5.0, 20.0], axis: 1, r: 10.0, h: 15.0 };
+    let va = PI * 10.0 * 10.0 * 15.0;
+    let shared = PI * 10.0 * 10.0 * 12.5;
+    closed_form(&a, &same, [shared, 2.0 * va - shared, va - shared]);
+    let smaller = Prim::Cyl { at: [12.5, 5.0, 20.0], axis: 1, r: 7.5, h: 15.0 };
+    let (vb, vi) = (PI * 7.5 * 7.5 * 15.0, PI * 7.5 * 7.5 * 12.5);
+    closed_form(&a, &smaller, [vi, va + vb - vi, va - vi]);
+}
+
+/// Two spheres on the grid, overlapping deeply (centres 17 mm apart, radii 15 and 12.5): the
+/// union keeps nearly both volumes (22314.8 mm³ against 20256.5 mm³ for A + B - A∩B) though it
+/// is one sound shell. Found by `identity_on_grid` at `PROPTEST_CASES=200` while #32 was fixed
+/// (PC-10); its seed is saved beside the others. Ignored until the kernel is fixed; needs its
+/// own issue.
+#[test]
+#[ignore = "union of two overlapping grid spheres keeps nearly both volumes (found fixing #32, PC-10)"]
+fn grid_spheres_union_identity() {
+    let a = Prim::Sph { at: [7.5, 25.0, 22.5], r: 15.0 };
+    let b = Prim::Sph { at: [5.0, 10.0, 15.0], r: 12.5 };
     check(identity(&a, &b));
 }
 

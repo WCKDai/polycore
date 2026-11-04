@@ -144,6 +144,28 @@ fn next_split(a: &Body, b: &Body, tol: f64) -> Option<(bool, usize, Plane)> {
     None
 }
 
+/// Whether a cylinder of `a` and one of `b` have parallel axes and touch along a line (within
+/// the kernel's same-surface tolerance): from inside, the axes |r1 - r2| apart (walls on one
+/// cylinder when the radii are equal), or from outside, the axes r1 + r2 apart. The boolean
+/// cannot trace that contact inside the walls (polycore#32); the prism route decides it in 2D.
+pub(crate) fn parallel_touching(a: &Body, b: &Body) -> bool {
+    if a.is_mesh() || b.is_mesh() {
+        return false;
+    }
+    let same = (a.size().max(b.size()) * 1e-7).max(1e-9) * 10.0;
+    let (in_a, in_b) = (cylinders(a), cylinders(b));
+    in_a.iter().any(|x| {
+        in_b.iter().any(|y| {
+            if x.axis.dot(y.axis).abs() <= 1.0 - 1e-9 {
+                return false;
+            }
+            let w = y.origin - x.origin;
+            let offset = (w - x.axis * w.dot(x.axis)).len();
+            offset.is_finite() && ((offset - (x.radius - y.radius).abs()).abs() <= same || (offset - (x.radius + y.radius)).abs() <= same)
+        })
+    })
+}
+
 /// Whether the bodies have cylinders of one radius crossing each other that touch inside both
 /// their faces, so that [`boolean`] has faces to split.
 pub(crate) fn needed(a: &Body, b: &Body) -> bool {
