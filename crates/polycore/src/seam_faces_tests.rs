@@ -34,7 +34,7 @@ fn block() -> Body {
 /// The part of the pin inside [`block`]: the circle's segment above 2 and within 3 of the
 /// middle, 10 long.
 fn pressed_volume() -> f64 {
-    let segment = 3.0 * (R * R - 9.0).sqrt() + R * R * (3.0 / R).asin() - 6.0 * 2.0;
+    let segment = 3.0 * (R * R - 9.0).sqrt() + R * R * pmath::asin(3.0 / R) - 6.0 * 2.0;
     10.0 * segment
 }
 

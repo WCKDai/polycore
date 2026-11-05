@@ -55,7 +55,7 @@ impl Vec2 {
         self.x * o.y - self.y * o.x
     }
     pub fn len(self) -> f64 {
-        self.x.hypot(self.y)
+        pmath::hypot(self.x, self.y)
     }
     pub fn len2(self) -> f64 {
         self.dot(self)
@@ -72,10 +72,10 @@ impl Vec2 {
         Vec2::new(-self.y, self.x)
     }
     pub fn angle(self) -> f64 {
-        self.y.atan2(self.x)
+        pmath::atan2(self.y, self.x)
     }
     pub fn from_angle(a: f64) -> Vec2 {
-        Vec2::new(a.cos(), a.sin())
+        Vec2::new(pmath::cos(a), pmath::sin(a))
     }
     pub fn lerp(self, o: Vec2, t: f64) -> Vec2 {
         self + (o - self) * t

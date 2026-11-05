@@ -67,13 +67,13 @@ mod double_projection_tests {
         for _ in 0..100 {
             let t = 2.0 * PI * rand::random::<f64>();
             let r = 2.0 * rand::random::<f64>();
-            let p = Point3::new(r * f64::cos(t), r * f64::sin(t), 0.0);
-            let n = Vector3::new(-f64::sin(t), f64::cos(t), 0.0);
+            let p = Point3::new(r * pmath::cos(t), r * pmath::sin(t), 0.0);
+            let n = Vector3::new(-pmath::sin(t), pmath::cos(t), 0.0);
             let (q, p0, p1) = double_projection(&sphere0, None, &sphere1, None, p, n, 100)
                 .unwrap_or_else(|| panic!("p: {p:?}"));
             assert_near!(q, sphere0.subs(p0.x, p0.y));
             assert_near!(q, sphere1.subs(p1.x, p1.y));
-            assert_near!(q, Point3::new(f64::cos(t), f64::sin(t), 0.0));
+            assert_near!(q, Point3::new(pmath::cos(t), pmath::sin(t), 0.0));
         }
     }
 }
@@ -86,7 +86,7 @@ fn intersection_curve_sphere_case() {
     let polyline = (0..=M)
         .map(|i| {
             let t = 2.0 * PI * i as f64 / M as f64;
-            Point3::new(0.8 * f64::cos(t), 0.8 * f64::sin(t), 0.0)
+            Point3::new(0.8 * pmath::cos(t), 0.8 * pmath::sin(t), 0.0)
         })
         .collect::<PolylineCurve<_>>();
     let curve: IntersectionCurve<_, _> =
@@ -109,10 +109,10 @@ fn intersection_curve_sphere_case() {
     assert!(f64::abs(sum - 2.0 * PI) < 0.1, "{}", sum);
 
     let theta = 2.0 * PI * rand::random::<f64>();
-    let pt = Point3::new(f64::cos(theta), f64::sin(theta), 0.0);
+    let pt = Point3::new(pmath::cos(theta), pmath::sin(theta), 0.0);
     let t = curve.search_parameter(pt, None, 1).unwrap();
     assert!(curve.subs(t).near(&pt));
-    let pt = Point3::new(1.1 * f64::cos(theta), 1.1 * f64::sin(theta), 0.0);
+    let pt = Point3::new(1.1 * pmath::cos(theta), 1.1 * pmath::sin(theta), 0.0);
     assert!(curve.search_parameter(pt, None, 1).is_none());
 
     let mut curve0 = curve.clone();

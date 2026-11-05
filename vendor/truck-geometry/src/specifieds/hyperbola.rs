@@ -10,22 +10,22 @@ impl ParametricCurve for UnitHyperbola<Point2> {
     type Point = Point2;
     type Vector = Vector2;
     #[inline]
-    fn subs(&self, t: f64) -> Self::Point { Point2::new(f64::cosh(t), f64::sinh(t)) }
+    fn subs(&self, t: f64) -> Self::Point { Point2::new(pmath::cosh(t), pmath::sinh(t)) }
     #[inline]
-    fn der(&self, t: f64) -> Self::Vector { Vector2::new(f64::sinh(t), f64::cosh(t)) }
+    fn der(&self, t: f64) -> Self::Vector { Vector2::new(pmath::sinh(t), pmath::cosh(t)) }
     #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { Vector2::new(f64::cosh(t), f64::sinh(t)) }
+    fn der2(&self, t: f64) -> Self::Vector { Vector2::new(pmath::cosh(t), pmath::sinh(t)) }
 }
 
 impl ParametricCurve for UnitHyperbola<Point3> {
     type Point = Point3;
     type Vector = Vector3;
     #[inline]
-    fn subs(&self, t: f64) -> Self::Point { Point3::new(f64::cosh(t), f64::sinh(t), 0.0) }
+    fn subs(&self, t: f64) -> Self::Point { Point3::new(pmath::cosh(t), pmath::sinh(t), 0.0) }
     #[inline]
-    fn der(&self, t: f64) -> Self::Vector { Vector3::new(f64::sinh(t), f64::cosh(t), 0.0) }
+    fn der(&self, t: f64) -> Self::Vector { Vector3::new(pmath::sinh(t), pmath::cosh(t), 0.0) }
     #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { Vector3::new(f64::cosh(t), f64::sinh(t), 0.0) }
+    fn der2(&self, t: f64) -> Self::Vector { Vector3::new(pmath::cosh(t), pmath::sinh(t), 0.0) }
 }
 
 impl<P> ParameterDivision1D for UnitHyperbola<P>
@@ -62,7 +62,7 @@ impl SearchNearestParameter<D1> for UnitHyperbola<Point2> {
                     .partial_cmp(&p.distance2(self.subs(*t)))
                     .unwrap()
             })?;
-        Some(f64::asinh(y))
+        Some(pmath::asinh(y))
     }
 }
 
@@ -85,7 +85,7 @@ impl SearchNearestParameter<D1> for UnitHyperbola<Point3> {
 impl SearchParameter<D1> for UnitHyperbola<Point2> {
     type Point = Point2;
     fn search_parameter<H: Into<SPHint1D>>(&self, p: Point2, _: H, _: usize) -> Option<f64> {
-        let t = f64::asinh(p.y);
+        let t = pmath::asinh(p.y);
         match p.near(&self.subs(t)) {
             true => Some(t),
             false => None,
@@ -96,7 +96,7 @@ impl SearchParameter<D1> for UnitHyperbola<Point2> {
 impl SearchParameter<D1> for UnitHyperbola<Point3> {
     type Point = Point3;
     fn search_parameter<H: Into<SPHint1D>>(&self, p: Point3, _: H, _: usize) -> Option<f64> {
-        let t = f64::asinh(p.y);
+        let t = pmath::asinh(p.y);
         match p.near(&self.subs(t)) {
             true => Some(t),
             false => None,

@@ -38,7 +38,7 @@ fn extruded_ellipse_seam_uses_profile_angles_for_oblique_sweeps() {
     let cx = Ctx { ex: &ex, len: 1.0, ang: 1.0, tol: 1e-6, snap: 1e-6 };
     let origin = mt::Point3::new(10.0, -20.0, 3.0);
     let d = mt::Vector3::new(0.5, 0.25, 1.0).normalize();
-    let point = |angle: f64, h: f64| origin + mt::Vector3::new(9.0 * angle.cos(), 4.0 * angle.sin(), 0.0) + d * h;
+    let point = |angle: f64, h: f64| origin + mt::Vector3::new(9.0 * pmath::cos(angle), 4.0 * pmath::sin(angle), 0.0) + d * h;
     let extent: Vec<_> = [-0.04, 0.0, 0.04].into_iter().flat_map(|a| [point(a, 0.0), point(a, 10.0)]).collect();
     for seam in [Vec::new(), vec![point(-0.04, 0.0), point(-0.04, 10.0)]] {
         let surface = geom::surface(&cx, 8, &extent, &seam, true, 0).unwrap();
@@ -133,16 +133,16 @@ fn parabola_piece() -> String {
 fn hyperbola_piece_volume() -> f64 {
     let d = 4.0;
     let s = (H * H - d * d).sqrt();
-    H.powi(3) / 3.0 * (d / H).acos() - 2.0 / 3.0 * d * H * s + d.powi(3) / 3.0 * ((H + s) / d).ln()
+    H.powi(3) / 3.0 * pmath::acos(d / H) - 2.0 / 3.0 * d * H * s + d.powi(3) / 3.0 * pmath::ln((H + s) / d)
 }
 
 /// ∫ from C/2 to H of the part `y ≤ z − C` of the disc of radius z.
 fn parabola_piece_volume() -> f64 {
     let c = 8.0;
     let q: f64 = 2.0 * c * H - c * c;
-    H.powi(3) / 3.0 * (PI - (1.0 - c / H).acos())
-        - (0.4 * q.powf(2.5) + 4.0 / 3.0 * c * c * q.powf(1.5) + 2.0 * c.powi(4) * q.sqrt()) / (24.0 * c * c)
-        + (0.4 * q.powf(2.5) - 2.0 / 3.0 * c * c * q.powf(1.5)) / (4.0 * c * c)
+    H.powi(3) / 3.0 * (PI - pmath::acos(1.0 - c / H))
+        - (0.4 * pmath::powf(q, 2.5) + 4.0 / 3.0 * c * c * pmath::powf(q, 1.5) + 2.0 * c.powi(4) * q.sqrt()) / (24.0 * c * c)
+        + (0.4 * pmath::powf(q, 2.5) - 2.0 / 3.0 * c * c * pmath::powf(q, 1.5)) / (4.0 * c * c)
 }
 
 fn import_piece(text: &str, want: f64) -> StepImport {
@@ -199,9 +199,9 @@ fn conic_arcs_are_exact() {
             assert!((x * x / 9.0 - y * y / 4.0 - 1.0).abs() < 1e-9 && x > 0.0 && z.abs() < 1e-12, "{x} {y}");
         }
         let (x, y, _) = local(c.subs(s0));
-        assert!((x - 3.0 * f64::cosh(t0)).abs() < 1e-9 && (y - 2.0 * f64::sinh(t0)).abs() < 1e-9);
+        assert!((x - 3.0 * pmath::cosh(t0)).abs() < 1e-9 && (y - 2.0 * pmath::sinh(t0)).abs() < 1e-9);
         let (x, y, _) = local(c.subs(s1));
-        assert!((x - 3.0 * f64::cosh(t1)).abs() < 1e-9 && (y - 2.0 * f64::sinh(t1)).abs() < 1e-9);
+        assert!((x - 3.0 * pmath::cosh(t1)).abs() < 1e-9 && (y - 2.0 * pmath::sinh(t1)).abs() < 1e-9);
 
         let c = parabola_arc(&f, 1.5, t0, t1);
         let (s0, s1) = c.range_tuple();
@@ -247,7 +247,7 @@ fn a_cone_bounded_only_by_its_base_circle_reaches_its_point() {
     for apex_loop in [false, true] {
         let mut t = String::from(HEAD);
         t += "#1=CARTESIAN_POINT('',(0.,0.,0.));\n#2=DIRECTION('',(0.,0.,-1.));\n#3=DIRECTION('',(1.,0.,0.));\n#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);\n";
-        t += &format!("#5=CONICAL_SURFACE('',#4,{r:.1},{:.15});\n", (r / h).atan());
+        t += &format!("#5=CONICAL_SURFACE('',#4,{r:.1},{:.15});\n", pmath::atan(r / h));
         t += "#6=DIRECTION('',(0.,0.,1.));\n#7=AXIS2_PLACEMENT_3D('',#1,#6,#3);\n#8=PLANE('',#7);\n";
         t += &format!("#9=CIRCLE('',#7,{r:.1});\n#10=CARTESIAN_POINT('',({r:.1},0.,0.));\n#11=VERTEX_POINT('',#10);\n");
         t += "#12=EDGE_CURVE('',#11,#11,#9,.T.);\n";

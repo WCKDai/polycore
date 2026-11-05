@@ -14,7 +14,7 @@ fn fail(s: &str) -> KernelError {
 fn angle(p: Vec3, o: Vec3, axis: Vec3, radial: Vec3, tangent: Vec3) -> f64 {
     let w = p - o;
     let w = w - axis * w.dot(axis);
-    w.dot(tangent).atan2(w.dot(radial))
+    pmath::atan2(w.dot(tangent), w.dot(radial))
 }
 fn unwrap(a: f64, around: f64) -> f64 {
     around + (a - around + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
@@ -304,10 +304,10 @@ fn emboss_impl(body: &Body, anchor: Option<Vec3>, plane: &Plane, regions: &[Regi
         if qualify {
             let segment = mapped.first().and_then(|region| region.outer.segs.first()).ok_or_else(|| fail("empty profile"))?;
             let p = (segment.start() + segment.end()) * 0.5;
-            let at = o + axis * p.y + (radial * (p.x / r).cos() + tangent * (p.x / r).sin()) * r;
+            let at = o + axis * p.y + (radial * pmath::cos(p.x / r) + tangent * pmath::sin(p.x / r)) * r;
             return Ok(EmbossOutcome::Anchor(fi, at));
         }
-        let at = |p: Vec2, radius: f64| o + axis * p.y + (radial * (p.x / r).cos() + tangent * (p.x / r).sin()) * radius;
+        let at = |p: Vec2, radius: f64| o + axis * p.y + (radial * pmath::cos(p.x / r) + tangent * pmath::sin(p.x / r)) * radius;
         let selected = faces.get(fi).ok_or_else(|| fail("face"))?;
         let mut base_patches = vec![selected.absolute_boundaries().clone()];
         let mut hole_patches = Vec::new();
@@ -608,7 +608,7 @@ mod tests {
         }
         let (index, anchor) = infer_cylinder_emboss(&near, &plane(), &regions, 1.).unwrap().unwrap();
         assert!(anchor.z > 0. && anchor.z < 20.);
-        assert!((anchor.x.hypot(anchor.y) - 10.).abs() < 1e-9);
+        assert!((pmath::hypot(anchor.x, anchor.y) - 10.).abs() < 1e-9);
         assert!(cylinder_emboss_anchor(&near, index, anchor).unwrap().dist(anchor) < 1e-10);
         let shifted = Plane::new(Vec3::new(-3., 10., 0.), -Vec3::X, Vec3::Z).unwrap();
         let shifted_profile =
@@ -640,7 +640,7 @@ mod tests {
                 assert!((after - before - expected).abs() < 0.02, "{} vs {expected}", after - before);
                 let mesh = result.tessellate_with(0.001, true).unwrap();
                 for (s, raised) in [(0., true), (0.75, false), (1.5, true)] {
-                    let radial = -Vec3::X * (s / 10.0_f64).sin() + Vec3::Y * (s / 10.0_f64).cos();
+                    let radial = -Vec3::X * pmath::sin(s / 10.0_f64) + Vec3::Y * pmath::cos(s / 10.0_f64);
                     let radius = if depth > 0. { 10.5 } else { 9.5 };
                     assert_eq!(mesh.contains(radial * radius + Vec3::Z * 7.5), if depth > 0. { raised } else { !raised });
                 }
@@ -661,7 +661,7 @@ mod tests {
             assert!((after - before - expected).abs() < 0.02, "{} vs {expected}", after - before);
             let mesh = result.tessellate_with(0.001, true).unwrap();
             for s in [-1.5, 0., 1.5] {
-                let radial = -Vec3::X * (s / 10.0_f64).sin() + Vec3::Y * (s / 10.0_f64).cos();
+                let radial = -Vec3::X * pmath::sin(s / 10.0_f64) + Vec3::Y * pmath::cos(s / 10.0_f64);
                 assert_eq!(mesh.contains(radial * (if depth > 0. { 10.5 } else { 9.5 }) + Vec3::Z * 7.5), depth > 0.);
             }
         }
@@ -696,7 +696,7 @@ mod tests {
                 let after = result.tessellate_with(1e-4, true).unwrap().measure().volume;
                 let want = profile.area().abs() * (depth + depth * depth / 20.0);
                 assert!((after - before - want).abs() < 0.02, "{} vs {want}", after - before);
-                let point = |s: f64, z: f64, r: f64| origin + axis * z + (radial * (s / 10.0).cos() + tangent * (s / 10.0).sin()) * r;
+                let point = |s: f64, z: f64, r: f64| origin + axis * z + (radial * pmath::cos(s / 10.0) + tangent * pmath::sin(s / 10.0)) * r;
                 let mesh = result.tessellate_with(0.001, true).unwrap();
                 for (s, z) in [(-1.5, 7.5), (1.5, 7.5), (0.5, 6.5)] {
                     let material = profile.contains(Vec2::new(s, z));

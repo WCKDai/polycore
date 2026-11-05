@@ -211,7 +211,7 @@ pub(crate) fn general_fill(
             return Err(KernelError::Invalid("an edge of the loop has no tangent".into()));
         };
         let Some(vertex) = sides.get(k).map(|s| s.start) else { continue };
-        let corner = t_in.dot(t_out) < CORNER_DEG.to_radians().cos();
+        let corner = t_in.dot(t_out) < pmath::cos(CORNER_DEG.to_radians());
         let normal = |s: Option<&Side>, t: Vec3| -> Result<Vec3> {
             let s = s.ok_or_else(|| KernelError::Failed("patch: side".into()))?;
             let f = s.frames(&[(vertex, t)], size, false)?;
@@ -220,7 +220,7 @@ pub(crate) fn general_fill(
         let g1 = |s: Option<&Side>| s.is_some_and(|s| s.order != Continuity::G0);
         let clash = if g1(sides.get(prev)) || g1(sides.get(k)) {
             let (a, b) = (normal(sides.get(prev), t_in)?, normal(sides.get(k), t_out)?);
-            a.dot(b).abs() < (2.0 * PATCH_ANGLE_TOL_DEG).to_radians().cos()
+            a.dot(b).abs() < pmath::cos((2.0 * PATCH_ANGLE_TOL_DEG).to_radians())
         } else {
             false
         };
@@ -531,7 +531,7 @@ mod tests {
         }
         let q = s.subs(u, v);
         *start = Some((u, v));
-        ((q.x - x).hypot(q.y - y) < 1e-9).then_some(q.z)
+        (pmath::hypot(q.x - x, q.y - y) < 1e-9).then_some(q.z)
     }
 
     /// The volume the cut prism gains with the fill for its top: the fill's height above the
@@ -660,7 +660,7 @@ mod tests {
         let ax = Vec3::new(1.0, 2.0, 3.0).normalized().unwrap();
         let turn = |p: Vec3| {
             // Rodrigues' rotation by 0.7 about `ax`, then the shift.
-            let (c, s) = (0.7f64.cos(), 0.7f64.sin());
+            let (c, s) = (pmath::cos(0.7f64), pmath::sin(0.7f64));
             p * c + ax.cross(p) * s + ax * (ax.dot(p) * (1.0 - c)) + Vec3::new(130.0, -70.0, 40.0)
         };
         let moved_rim: Vec<Vec3> = rim.iter().map(|p| turn(*p)).collect();
@@ -681,7 +681,7 @@ mod tests {
         let open = copy_faces(&solid, &[&[Vec3::ZERO][..], &sides].concat()).unwrap();
         let rim: Vec<Vec3> = [-0.98, 2.18]
             .map(|a: f64| {
-                let (x, y) = (10.0 * a.cos(), 10.0 * a.sin());
+                let (x, y) = (10.0 * pmath::cos(a), 10.0 * pmath::sin(a));
                 Vec3::new(x, y, cut_height(x))
             })
             .to_vec();
@@ -803,7 +803,7 @@ mod tests {
             let rim: Vec<Vec3> = (0..12)
                 .map(|k| {
                     let a = k as f64 * std::f64::consts::TAU / 12.0 + 0.2;
-                    let (x, y) = (10.0 * a.cos(), 10.0 * a.sin());
+                    let (x, y) = (10.0 * pmath::cos(a), 10.0 * pmath::sin(a));
                     Vec3::new(x, y, height(x, y))
                 })
                 .collect();
@@ -871,7 +871,7 @@ mod tests {
             let b = face.surface();
             let (Some((bu0, bu1)), Some((bv0, bv1))) = a.try_range_tuple() else { panic!("a bounded surface") };
             let (uc, vc) = ((bu0 + bu1) / 2.0, (bv0 + bv1) / 2.0);
-            let size = (bu1 - bu0).hypot(bv1 - bv0);
+            let size = pmath::hypot(bu1 - bu0, bv1 - bv0);
             let bump = a.subs(uc, vc).distance(b.subs(uc, vc));
             let want = (crown * size).abs();
             eprintln!("crown {crown}: the middle moved {bump:.6}, wanted {want:.6}");

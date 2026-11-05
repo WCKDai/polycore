@@ -11,11 +11,11 @@ impl ParametricCurve for UnitCircle<Point2> {
     type Point = Point2;
     type Vector = Vector2;
     #[inline]
-    fn subs(&self, t: f64) -> Self::Point { Point2::new(f64::cos(t), f64::sin(t)) }
+    fn subs(&self, t: f64) -> Self::Point { Point2::new(pmath::cos(t), pmath::sin(t)) }
     #[inline]
-    fn der(&self, t: f64) -> Self::Vector { Vector2::new(-f64::sin(t), f64::cos(t)) }
+    fn der(&self, t: f64) -> Self::Vector { Vector2::new(-pmath::sin(t), pmath::cos(t)) }
     #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { Vector2::new(-f64::cos(t), -f64::sin(t)) }
+    fn der2(&self, t: f64) -> Self::Vector { Vector2::new(-pmath::cos(t), -pmath::sin(t)) }
     #[inline]
     fn parameter_range(&self) -> ParameterRange {
         (Bound::Included(0.0), Bound::Excluded(2.0 * PI))
@@ -28,11 +28,11 @@ impl ParametricCurve for UnitCircle<Point3> {
     type Point = Point3;
     type Vector = Vector3;
     #[inline]
-    fn subs(&self, t: f64) -> Self::Point { Point3::new(f64::cos(t), f64::sin(t), 0.0) }
+    fn subs(&self, t: f64) -> Self::Point { Point3::new(pmath::cos(t), pmath::sin(t), 0.0) }
     #[inline]
-    fn der(&self, t: f64) -> Self::Vector { Vector3::new(-f64::sin(t), f64::cos(t), 0.0) }
+    fn der(&self, t: f64) -> Self::Vector { Vector3::new(-pmath::sin(t), pmath::cos(t), 0.0) }
     #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { Vector3::new(-f64::cos(t), -f64::sin(t), 0.0) }
+    fn der2(&self, t: f64) -> Self::Vector { Vector3::new(-pmath::cos(t), -pmath::sin(t), 0.0) }
     #[inline]
     fn period(&self) -> Option<f64> { Some(2.0 * PI) }
     #[inline]
@@ -50,7 +50,7 @@ where UnitCircle<P>: ParametricCurve<Point = P>
     fn parameter_division(&self, range: (f64, f64), tol: f64) -> (Vec<f64>, Vec<P>) {
         nonpositive_tolerance!(tol);
         let tol = f64::min(tol, 0.8);
-        let delta = 2.0 * f64::acos(1.0 - tol);
+        let delta = 2.0 * pmath::acos(1.0 - tol);
         let n = 1 + ((range.1 - range.0) / delta) as usize;
         let params = (0..=n)
             .map(|i| {
@@ -76,7 +76,7 @@ impl SearchNearestParameter<D1> for UnitCircle<Point2> {
             return None;
         }
         let v = v.normalize();
-        let theta = f64::acos(f64::clamp(v.x, -1.0, 1.0));
+        let theta = pmath::acos(f64::clamp(v.x, -1.0, 1.0));
         let theta = match v.y > 0.0 {
             true => theta,
             false => 2.0 * PI - theta,
@@ -107,7 +107,7 @@ impl SearchParameter<D1> for UnitCircle<Point2> {
             return None;
         }
         let v = v.normalize();
-        let theta = f64::acos(f64::clamp(v.x, -1.0, 1.0));
+        let theta = pmath::acos(f64::clamp(v.x, -1.0, 1.0));
         let theta = match v.y > 0.0 {
             true => theta,
             false => 2.0 * PI - theta,

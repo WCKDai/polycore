@@ -11,6 +11,25 @@ with their published checksums verified during extraction. Each package retains 
 given a copy of the Apache-2.0 licence text. Vendored package tests are not workspace targets;
 the kernel tests exercise them, including the local-fix equivalence hooks.
 
+Every transcendental function in these crates (`f64::sin`, `cos`, `tan`, `asin`, `acos`,
+`atan2`, `sinh`, `cosh`, `asinh`, `exp2`, `log2`, `powf`, cgmath's `from_axis_angle` and
+`InnerSpace::angle`, num_traits' `Float::sin`) is routed through `pmath` below, so the kernel
+builds the same bits on every platform (PC-12). The rerouting is mechanical (`x.sin()` to
+`pmath::sin(x)`, `f64::sin(x)` to `pmath::sin(x)`) and is not marked line by line; the
+kernel's `clippy.toml` disallows the platform's methods, and `crates/polycore/tests/pmath_gate.rs`
+lints every crate here with it.
+
+## pmath 0.1.0 (Apache-2.0, PolyCore; first-party, not vendored)
+
+`polycore-pmath`, crate name `pmath`: the transcendental functions of `f64` from IEEE 754
+additions, subtractions, multiplications, divisions and square roots alone (evaluated in
+double-double arithmetic, rounded once, no fused multiply-add), so that every platform computes
+the same bits. It lives here, beside the Truck closure, because the vendored crates depend on it
+and it must not depend on the public kernel crates. `crates/polycore/src/pmath_tests.rs` checks
+every function against a 70-digit reference (`crates/polycore/tests/data/pmath_reference.txt`),
+and `portable_trig_tests.rs` proves the sine, cosine and arc tangent correctly rounded at the
+kernel's angles with exact integer arithmetic.
+
 ## truck-shapeops 0.4.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
 Changes:
@@ -113,14 +132,16 @@ Changes:
 
 Changes:
 - `portable_trig.rs` (new): `sin_cos`, `atan2`, `angle` and `rotation` from IEEE 754 arithmetic
-  alone (double-double evaluation, no fused multiply-add), the same bits on every platform, and
-  correctly rounded for every angle the kernel builds with: 2π/3, 4π/3, π/2, π, k·2π/n for n ≤ 64,
-  the snapped rephase grid; `crates/polycore/src/portable_trig_tests.rs` proves it against exact
-  integer arithmetic. The platform's libm is not correctly rounded (glibc's `sin(2π/39)` is an
-  ULP above the nearest float to the true value, and it misrounds about 0.3 % of angles), so
-  results can differ from glibc's by an ULP at such angles. truck-modeling's revolve path and the
-  kernel's `revolve_on_axis` and `transform` use it; `RevolutedCurve`'s evaluation keeps
-  `Matrix4::from_axis_angle`.
+  alone (`pmath`'s double-double evaluation, no fused multiply-add), the same bits on every
+  platform, and correctly rounded for every angle the kernel builds with: 2π/3, 4π/3, π/2, π,
+  k·2π/n for n ≤ 64, the snapped rephase grid; `crates/polycore/src/portable_trig_tests.rs`
+  proves it against exact integer arithmetic. The platform's libm is not correctly rounded
+  (glibc's `sin(2π/39)` is an ULP above the nearest float to the true value, and it misrounds
+  about 0.3 % of angles), so results can differ from glibc's by an ULP at such angles.
+  truck-modeling's revolve path, the kernel's `revolve_on_axis` and `transform`, and
+  `RevolutedCurve`'s evaluation (`decorators/revolved_curve.rs`, which used
+  `Matrix4::from_axis_angle` and `f64::sin`) use it; the analytic surfaces (`specifieds/`) and
+  everything else use `pmath` directly.
 - `decorators/intersection_curve.rs`: a transformed intersection curve scales its tolerance by
   the norm of the transform's linear part. The norm of the whole 4×4 matrix grows with the
   translation: a 100 mm move made a 0.144 mm tolerance 14.4 mm, its points projected across a

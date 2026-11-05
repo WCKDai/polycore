@@ -50,6 +50,11 @@ path = "tests/obj-io.rs"
 name = "stl-io"
 path = "tests/stl-io.rs"
 
+[dependencies.pmath]
+version = "0.1.0"
+package = "polycore-pmath"
+path = "../pmath"
+
 [dependencies.array-macro]
 version = "2.1.8"
 

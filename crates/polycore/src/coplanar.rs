@@ -1639,7 +1639,7 @@ pub(crate) fn bore_union(a: &Body, b: &Body, accept: &dyn Fn(&Body) -> bool) -> 
             }
             // The cylinder over the tool's length holds no material of either body.
             let (u, w) = (c.axis.any_perp(), c.axis.cross(c.axis.any_perp()));
-            let at = |s: f64, r: f64, ang: f64| c.origin + c.axis * s + (u * ang.cos() + w * ang.sin()) * r;
+            let at = |s: f64, r: f64, ang: f64| c.origin + c.axis * s + (u * pmath::cos(ang) + w * pmath::sin(ang)) * r;
             let clear = (1..=9).all(|i| {
                 let s = t0 + (t1 - t0) * f64::from(i) / 10.0;
                 empty(at(s, 0.0, 0.0))
@@ -1729,7 +1729,7 @@ fn grown_boss_union(
     let c = boss.cylinder;
     let d = (c.radius * 0.2).min(size * 0.01);
     let (u, w) = (c.axis.any_perp(), c.axis.cross(c.axis.any_perp()));
-    let at = |s: f64, r: f64, ang: f64| c.origin + c.axis * s + (u * ang.cos() + w * ang.sin()) * r;
+    let at = |s: f64, r: f64, ang: f64| c.origin + c.axis * s + (u * pmath::cos(ang) + w * pmath::sin(ang)) * r;
     // The other body's material all around the boss, as far out as it grows, over its length.
     let backed = (1..=9).all(|i| {
         let s = boss.t0 + (boss.t1 - boss.t0) * f64::from(i) / 10.0;

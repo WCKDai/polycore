@@ -327,7 +327,7 @@ fn seam(index: usize, edge: &mt::Edge, face_a: &mt::Face, face_b: &mt::Face, sam
         let signed = if na.dot(nb) < 0.0 { ka + kb } else { ka - kb };
         points.push(at);
         gap.push(qa.dist(qb), at, f);
-        angle.push(na.dot(nb).clamp(-1.0, 1.0).acos().to_degrees(), at, f);
+        angle.push(pmath::acos(na.dot(nb).clamp(-1.0, 1.0)).to_degrees(), at, f);
         jump.push(signed.abs(), at, f);
     }
     let (gap, angle, jump) = (gap.summary()?, angle.summary()?, jump.summary()?);

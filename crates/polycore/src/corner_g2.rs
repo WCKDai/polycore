@@ -436,7 +436,7 @@ pub fn seam_error(surface: &mt::Surface, sides: &[Vec<Frame>], reference: f64) -
             };
             let n = du.cross(d1).normalized().ok_or_else(|| fail("the corner patch has no normal at a seam"))?;
             let blend_n = t.cross(f.leave).normalized().ok_or_else(|| fail("a blend has no normal at a seam"))?;
-            angle = angle.max(n.dot(blend_n).abs().clamp(0.0, 1.0).acos());
+            angle = angle.max(pmath::acos(n.dot(blend_n).abs().clamp(0.0, 1.0)));
             // The curvature vector of the cross-seam curve: what the blend's own surface does along
             // the direction the patch leaves it in.
             let speed2 = d1.len2().max(1e-300);

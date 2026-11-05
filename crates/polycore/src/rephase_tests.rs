@@ -130,11 +130,11 @@ fn sin_cos_is_accurate() {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let x = ((state >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0) * (PI + 0.01);
         let (s, c) = sin_cos(x);
-        let d = ulps(s, x.sin()).max(ulps(c, x.cos()));
-        assert!(d <= 2, "sin, cos of {x:?}: {s:?} {c:?} against the platform's {:?} {:?}", x.sin(), x.cos());
+        let d = ulps(s, pmath::sin(x)).max(ulps(c, pmath::cos(x)));
+        assert!(d <= 2, "sin, cos of {x:?}: {s:?} {c:?} against pmath's {:?} {:?}", pmath::sin(x), pmath::cos(x));
         worst = worst.max(d);
     }
-    println!("at most {worst} ULP from the platform's sin and cos");
+    println!("at most {worst} ULP from pmath's sin and cos");
     assert!(worst <= 2, "{worst} ULPs");
 }
 

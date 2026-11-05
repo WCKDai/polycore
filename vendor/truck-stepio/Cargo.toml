@@ -39,6 +39,11 @@ path = "src/lib.rs"
 
 
 
+[dependencies.pmath]
+version = "0.1.0"
+package = "polycore-pmath"
+path = "../pmath"
+
 [dependencies.chrono]
 version = "0.4.38"
 features = ["wasmbind"]

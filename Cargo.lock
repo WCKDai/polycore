@@ -426,6 +426,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "polycore-geom",
+ "polycore-pmath",
  "polycore-truck-meshalgo",
  "polycore-truck-modeling",
  "polycore-truck-shapeops",
@@ -444,6 +445,7 @@ dependencies = [
 name = "polycore-geom"
 version = "0.1.0"
 dependencies = [
+ "polycore-pmath",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -456,7 +458,12 @@ dependencies = [
  "cgmath",
  "katexit",
  "num-complex",
+ "polycore-pmath",
 ]
+
+[[package]]
+name = "polycore-pmath"
+version = "0.1.0"
 
 [[package]]
 name = "polycore-truck-base"
@@ -464,6 +471,7 @@ version = "0.5.0"
 dependencies = [
  "cgmath",
  "polycore-matext4cgmath",
+ "polycore-pmath",
  "rustc-hash",
  "serde",
 ]
@@ -482,6 +490,7 @@ dependencies = [
 name = "polycore-truck-geometry"
 version = "0.5.0"
 dependencies = [
+ "polycore-pmath",
  "polycore-truck-base",
  "polycore-truck-geotrait",
  "serde",
@@ -506,6 +515,7 @@ dependencies = [
  "array-macro",
  "derive_more",
  "itertools",
+ "polycore-pmath",
  "polycore-truck-base",
  "polycore-truck-geometry",
  "polycore-truck-modeling",
@@ -521,6 +531,7 @@ name = "polycore-truck-modeling"
 version = "0.6.0"
 dependencies = [
  "derive_more",
+ "polycore-pmath",
  "polycore-truck-base",
  "polycore-truck-geometry",
  "polycore-truck-geotrait",
@@ -538,6 +549,7 @@ dependencies = [
  "array-macro",
  "bytemuck",
  "itertools",
+ "polycore-pmath",
  "polycore-truck-base",
  "polycore-truck-geotrait",
  "rustc-hash",
@@ -551,6 +563,7 @@ version = "0.4.0"
 dependencies = [
  "derive_more",
  "itertools",
+ "polycore-pmath",
  "polycore-truck-base",
  "polycore-truck-geometry",
  "polycore-truck-geotrait",
@@ -565,6 +578,7 @@ name = "polycore-truck-stepio"
 version = "0.3.0"
 dependencies = [
  "chrono",
+ "polycore-pmath",
  "polycore-truck-geometry",
  "polycore-truck-modeling",
  "polycore-truck-polymesh",

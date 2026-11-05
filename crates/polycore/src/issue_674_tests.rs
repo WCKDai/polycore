@@ -60,7 +60,7 @@ fn partial_circular_contact_preserves_material_and_history() {
                 assert!(r.history().is_some(), "missing history z={z} angle={angle}");
                 let m = measure(&r).unwrap();
                 let volume = 25.0 * 47.5 * 37.5 + PI * 25.0 * 2.5;
-                let contact = 25.0 * (-z / 5.0).acos() + z * (25.0 - z * z).sqrt();
+                let contact = 25.0 * pmath::acos(-z / 5.0) + z * (25.0 - z * z).sqrt();
                 let area = 2.0 * (25.0 * 47.5 + 25.0 * 37.5 + 47.5 * 37.5) + 2.0 * PI * 5.0 * (5.0 + 2.5) - 2.0 * contact;
                 assert!((m.volume - volume).abs() < 0.1, "z={z} angle={angle}: volume {} expected {volume}", m.volume);
                 assert!((m.area - area).abs() < 0.2, "z={z} angle={angle}: area {} expected {area}", m.area);

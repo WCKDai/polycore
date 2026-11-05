@@ -194,7 +194,7 @@ fn fillets_on_several_edges_and_angles() {
     let fp = fillet(&p, &[Vec3::new(0.0, 0.0, 5.0)], r).unwrap();
     // Removed area for interior angle φ: r²(cot(φ/2)) − r²(π − φ)/2.
     let phi = PI / 3.0;
-    let removed = r * r / (phi / 2.0).tan() - r * r * (PI - phi) / 2.0;
+    let removed = r * r / pmath::tan(phi / 2.0) - r * r * (PI - phi) / 2.0;
     let v0 = measure(&p).unwrap().volume;
     assert!(rel(measure(&fp).unwrap().volume, v0 - removed * 10.0) < 2e-4, "{} vs {}", measure(&fp).unwrap().volume, v0 - removed * 10.0);
     // Adjacent edges meeting at a corner: their blends meet in a mitre.
@@ -262,8 +262,8 @@ fn fillet_ending_across_two_faces() {
         if t.dot(other) < 0.0 { t } else { -t }
     };
     let (t1, t2) = (into(n1, n2), into(n2, n1));
-    let phi = (-n1.dot(n2)).acos();
-    let s = r / (phi / 2.0).tan();
+    let phi = pmath::acos(-n1.dot(n2));
+    let s = r / pmath::tan(phi / 2.0);
     let corner = Vec3::new(0.0, 0.0, 20.0 - k);
     let axis_at = corner + t1 * s - n1 * r;
     let removed_at = |q: Vec3| {
@@ -443,7 +443,7 @@ fn tapered_extrudes() {
         holes: vec![],
     };
     let b = extrude_tapered(&Plane::XY, &sq, 30.0, 1.0, 10f64.to_radians()).unwrap();
-    let top = 40.0 + 2.0 * 30.0 * 10f64.to_radians().tan();
+    let top = 40.0 + 2.0 * 30.0 * pmath::tan(10f64.to_radians());
     let v = 30.0 / 3.0 * (1600.0 + top * top + 40.0 * top);
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, v) < 1e-6, "{} vs {v}", m.volume);
@@ -451,7 +451,7 @@ fn tapered_extrudes() {
     // Inward taper on a circle (a cone frustum), downward.
     let c = Region2 { outer: Loop2::circle(Vec2::ZERO, 10.0), holes: vec![] };
     let b = extrude_tapered(&Plane::XY, &c, 10.0, -1.0, -20f64.to_radians()).unwrap();
-    let r2 = 10.0 - 10.0 * 20f64.to_radians().tan();
+    let r2 = 10.0 - 10.0 * pmath::tan(20f64.to_radians());
     let v = PI * 10.0 / 3.0 * (100.0 + r2 * r2 + 10.0 * r2);
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, v) < 5e-4, "{} vs {v}", m.volume);
@@ -473,7 +473,7 @@ fn tapered_extrude_of_lines_and_arcs() {
         ],
     };
     let b = extrude_tapered(&Plane::XY, &Region2 { outer: slot, holes: vec![] }, h, 1.0, -a).unwrap();
-    let (a0, p, t) = (2.0 * r * l + PI * r * r, 2.0 * l + 2.0 * PI * r, a.tan());
+    let (a0, p, t) = (2.0 * r * l + PI * r * r, 2.0 * l + 2.0 * PI * r, pmath::tan(a));
     let v = a0 * h - p * t * h * h / 2.0 + PI * t * t * h.powi(3) / 3.0;
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, v) < 5e-4, "{} vs {v}", m.volume);
@@ -502,7 +502,7 @@ fn tapered_extrude_of_arcs_meeting_at_corners() {
         (x, (r * r - x * x).sqrt())
     };
     let (x, y) = corner(r0, w0);
-    let at = |cx: f64, px: f64, py: f64| (py).atan2(px - cx);
+    let at = |cx: f64, px: f64, py: f64| pmath::atan2(py, px - cx);
     let lobed = Loop2 {
         segs: vec![
             Seg2::Arc { center: Vec2::ZERO, radius: r0, start: at(0.0, x, y), sweep: at(0.0, -x, y) - at(0.0, x, y) },
@@ -515,12 +515,12 @@ fn tapered_extrude_of_arcs_meeting_at_corners() {
     // Union of the circle and two lobes: the circle plus each lobe less its lens with the circle.
     let area = |d: f64| {
         let (r, w) = (r0 - d, w0 - d);
-        let lens = r * r * ((c * c + r * r - w * w) / (2.0 * c * r)).acos() + w * w * ((c * c + w * w - r * r) / (2.0 * c * w)).acos()
+        let lens = r * r * pmath::acos((c * c + r * r - w * w) / (2.0 * c * r)) + w * w * pmath::acos((c * c + w * w - r * r) / (2.0 * c * w))
             - 0.5 * ((-c + r + w) * (c + r - w) * (c - r + w) * (c + r + w)).sqrt();
         PI * r * r + 2.0 * (PI * w * w - lens)
     };
     let k = 200;
-    let v: f64 = (0..k).map(|j| area((j as f64 + 0.5) * h / k as f64 * a.tan())).sum::<f64>() * h / k as f64;
+    let v: f64 = (0..k).map(|j| area((j as f64 + 0.5) * h / k as f64 * pmath::tan(a))).sum::<f64>() * h / k as f64;
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, v) < 2e-4, "{} vs {v}", m.volume);
     assert_eq!(m.merged.faces, 6);
@@ -544,7 +544,7 @@ fn tapered_extrude_of_conics() {
         ],
     };
     let b = extrude_tapered(&Plane::XY, &Region2 { outer: disc, holes: vec![] }, h, 1.0, -a).unwrap();
-    let r1 = r - h * a.tan();
+    let r1 = r - h * pmath::tan(a);
     let v = PI * h / 3.0 * (r * r + r1 * r1 + r * r1);
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, v) < 1e-3, "{} vs {v}", m.volume);
@@ -570,7 +570,7 @@ fn tapered_extrude_of_cubics_is_close_to_the_true_offset() {
     };
     let (area, perimeter) = (disc.signed_area().abs(), disc.segs.iter().map(|s| s.length()).sum::<f64>());
     let b = extrude_tapered(&Plane::XY, &Region2 { outer: disc, holes: vec![] }, h, 1.0, -a).unwrap();
-    let t = a.tan();
+    let t = pmath::tan(a);
     let v = area * h - perimeter * t * h * h / 2.0 + PI * t * t * h.powi(3) / 3.0;
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, v) < 5e-4, "{} vs {v}", m.volume);
@@ -609,7 +609,7 @@ fn a_tapered_s_curve_is_cut_into_pieces_that_follow_its_offset() {
 #[test]
 fn tapered_extrude_swallows_a_short_tip() {
     let (h, a) = (2.0, 5f64.to_radians());
-    let d = h * a.tan();
+    let d = h * pmath::tan(a);
     let pts = [Vec2::new(0.0, -2.0), Vec2::new(20.0, -0.01), Vec2::new(20.0, 0.01), Vec2::new(0.0, 2.0)];
     let b = extrude_tapered(&Plane::XY, &Region2 { outer: Loop2::polygon(&pts), holes: vec![] }, h, 1.0, -a).unwrap();
     // The top: the three long lines moved in by d (to their left, the loop running
@@ -641,7 +641,7 @@ fn tapered_extrude_between_with_a_foot() {
     };
     let (from, to, foot) = (-2.0, 10.0, 0.5);
     let b = extrude_tapered_between(&Plane::XY, &sq, from, to, foot, 1.0, a).unwrap();
-    let side = |z: f64| 40.0 + 2.0 * z * a.tan();
+    let side = |z: f64| 40.0 + 2.0 * z * pmath::tan(a);
     let (s0, s1, rise) = (side(from), side(to), to - from - foot);
     let v = foot * s0 * s0 + rise / 3.0 * (s0 * s0 + s1 * s1 + s0 * s1);
     let m = measure(&b).unwrap();
@@ -681,7 +681,7 @@ fn polyhedra_shell_and_draft() {
     assert_eq!(m.merged.faces, 11);
     // Draft two side faces 5° in, about the bottom, pulling up.
     let d = draft(&b, &[Vec3::new(0.0, 20.0, 15.0), Vec3::new(50.0, 20.0, 15.0)], &Plane::XY, Vec3::Z, 5f64.to_radians()).unwrap();
-    let t = 30.0 * 5f64.to_radians().tan();
+    let t = 30.0 * pmath::tan(5f64.to_radians());
     assert!(rel(measure(&d).unwrap().volume, 40.0 * 30.0 * (50.0 + 50.0 - 2.0 * t) / 2.0) < 1e-6, "{}", measure(&d).unwrap().volume);
     let tet = convex_polyhedron(&[
         HalfSpace { n: Vec3::new(0.0, 0.0, -1.0), d: 0.0 },
@@ -764,7 +764,7 @@ fn moving_a_body_with_an_intersection_curve_edge_ends() {
 /// - A disc across the hole: worked before, and must stay exact.
 #[test]
 fn drain_pads_flush_under_a_floor_with_a_hole() {
-    let t = 1f64.to_radians().tan();
+    let t = pmath::tan(1f64.to_radians());
     let hs = |n: Vec3, p: Vec3| {
         let n = n.normalized().unwrap();
         HalfSpace { n, d: n.dot(p) }
@@ -838,7 +838,7 @@ fn round_pads_crossing_a_shallow_fall() {
     };
     let block = box_solid(Vec3::ZERO, Vec3::new(300.0, 150.0, 80.0)).unwrap();
     // One fall along x at 1°: floor z = 8 + t (x − 10).
-    let t = 1f64.to_radians().tan();
+    let t = pmath::tan(1f64.to_radians());
     let fall = boolean(&block, &walls(&[hs(Vec3::new(t, 0.0, -1.0), Vec3::new(10.0, 0.0, 8.0))]), BoolOp::Cut).unwrap().unwrap();
     let v0 = measure(&fall).unwrap().volume;
     for x in [60.0, 100.0] {
@@ -857,7 +857,7 @@ fn round_pads_crossing_a_shallow_fall() {
         }
     }
     // Four faces falling 2° toward a drain point, and a pad over a valley edge and a wall.
-    let t2 = 2f64.to_radians().tan();
+    let t2 = pmath::tan(2f64.to_radians());
     let d = Vec3::new(240.0, 110.0, 8.0);
     let hopper = walls(&[
         hs(Vec3::new(t2, 0.0, -1.0), d),
@@ -916,7 +916,7 @@ fn planar_fallback_names_the_curved_faces() {
     let e = planar_boolean(&ball, &pad, BoolOp::Cut).unwrap_err().to_string();
     assert!(e.contains("the target has 6 curved faces (sphere) and the tool has 2 curved faces (cylinder)"), "{e}");
     // All-planar bodies, a face of one at a shallow angle (1°): the fallback takes them.
-    let slope = Vec3::new(-1f64.to_radians().tan(), 0.0, 1.0).normalized().unwrap();
+    let slope = Vec3::new(-pmath::tan(1f64.to_radians()), 0.0, 1.0).normalized().unwrap();
     let wedge = convex_polyhedron(&[
         HalfSpace { n: Vec3::X, d: 30.0 },
         HalfSpace { n: -Vec3::X, d: -10.0 },
@@ -1205,7 +1205,7 @@ fn debug_revolved_hole_tool() {
     // Drill point profile in the XZ plane through x = 50: revolve about the vertical line x = 50.
     let pl = Plane { origin: Vec3::new(50.0, 20.0, 0.0), x: Vec3::X, y: Vec3::Z };
     let r = 3.0;
-    let tip = r / 59f64.to_radians().tan();
+    let tip = r / pmath::tan(59f64.to_radians());
     let prof =
         Region2 { outer: Loop2::polygon(&[Vec2::new(0.0, 16.0), Vec2::new(0.0, 5.0 - tip), Vec2::new(r, 5.0), Vec2::new(r, 16.0)]), holes: vec![] };
     let tool = revolve(&pl, &[prof], Vec2::ZERO, Vec2::Y, std::f64::consts::TAU).unwrap().pop().unwrap();
@@ -1334,9 +1334,9 @@ fn debug_sphere_patches() {
     }
     let c = box_solid(Vec3::new(-20.0, -20.0, -20.0), Vec3::new(20.0, 20.0, 20.0)).unwrap();
     let a = 0.3f64;
-    let (ca, sa) = (a.cos(), a.sin());
+    let (ca, sa) = (pmath::cos(a), pmath::sin(a));
     let b2 = 0.5f64;
-    let (cb, sb) = (b2.cos(), b2.sin());
+    let (cb, sb) = (pmath::cos(b2), pmath::sin(b2));
     // Rz(a) * Rx(b)
     let rot = [Vec3::new(ca, sa, 0.0), Vec3::new(-sa * cb, ca * cb, sb), Vec3::new(sa * sb, -ca * sb, cb)];
     for (name, s2) in [
@@ -1383,7 +1383,7 @@ fn debug_sphere_rotations() {
     let b = box_solid(Vec3::new(-20.0, -20.0, -20.0), Vec3::new(20.0, 20.0, 20.0)).unwrap();
     for k in 0..8 {
         let (a, c) = (0.37 * k as f64 + 0.1, 0.61 * k as f64 + 0.2);
-        let (ca, sa, cc, sc) = (a.cos(), a.sin(), c.cos(), c.sin());
+        let (ca, sa, cc, sc) = (pmath::cos(a), pmath::sin(a), pmath::cos(c), pmath::sin(c));
         let rot = [Vec3::new(ca, sa, 0.0), Vec3::new(-sa * cc, ca * cc, sc), Vec3::new(sa * sc, -ca * sc, cc)];
         let s = crate::build::sphere_patches_rotated(Vec3::ZERO, 25.0, rot).unwrap();
         let r = guard("t", || {
@@ -1635,10 +1635,10 @@ fn debug_drilled_hole() {
     let b = box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 15.0)).unwrap();
     let r = 3.4;
     let half = (118f64 / 2.0).to_radians();
-    let tip = r / half.tan();
+    let tip = r / pmath::tan(half);
     let (top, bottom) = (0.6, -12.0);
     let a = std::env::var("ANG").ok().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
-    let rp = Plane::new(Vec3::new(20.0, 15.0, 15.0), Vec3::new(a.cos(), a.sin(), 0.0), Vec3::Z).unwrap();
+    let rp = Plane::new(Vec3::new(20.0, 15.0, 15.0), Vec3::new(pmath::cos(a), pmath::sin(a), 0.0), Vec3::Z).unwrap();
     let tipv = if std::env::var_os("NOTIP").is_some() { 0.0 } else { tip };
     let pts = [Vec2::new(0.0, top), Vec2::new(r, top), Vec2::new(r, bottom), Vec2::new(0.0, bottom - tipv)];
     let region = Region2 { outer: Loop2::polygon(&pts), holes: vec![] };
@@ -1788,7 +1788,7 @@ fn shell_with_cylindrical_faces() {
 /// meets the round side is a free curve from the bottom face to the top.
 fn plate_with_a_hole_through_its_round_side() -> Body {
     // The arc from (0, 20) to (0, 0) through (-12.5, 10): centre (-2.25, 10), radius 10.25.
-    let start = 10f64.atan2(2.25);
+    let start = pmath::atan2(10f64, 2.25);
     let segs = vec![
         Seg2::Line { a: Vec2::ZERO, b: Vec2::new(47.5, 0.0) },
         Seg2::Line { a: Vec2::new(47.5, 0.0), b: Vec2::new(47.5, 20.0) },
@@ -1866,7 +1866,7 @@ fn draft_of_a_round_ended_pocket() {
     // The pocket narrows going down: at depth t its walls stand t·tan(a) further in.
     let (n, mut pocket) = (2000, 0.0);
     for k in 0..n {
-        let e = (k as f64 + 0.5) / n as f64 * 10.0 * a.tan();
+        let e = (k as f64 + 0.5) / n as f64 * 10.0 * pmath::tan(a);
         pocket += (30.0 * (20.0 - 2.0 * e) + PI * (10.0 - e).powi(2)) * 10.0 / n as f64;
     }
     let v = measure(&d).unwrap().volume;
@@ -1890,7 +1890,7 @@ fn draft_of_a_pocket_on_a_body_with_a_far_rounded_edge() {
     // The pocket narrows going down: at depth t its walls stand t·tan(a) further in.
     let (n, mut pocket) = (2000, 0.0);
     for k in 0..n {
-        let e = (k as f64 + 0.5) / n as f64 * 10.0 * a.tan();
+        let e = (k as f64 + 0.5) / n as f64 * 10.0 * pmath::tan(a);
         pocket += (30.0 - 2.0 * e) * (20.0 - 2.0 * e) * 10.0 / n as f64;
     }
     let round = (r * r - PI * r * r / 4.0) * 80.0;
@@ -1909,7 +1909,7 @@ fn draft_of_a_round_hole_from_one_pick() {
     let b = boolean(&block, &hole, BoolOp::Cut).unwrap().unwrap();
     let a = 5f64.to_radians();
     let d = draft(&b, &[Vec3::new(40.0, 30.0, 12.5)], &Plane::XY.offset(25.0), Vec3::Z, a).unwrap();
-    let (big, small) = (10.0, 10.0 - 25.0 * a.tan());
+    let (big, small) = (10.0, 10.0 - 25.0 * pmath::tan(a));
     let want = 60.0 * 60.0 * 25.0 - PI * 25.0 / 3.0 * (big * big + big * small + small * small);
     let m = measure(&d).unwrap();
     assert!(rel(m.volume, want) < 1e-4, "{} vs {want}", m.volume);
@@ -2158,14 +2158,14 @@ fn fillet_sharp_arc_and_arc_loop() {
     assert!(blended.validity().is_empty(), "{:?}", blended.validity());
     let mesh = blended.tessellate_with(1e-4, true).unwrap();
     for p in &mesh.positions {
-        assert!((p.x - 5.0).hypot(p.y) <= 10.0 + 1e-3 && (p.x + 5.0).hypot(p.y) <= 10.0 + 1e-3, "outside the lens: {p:?}");
+        assert!(pmath::hypot(p.x - 5.0, p.y) <= 10.0 + 1e-3 && pmath::hypot(p.x + 5.0, p.y) <= 10.0 + 1e-3, "outside the lens: {p:?}");
     }
-    let area = |rho: f64| 2.0 * rho * rho * (5.0 / rho).acos() - 10.0 * (rho * rho - 25.0).sqrt();
+    let area = |rho: f64| 2.0 * rho * rho * pmath::acos(5.0 / rho) - 10.0 * (rho * rho - 25.0).sqrt();
     let dt = (PI / 2.0) / 8192.0;
     let want: f64 = (0..8192)
         .map(|i| {
             let theta = (f64::from(i) + 0.5) * dt;
-            (area(10.0) - area(10.0 - 0.5 * (1.0 - theta.cos()))) * 0.5 * theta.cos() * dt
+            (area(10.0) - area(10.0 - 0.5 * (1.0 - pmath::cos(theta)))) * 0.5 * pmath::cos(theta) * dt
         })
         .sum();
     let removed = body.tessellate_with(1e-4, true).unwrap().measure().volume - mesh.measure().volume;
@@ -2178,7 +2178,7 @@ fn fillet_tabbed_plate_outer_loop_and_partial_selection_after_hole() {
     // Reconstruct the outer outline from its seven public pick coordinates:
     // R25 plate, x=+/-4 tab sides, R2 corners and a 4 mm straight top.
     // The hole's dimensions come from the public reproduction, not an original design file.
-    let theta = (4.0_f64 / 25.0).acos();
+    let theta = pmath::acos(4.0_f64 / 25.0);
     let y = (625.0_f64 - 16.0).sqrt();
     let corner_y = 280.0 / 9.0;
     let hole_y = 262.0 / 9.0;
@@ -2212,11 +2212,11 @@ fn fillet_tabbed_plate_outer_loop_and_partial_selection_after_hole() {
         assert!(blended.validity().is_empty(), "{:?}", blended.validity());
         let mesh = blended.display_mesh(0.01).unwrap();
         for p in &mesh.positions {
-            let inside = p.x.hypot(p.y) <= 25.001
+            let inside = pmath::hypot(p.x, p.y) <= 25.001
                 || (p.x.abs() <= 4.001 && p.y >= y - 0.001 && p.y <= corner_y)
                 || (p.x.abs() <= 2.001 && p.y >= corner_y && p.y <= corner_y + 2.001)
-                || (p.x - 2.0).hypot(p.y - corner_y) <= 2.001
-                || (p.x + 2.0).hypot(p.y - corner_y) <= 2.001;
+                || pmath::hypot(p.x - 2.0, p.y - corner_y) <= 2.001
+                || pmath::hypot(p.x + 2.0, p.y - corner_y) <= 2.001;
             assert!(inside && p.z >= -0.001 && p.z <= 2.001, "outside the plate: {p:?}");
         }
     }
@@ -2282,7 +2282,7 @@ fn fillet_mixed_arc_and_line_perimeter_edges() {
             "{bounds:?}"
         );
         for p in &mesh.positions {
-            assert!(p.x.hypot(p.y) <= 10.0 + tol, "outside the source semicircle: {p:?}");
+            assert!(pmath::hypot(p.x, p.y) <= 10.0 + tol, "outside the source semicircle: {p:?}");
         }
     }
 }
@@ -2295,10 +2295,10 @@ fn d_fillet_removed_reference(r: f64, steps: u32) -> f64 {
     (0..steps)
         .map(|i| {
             let theta = (f64::from(i) + 0.5) * dt;
-            let d = r * (1.0 - theta.cos());
+            let d = r * (1.0 - pmath::cos(theta));
             let rho = 10.0 - d;
-            let remaining = rho * rho * (d / rho).acos() - d * (rho * rho - d * d).sqrt();
-            (PI * 50.0 - remaining) * r * theta.cos() * dt
+            let remaining = rho * rho * pmath::acos(d / rho) - d * (rho * rho - d * d).sqrt();
+            (PI * 50.0 - remaining) * r * pmath::cos(theta) * dt
         })
         .sum()
 }
@@ -2356,7 +2356,7 @@ fn loop_chamfer_mixed_arc_and_line_uses_offset_intersections() {
         .map(|i| {
             let d = (f64::from(i) + 0.5) * step;
             let rho = 10.0 - d;
-            let remaining = rho * rho * (d / rho).acos() - d * (rho * rho - d * d).sqrt();
+            let remaining = rho * rho * pmath::acos(d / rho) - d * (rho * rho - d * d).sqrt();
             (PI * 50.0 - remaining) * step
         })
         .sum();
@@ -2394,7 +2394,7 @@ fn fillet_mixed_arc_and_line_joint_preserves_both_section_radii() {
                 // arc blend, not their tangent-plane approximation.
                 let radius2 = (p.y - r).powi(2) + (p.z - (15.0 - r)).powi(2);
                 assert!((radius2 - r * r).abs() < 1e-7, "distorted line section at {p:?}: radius squared {radius2}");
-                let radius2 = (p.x.hypot(p.y) - (10.0 - r)).powi(2) + (p.z - (15.0 - r)).powi(2);
+                let radius2 = (pmath::hypot(p.x, p.y) - (10.0 - r)).powi(2) + (p.z - (15.0 - r)).powi(2);
                 assert!((radius2 - r * r).abs() < 1e-7, "distorted arc section at {p:?}: radius squared {radius2}");
             }
         }
@@ -2423,7 +2423,7 @@ fn fillet_partial_mixed_arc_and_line_perimeter_run() {
     );
     for p in &mesh.positions {
         if p.y > 20.0 + tol {
-            assert!((p.x - 20.0).hypot(p.y - 20.0) <= 10.0 + tol, "outside the source semicircle: {p:?}");
+            assert!(pmath::hypot(p.x - 20.0, p.y - 20.0) <= 10.0 + tol, "outside the source semicircle: {p:?}");
         }
     }
 }
@@ -2740,7 +2740,7 @@ fn measure_of_a_body_with_many_faces() {
     let pts: Vec<Vec2> = (0..n)
         .map(|i| {
             let a = std::f64::consts::TAU * i as f64 / n as f64;
-            Vec2::new(20.0 * a.cos(), 20.0 * a.sin())
+            Vec2::new(20.0 * pmath::cos(a), 20.0 * pmath::sin(a))
         })
         .collect();
     let b = extrude(&Plane::XY, &[Region2 { outer: Loop2::polygon(&pts), holes: vec![] }], 0.0, 10.0).unwrap().pop().unwrap();
@@ -2756,7 +2756,7 @@ fn perf_measure_5000_faces() {
     let pts: Vec<Vec2> = (0..5000)
         .map(|i| {
             let a = std::f64::consts::TAU * i as f64 / 5000.0;
-            Vec2::new(20.0 * a.cos(), 20.0 * a.sin())
+            Vec2::new(20.0 * pmath::cos(a), 20.0 * pmath::sin(a))
         })
         .collect();
     let b = extrude(&Plane::XY, &[Region2 { outer: Loop2::polygon(&pts), holes: vec![] }], 0.0, 10.0).unwrap().pop().unwrap();
@@ -2812,7 +2812,7 @@ fn orientation_mesh_reuses_missing_face_check_at_matching_tolerance() {
 fn shell_where_four_faces_meet_at_a_corner() {
     let (w, l, ht, t) = (100.0, 60.0, 40.0, 2.0);
     // Drain depth: the long facets fall 1°.
-    let h = 30.0 * 1f64.to_radians().tan();
+    let h = 30.0 * pmath::tan(1f64.to_radians());
     let facet = |n: Vec3, p: Vec3| {
         let n = n.normalized().unwrap();
         HalfSpace { n, d: n.dot(p) }
@@ -2859,7 +2859,7 @@ fn shell_where_four_faces_meet_at_a_corner() {
 #[test]
 fn shell_of_a_pocket_whose_floor_falls_to_a_drain() {
     let (px, py, pw, pl, top, depth, t) = (20.0, 15.0, 100.0, 60.0, 50.0, 30.0, 3.0);
-    let h = 30.0 * 1f64.to_radians().tan();
+    let h = 30.0 * pmath::tan(1f64.to_radians());
     let z0 = top - depth;
     let facet = |n: Vec3, p: Vec3| {
         let n = n.normalized().unwrap();
@@ -2926,7 +2926,7 @@ fn loft_joined_onto_a_box_top_is_one_shell() {
     // #396: a loft from a Ø12 circle on the box top (z = 20) to a hexagon at z = 35. The union
     // returned both shells side by side, touching on the disc, which an STL shows as two parts.
     let bx = box_solid(Vec3::new(-20.0, -15.0, 0.0), Vec3::new(20.0, 15.0, 20.0)).unwrap();
-    let hex: Vec<Vec2> = (0..6).map(|k| Vec2::new(4.0 * (PI / 3.0 * k as f64).cos(), 4.0 * (PI / 3.0 * k as f64).sin())).collect();
+    let hex: Vec<Vec2> = (0..6).map(|k| Vec2::new(4.0 * pmath::cos(PI / 3.0 * k as f64), 4.0 * pmath::sin(PI / 3.0 * k as f64))).collect();
     let loft_at = |x: f64| {
         let hex: Vec<Vec2> = hex.iter().map(|p| *p + Vec2::new(x, 0.0)).collect();
         loft(&[(Plane::XY.offset(20.0), Loop2::circle(Vec2::new(x, 0.0), 6.0)), (Plane::XY.offset(35.0), Loop2::polygon(&hex))]).unwrap()
@@ -3196,7 +3196,7 @@ fn a_passed_deadline_stops_the_boolean_and_nesting_keeps_the_earlier() {
 /// Pappus' volume at 180 degrees). The volume follows Pappus: area x 30 mm x angle.
 #[test]
 fn loft_through_identical_sections_turning_about_an_axis_keeps_its_volume() {
-    let pts: Vec<Vec2> = (0..12).map(|a| Vec2::new(30.0 + 3.0 * (a as f64 * PI / 6.0).cos(), 5.0 * (a as f64 * PI / 6.0).sin())).collect();
+    let pts: Vec<Vec2> = (0..12).map(|a| Vec2::new(30.0 + 3.0 * pmath::cos(a as f64 * PI / 6.0), 5.0 * pmath::sin(a as f64 * PI / 6.0))).collect();
     // Periodic Catmull-Rom through the points, as cubic Beziers.
     let segs: Vec<Seg2> = (0..12)
         .map(|i| {
@@ -3211,7 +3211,7 @@ fn loft_through_identical_sections_turning_about_an_axis_keeps_its_volume() {
         let secs: Vec<(Plane, Loop2)> = (0..=span / 10)
             .map(|i| {
                 let t = (i as f64 * 10.0).to_radians();
-                (Plane { origin: Vec3::ZERO, x: Vec3::new(t.cos(), t.sin(), 0.0), y: Vec3::Z }, section.clone())
+                (Plane { origin: Vec3::ZERO, x: Vec3::new(pmath::cos(t), pmath::sin(t), 0.0), y: Vec3::Z }, section.clone())
             })
             .collect();
         let want = area * 30.0 * (span as f64).to_radians();
@@ -3265,7 +3265,7 @@ fn long_plate_with_small_holes(r: f64, tilt: f64) -> (Body, Vec<Vec3>) {
     let p = transform(&p, shift, Vec3::ZERO, Vec3::X, tilt).unwrap();
     let text = step_export(&[&p], "plate").unwrap();
     let p = step_import(&text).unwrap().bodies.remove(0).body;
-    let (s, c) = tilt.sin_cos();
+    let (s, c) = pmath::sin_cos(tilt);
     let placed = centres.iter().map(|q| Vec3::new(q.x, q.y * c - q.z * s, q.y * s + q.z * c) + shift).collect();
     (p, placed)
 }
@@ -3335,8 +3335,10 @@ fn an_unboxed_face_pairs_alone_and_the_rest_are_still_pruned() {
 fn boolean_broad_phase_gives_the_every_pair_result() {
     use truck_shapeops::broad_phase_test_hooks::{every_pair, pairs_kept};
     let prism = |cx: f64, cy: f64, z0: f64, z1: f64| {
-        let pts: Vec<Vec2> =
-            (0..32).map(|k| (k as f64 + 0.3) * std::f64::consts::TAU / 32.0).map(|t| Vec2::new(cx + 10.0 * t.cos(), cy + 10.0 * t.sin())).collect();
+        let pts: Vec<Vec2> = (0..32)
+            .map(|k| (k as f64 + 0.3) * std::f64::consts::TAU / 32.0)
+            .map(|t| Vec2::new(cx + 10.0 * pmath::cos(t), cy + 10.0 * pmath::sin(t)))
+            .collect();
         extrude(&Plane::XY, &[Region2 { outer: Loop2::polygon(&pts), holes: vec![] }], z0, z1).unwrap().pop().unwrap()
     };
     let a = prism(0.0, 0.0, 0.0, 10.0);
@@ -3679,14 +3681,15 @@ fn shell_of_a_barrel_loft_has_the_volume_of_its_offset_meridian() {
 /// at every mesh point, to within the fit's 0.01 mm. #194.
 #[test]
 fn thicken_of_a_five_sided_patch_keeps_its_thickness() {
-    let pent: Vec<Vec2> = (0..5).map(|k| PI / 2.0 + 2.0 * PI * k as f64 / 5.0).map(|a| Vec2::new(15.0 * a.cos(), 15.0 * a.sin())).collect();
+    let pent: Vec<Vec2> =
+        (0..5).map(|k| PI / 2.0 + 2.0 * PI * k as f64 / 5.0).map(|a| Vec2::new(15.0 * pmath::cos(a), 15.0 * pmath::sin(a))).collect();
     let prism = extrude(&Plane::XY, &[Region2 { outer: Loop2::polygon(&pent), holes: vec![] }], 0.0, 20.0).unwrap().pop().unwrap();
     let tool = cylinder(Vec3::new(0.0, -60.0, 55.0), Vec3::Y, 40.0, 120.0).unwrap();
     let cup = boolean(&prism, &tool, BoolOp::Cut).unwrap().unwrap();
     let rim: Vec<Vec3> = (0..5)
         .map(|k| {
             let a = PI / 2.0 + PI / 5.0 + 2.0 * PI * k as f64 / 5.0;
-            let (x, y) = (15.0 * (PI / 5.0).cos() * a.cos(), 15.0 * (PI / 5.0).cos() * a.sin());
+            let (x, y) = (15.0 * pmath::cos(PI / 5.0) * pmath::cos(a), 15.0 * pmath::cos(PI / 5.0) * pmath::sin(a));
             Vec3::new(x, y, 55.0 - (1600.0 - x * x).sqrt())
         })
         .collect();

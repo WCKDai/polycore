@@ -506,8 +506,8 @@ mod tests {
     /// with derivative conditions at both ends (values exact at the samples).
     #[test]
     fn spline_interpolation_with_end_derivatives() {
-        let f = |t: f64| (2.0 * t).sin();
-        let df = |t: f64| 2.0 * (2.0 * t).cos();
+        let f = |t: f64| pmath::sin(2.0 * t);
+        let df = |t: f64| 2.0 * pmath::cos(2.0 * t);
         let ts: Vec<f64> = (0..=8).map(|k| k as f64 / 8.0).collect();
         let mut conds: Vec<Cond> = ts.iter().map(|&t| Cond { t, der: 0 }).collect();
         conds.push(Cond { t: 0.0, der: 1 });
@@ -535,7 +535,7 @@ mod tests {
         let to = Space::with_breaks(3, &[0.0, 0.2, 0.5, 0.7, 1.0]).unwrap();
         let out = embed(&from, &ctrl, &to).unwrap();
         let spline = Space::with_breaks(3, &[0.0, 0.5, 1.0]).unwrap();
-        let sctrl: Vec<f64> = (0..spline.count()).map(|i| (i as f64 * 1.7).sin()).collect();
+        let sctrl: Vec<f64> = (0..spline.count()).map(|i| pmath::sin(i as f64 * 1.7)).collect();
         let finer = spline.refined(&[0.25, 0.5, 0.8]).unwrap();
         let sout = embed(&spline, &sctrl, &finer).unwrap();
         for k in 0..=20 {

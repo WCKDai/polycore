@@ -3,7 +3,7 @@ use crate::*;
 use polycore_geom::{Loop2, Plane, Region2, Seg2, UnitVec3, Vec2, Vec3};
 
 fn fixture() -> (Body, Body, Vec3, f64) {
-    let slope = 1f64.to_radians().tan();
+    let slope = pmath::tan(1f64.to_radians());
     let hs = |normal: Vec3, point: Vec3| {
         let n = normal.normalized().unwrap();
         HalfSpace { n, d: n.dot(point) }
@@ -23,7 +23,7 @@ fn fixture() -> (Body, Body, Vec3, f64) {
     let target = boolean(&bored, &web, BoolOp::Union).unwrap().unwrap();
     let region = Region2 { outer: Loop2::circle(Vec2::new(20., 15.), 8.), holes: vec![Loop2::circle(Vec2::new(20., 15.), 5.).reversed()] };
     let ring = extrude(&Plane::XY, &[region], 14., 24.).unwrap().remove(0);
-    let web_volume = 0.02 * 2. * (24f64.sqrt() + 25. * 0.2f64.asin());
+    let web_volume = 0.02 * 2. * (24f64.sqrt() + 25. * pmath::asin(0.2f64));
     let fine_target = target.tessellate_with(1e-4, true).unwrap();
     let added = fine_target.measure().volume - bored.tessellate_with(1e-4, true).unwrap().measure().volume;
     assert!((added - web_volume).abs() < 0.005, "actual connected web adds {added}, expected {web_volume}");

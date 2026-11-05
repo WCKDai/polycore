@@ -210,7 +210,7 @@ fn rotated_wire(wire: &mt::Wire, offset: usize) -> mt::Wire {
 
 fn turn(a: Vec3, b: Vec3) -> f64 {
     match (a.normalized(), b.normalized()) {
-        (Some(a), Some(b)) => a.dot(b).clamp(-1.0, 1.0).acos(),
+        (Some(a), Some(b)) => pmath::acos(a.dot(b).clamp(-1.0, 1.0)),
         _ => 0.0,
     }
 }
@@ -318,7 +318,7 @@ fn controlled_stations(plane: &Plane, pts: &[Vec3], tangents: &[Vec3], mitre: &[
     let axis = if n.dot(t0) < 0.0 { n * -1.0 } else { n };
     // Kept as drawn, the profile flattens to nothing where the path runs along its plane: the
     // path has to cross it at 5 degrees or more all the way.
-    if ctl.orientation == SweepOrientation::Parallel && tangents.iter().any(|t| t.dot(axis) < 5f64.to_radians().sin()) {
+    if ctl.orientation == SweepOrientation::Parallel && tangents.iter().any(|t| t.dot(axis) < pmath::sin(5f64.to_radians())) {
         return Err(KernelError::Invalid(
             "kept parallel, the profile would lie along the sweep path: the path must keep crossing the profile's plane (by 5 deg or more)".into(),
         ));
@@ -337,7 +337,7 @@ fn controlled_stations(plane: &Plane, pts: &[Vec3], tangents: &[Vec3], mitre: &[
     let mut out = Vec::with_capacity(f.len());
     for (i, fi) in f.iter().enumerate() {
         let u = run.get(i).copied().unwrap_or(total) / total;
-        let (sin, cos) = (ctl.twist * u).sin_cos();
+        let (sin, cos) = pmath::sin_cos(ctl.twist * u);
         let k = 1.0 + (ctl.scale - 1.0) * u;
         let shape = |v: Vec3| {
             let along = axis * v.dot(axis);
@@ -397,7 +397,7 @@ pub(crate) fn rail_crossing(rail: &[Vec3], p: Vec3, t: Vec3, from: (usize, f64),
 fn railed_stations(pts: &[Vec3], tangents: &[Vec3], mitre: &[Option<(Vec3, f64)>], ctl: &SweepControl) -> Result<Vec<Station>> {
     // A polyline path's points bend it a little (its arcs' chords); a corner is a bend past
     // [`CORNER`], where the stations would have to be mitred.
-    let corner = 1.0 / (CORNER / 2.0).cos();
+    let corner = 1.0 / pmath::cos(CORNER / 2.0);
     if mitre.iter().flatten().any(|(_, s)| *s > corner + 1e-12) {
         return Err(KernelError::Invalid("not supported yet: guide rails along a path with sharp corners".into()));
     }
@@ -604,7 +604,7 @@ fn ruled_stations(plane: &Plane, pts: &[Vec3], ctl: &SweepControl) -> Result<(Ve
                 let t = (a + b).normalized().ok_or_else(|| KernelError::Invalid("the sweep path turns back on itself".into()))?;
                 let half = turn(a, b) / 2.0;
                 // Across the bend the section stretches by 1 / cos(half the turn).
-                let m = (b - a).normalized().map(|bend| (bend, 1.0 / half.cos().max(0.2)));
+                let m = (b - a).normalized().map(|bend| (bend, 1.0 / pmath::cos(half).max(0.2)));
                 (t, m)
             }
             (Some(a), None) => (a, None),
@@ -862,7 +862,7 @@ mod tests {
         let path: Vec<Vec3> = (0..=40)
             .map(|i| {
                 let t = i as f64 / 40.0 * std::f64::consts::FRAC_PI_2;
-                Vec3::new(30.0 * t.sin(), 30.0 * (1.0 - t.cos()), 10.0 * t)
+                Vec3::new(30.0 * pmath::sin(t), 30.0 * (1.0 - pmath::cos(t)), 10.0 * t)
             })
             .collect();
         let t0 = (path[1] - path[0]).normalized().unwrap();
@@ -910,7 +910,8 @@ mod tests {
         assert!((m.volume - volume).abs() < 2e-3 * volume, "volume {} vs {volume}", m.volume);
         assert!((m.area - caps - lateral).abs() < 2e-3 * lateral, "lateral {} vs {lateral}", m.area - caps);
         // The end cap is the scaled circle.
-        let top = b.tessellate(0.005).unwrap().positions.iter().filter(|p| (p.z - h).abs() < 1e-6).map(|p| p.x.hypot(p.y)).fold(0.0, f64::max);
+        let top =
+            b.tessellate(0.005).unwrap().positions.iter().filter(|p| (p.z - h).abs() < 1e-6).map(|p| pmath::hypot(p.x, p.y)).fold(0.0, f64::max);
         assert!((top - small).abs() < 1e-3, "end radius {top}");
         // The surface sweep of the circle's curve: the frustum's lateral face alone.
         let sheet = crate::sweep_sheet_with(&Plane::XY, std::slice::from_ref(&circle(big).outer.segs), &up(h), &ctl).unwrap();
@@ -927,7 +928,7 @@ mod tests {
                 let (a, c) = (w[0], w[1]);
                 if (a.z - z) * (c.z - z) <= 0.0 && (a.z - c.z).abs() > 1e-9 {
                     let p = a.lerp(c, (z - a.z) / (c.z - a.z));
-                    out.push(p.y.atan2(p.x));
+                    out.push(pmath::atan2(p.y, p.x));
                 }
             }
         }
@@ -973,10 +974,10 @@ mod tests {
         let path: Vec<Vec3> = (0..=60)
             .map(|i| {
                 let t = i as f64 / 60.0 * FRAC_PI_4;
-                Vec3::new(r * (1.0 - t.cos()), 0.0, r * t.sin())
+                Vec3::new(r * (1.0 - pmath::cos(t)), 0.0, r * pmath::sin(t))
             })
             .collect();
-        let rise = r * FRAC_PI_4.sin();
+        let rise = r * pmath::sin(FRAC_PI_4);
         let ctl = SweepControl { orientation: SweepOrientation::Parallel, ..SweepControl::default() };
         let b = sweep_path_with(&Plane::XY, &square(3.0), &path, &ctl).unwrap();
         let mesh = b.tessellate(0.005).unwrap();
@@ -991,7 +992,7 @@ mod tests {
         let quarter: Vec<Vec3> = (0..=60)
             .map(|i| {
                 let t = i as f64 / 60.0 * FRAC_PI_2;
-                Vec3::new(r * (1.0 - t.cos()), 0.0, r * t.sin())
+                Vec3::new(r * (1.0 - pmath::cos(t)), 0.0, r * pmath::sin(t))
             })
             .collect();
         assert!(sweep_path_with(&Plane::XY, &square(3.0), &quarter, &ctl).is_err());
@@ -1005,7 +1006,7 @@ mod tests {
         let path: Vec<Vec3> = (0..=60)
             .map(|i| {
                 let t = i as f64 / 60.0 * FRAC_PI_2;
-                Vec3::new(r * (1.0 - t.cos()), 0.0, r * t.sin())
+                Vec3::new(r * (1.0 - pmath::cos(t)), 0.0, r * pmath::sin(t))
             })
             .collect();
         let ctl = SweepControl { orientation: SweepOrientation::Direction(Vec3::Y), ..SweepControl::default() };

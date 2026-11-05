@@ -63,7 +63,7 @@ fn cylinder_rim_by_distance_and_angle() {
     // 2 across the top at 30° from it: down the wall 2·tan 30° (the faces are square).
     let out = chamfer_sides(&c, &[RIM], 2.0, ChamferSide::Angle(30f64.to_radians()), false).unwrap();
     sound(&out);
-    let d2 = 2.0 * 30f64.to_radians().tan();
+    let d2 = 2.0 * pmath::tan(30f64.to_radians());
     let expected = base - ring([(10.0, 20.0), (8.0, 20.0), (10.0, 20.0 - d2)]);
     assert!(rel(volume(&out), expected) < 1e-5, "{} vs {expected}", volume(&out));
 }
@@ -80,7 +80,7 @@ fn cylinder_rim_flipped() {
     assert!(rel(volume(&out), expected) < 1e-5, "{} vs {expected}", volume(&out));
     // At 60° from the wall: across the top 2·tan 60°.
     let out = chamfer_sides(&c, &[RIM], 2.0, ChamferSide::Angle(60f64.to_radians()), true).unwrap();
-    let d2 = 2.0 * 60f64.to_radians().tan();
+    let d2 = 2.0 * pmath::tan(60f64.to_radians());
     let expected = base - ring([(10.0, 20.0), (10.0 - d2, 20.0), (10.0, 18.0)]);
     assert!(rel(volume(&out), expected) < 1e-5, "{} vs {expected}", volume(&out));
 }
@@ -132,7 +132,7 @@ fn hole_rim() {
     // Flipped, at 30° from the hole's wall.
     let out = chamfer_sides(&p, &[rim], 2.0, ChamferSide::Angle(30f64.to_radians()), true).unwrap();
     sound(&out);
-    let d2 = 2.0 * 30f64.to_radians().tan();
+    let d2 = 2.0 * pmath::tan(30f64.to_radians());
     let expected = base - ring([(5.0, 10.0), (5.0 + d2, 10.0), (5.0, 8.0)]);
     assert!(rel(volume(&out), expected) < 1e-5, "{} vs {expected}", volume(&out));
 }
@@ -157,7 +157,7 @@ fn boss_foot_fills() {
     // 2 up the boss at 30° from it.
     let out = chamfer_sides(&b, &[foot], 2.0, ChamferSide::Angle(30f64.to_radians()), true).unwrap();
     sound(&out);
-    let d2 = 2.0 * 30f64.to_radians().tan();
+    let d2 = 2.0 * pmath::tan(30f64.to_radians());
     let filled = ring([(5.0, 5.0), (5.0 + d2, 5.0), (5.0, 7.0)]);
     assert!(rel(volume(&out), base + filled) < 1e-5, "{} vs {}", volume(&out), base + filled);
 }
@@ -169,10 +169,10 @@ fn cone_rim() {
     let region = Region2 { outer: Loop2::circle_from(Vec2::ZERO, 10.0, 0.0), holes: vec![] };
     let f = extrude_tapered(&Plane::XY, &region, 20.0, 1.0, -taper).unwrap();
     let base = volume(&f);
-    let top = 10.0 - 20.0 * taper.tan();
+    let top = 10.0 - 20.0 * pmath::tan(taper);
     let rim = Vec3::new(top, 0.0, 20.0);
     // Down the cone's slant, away from the top: (sin, −cos) of the taper.
-    let down = |d: f64| (top + d * taper.sin(), 20.0 - d * taper.cos());
+    let down = |d: f64| (top + d * pmath::sin(taper), 20.0 - d * pmath::cos(taper));
     // The cone is meshed less closely than the cylinder: compare what the chamfer takes away
     // (within the mesh's error, about 1e-3 of it at this tolerance).
     let out = chamfer_sides(&f, &[rim], 2.0, ChamferSide::Distance(3.0), false).unwrap();
@@ -182,7 +182,7 @@ fn cone_rim() {
     // By an angle: the triangle edge–A–B has φ = 90° + taper at the edge and 40° at A.
     let a = 40f64.to_radians();
     let phi = PI / 2.0 + taper;
-    let d2 = 2.0 * a.sin() / (phi + a).sin();
+    let d2 = 2.0 * pmath::sin(a) / pmath::sin(phi + a);
     let out = chamfer_sides(&f, &[rim], 2.0, ChamferSide::Angle(a), false).unwrap();
     sound(&out);
     let removed = ring([(top, 20.0), (top - 2.0, 20.0), down(d2)]);

@@ -214,7 +214,7 @@ pub fn sweep_sheet(plane: &Plane, chains: &[Vec<Seg2>], path: &[crate::PathSeg])
     }
     let ends: Vec<(Vec3, Vec3)> =
         path.iter().map(PathSeg::tangents).collect::<Option<_>>().ok_or_else(|| KernelError::Invalid("a path segment has no direction".into()))?;
-    if ends.windows(2).any(|w| w[0].1.dot(w[1].0) < (1e-3f64).cos()) {
+    if ends.windows(2).any(|w| w[0].1.dot(w[1].0) < pmath::cos(1e-3f64)) {
         return sweep_sheet_points(plane, chains, &crate::build::path_polyline(path)?);
     }
     let mut sides = Vec::new();
@@ -1552,7 +1552,7 @@ mod tests {
         let arc: Vec<Vec3> = (0..=40)
             .map(|i| {
                 let t = i as f64 / 40.0 * FRAC_PI_2;
-                Vec3::new(0.0, 30.0 * (1.0 - t.cos()), 30.0 * t.sin())
+                Vec3::new(0.0, 30.0 * (1.0 - pmath::cos(t)), 30.0 * pmath::sin(t))
             })
             .collect();
         let curved = sweep_sheet_points(&Plane::XY, std::slice::from_ref(&line), &arc).unwrap();
@@ -1728,7 +1728,8 @@ mod tests {
         let ring = torus(Vec3::ZERO, 20.0, 5.0).unwrap();
         let face = copy_faces(&ring, &[Vec3::new(25.0, 0.0, 0.0)]).unwrap();
         let mesh = face.tessellate(0.01).unwrap();
-        let angles: Vec<(f64, f64)> = mesh.positions.iter().map(|p| (p.z.atan2((p.x * p.x + p.y * p.y).sqrt() - 20.0), p.y.atan2(p.x))).collect();
+        let angles: Vec<(f64, f64)> =
+            mesh.positions.iter().map(|p| (pmath::atan2(p.z, (p.x * p.x + p.y * p.y).sqrt() - 20.0), pmath::atan2(p.y, p.x))).collect();
         let span = |f: &dyn Fn(&(f64, f64)) -> f64| {
             let (lo, hi) = angles.iter().map(f).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)));
             (lo, hi)
@@ -1736,7 +1737,7 @@ mod tests {
         let ((t0, t1), (p0, p1)) = (span(&|a| a.0), span(&|a| a.1));
         assert!(t1 - t0 < PI && p1 - p0 < PI, "a patch within half a turn each way: {t0}..{t1}, {p0}..{p1}");
         let (r, rr, big) = (5.0f64, 6.0f64, 20.0);
-        let want = (p1 - p0) * (big * (rr * rr - r * r) / 2.0 * (t1 - t0) + (rr.powi(3) - r.powi(3)) / 3.0 * (t1.sin() - t0.sin()));
+        let want = (p1 - p0) * (big * (rr * rr - r * r) / 2.0 * (t1 - t0) + (rr.powi(3) - r.powi(3)) / 3.0 * (pmath::sin(t1) - pmath::sin(t0)));
         let v = measure(&thicken(&face, 1.0, false).unwrap()).unwrap().volume;
         assert!(rel(v, want) < 3e-3, "{v} vs {want}"); // (measured on meshes)
     }
@@ -1819,7 +1820,7 @@ mod tests {
         let frustum = crate::revolve(&xz, &[region], Vec2::new(0.0, 0.0), Vec2::new(0.0, 1.0), 2.0 * std::f64::consts::PI).unwrap().remove(0);
         // The side comes in several pieces round the axis: picked all the way round.
         let round: Vec<Vec3> =
-            (0..8).map(|k| f64::from(k) * std::f64::consts::FRAC_PI_4).map(|a| Vec3::new(7.5 * a.cos(), 7.5 * a.sin(), 5.0)).collect();
+            (0..8).map(|k| f64::from(k) * std::f64::consts::FRAC_PI_4).map(|a| Vec3::new(7.5 * pmath::cos(a), 7.5 * pmath::sin(a), 5.0)).collect();
         let side = copy_faces(&frustum, &round).unwrap();
         let l = 125f64.sqrt();
         assert!(rel(measure(&side).unwrap().area, std::f64::consts::PI * 15.0 * l) < 2e-3, "the whole side");

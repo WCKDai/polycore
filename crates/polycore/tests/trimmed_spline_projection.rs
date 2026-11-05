@@ -49,9 +49,9 @@ fn a_trim_crossing_a_closed_nurbs_seam_is_a_small_cylinder_patch() {
         (mt::KnotVec::from(vec![0., 0., 0., 1., 1., 2., 2., 3., 3., 4., 4., 4.]), mt::KnotVec::bezier_knot(1)),
         ctrl,
     ));
-    let at = |theta: f64, z| mt::Point3::new(radius * theta.cos(), radius * theta.sin(), z);
+    let at = |theta: f64, z| mt::Point3::new(radius * pmath::cos(theta), radius * pmath::sin(theta), z);
     let arc = |z, reverse| {
-        let w = angle.cos();
+        let w = pmath::cos(angle);
         let mut ctrl = vec![at(-angle, z).to_homogeneous(), mt::Vector4::new(radius, 0., z * w, w), at(angle, z).to_homogeneous()];
         if reverse {
             ctrl.reverse();
@@ -66,8 +66,8 @@ fn a_trim_crossing_a_closed_nurbs_seam_is_a_small_cylinder_patch() {
     ];
     let mesh = mesh(mt::Surface::NurbsSurface(surface), curves);
     for p in mesh.positions() {
-        assert!(p.x >= radius * angle.cos() - 1e-6 && p.x <= radius + 1e-6, "{p:?}");
-        assert!(p.y.abs() <= radius * angle.sin() + 1e-6 && (bottom - 1e-6..=top + 1e-6).contains(&p.z), "{p:?}");
+        assert!(p.x >= radius * pmath::cos(angle) - 1e-6 && p.x <= radius + 1e-6, "{p:?}");
+        assert!(p.y.abs() <= radius * pmath::sin(angle) + 1e-6 && (bottom - 1e-6..=top + 1e-6).contains(&p.z), "{p:?}");
     }
     let area: f64 = mesh
         .faces()

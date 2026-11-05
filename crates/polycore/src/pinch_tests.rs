@@ -121,7 +121,7 @@ fn hole_touching_the_outline_stays_one_piece() {
 fn hole_tangent_inside_a_stepped_boss_cuts_exactly() {
     use std::f64::consts::PI;
     for (turn, flip) in [(0.0, 1.0), (PI / 6.0, 1.0), (0.0, -1.0)] {
-        let at = |x: f64, y: f64| Vec2::new(x * turn.cos() - flip * y * turn.sin(), x * turn.sin() + flip * y * turn.cos());
+        let at = |x: f64, y: f64| Vec2::new(x * pmath::cos(turn) - flip * y * pmath::sin(turn), x * pmath::sin(turn) + flip * y * pmath::cos(turn));
         let circle = |x: f64, r: f64| Loop2::circle(at(x, 0.), r);
         let base = prism(circle(0., 20.), 0., 5.);
         let boss = prism(circle(10., 10.), 5., 15.);

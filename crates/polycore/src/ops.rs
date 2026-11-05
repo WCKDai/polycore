@@ -589,7 +589,7 @@ mod shortcut_tests {
     fn rotated_extrusion_bounds_use_exact_cap_separation_and_keep_sources() {
         use polycore_geom::{Loop2, Plane, Region2, Vec2};
         let rectangle = |angle: f64, offset: f64| {
-            let (c, s) = (angle.cos(), angle.sin());
+            let (c, s) = (pmath::cos(angle), pmath::sin(angle));
             Region2 {
                 outer: Loop2::polygon(
                     &[(-2., -0.5), (2., -0.5), (2., 0.5), (-2., 0.5)].map(|(x, y)| Vec2::new(x * c - (y + offset) * s, x * s + (y + offset) * c)),

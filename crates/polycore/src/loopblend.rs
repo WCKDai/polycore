@@ -105,7 +105,7 @@ fn offset_profile(prev: &Seg, cur: &Seg, n: Vec3, side: f64, (r, rw): (f64, f64)
     use mt::ParametricCurve;
     let point = |u: f64| {
         let (d, h) = if round {
-            let (sin, cos) = (u * std::f64::consts::FRAC_PI_2).sin_cos();
+            let (sin, cos) = pmath::sin_cos(u * std::f64::consts::FRAC_PI_2);
             (r * (1.0 - sin), r * (1.0 - cos))
         } else {
             (r * (1.0 - u), rw * u)
@@ -160,7 +160,7 @@ fn seg_of(e: &mt::Edge, tol: f64) -> Option<Seg> {
         axis = -axis;
     }
     let (ra, rb) = ((a - centre).normalized()?, (b - centre).normalized()?);
-    let mut angle = ra.dot(rb).clamp(-1.0, 1.0).acos();
+    let mut angle = pmath::acos(ra.dot(rb).clamp(-1.0, 1.0));
     if ra.cross(rb).dot(axis) < 0.0 {
         angle = std::f64::consts::TAU - angle;
     }
@@ -190,7 +190,7 @@ fn is_straight(e: &mt::Edge, tol: f64) -> bool {
 fn turn(p: Vec3, c: Vec3, axis: Vec3, ang: f64) -> Vec3 {
     let k = axis.normalized().unwrap_or(Vec3::Z);
     let v = p - c;
-    let (s, co) = ang.sin_cos();
+    let (s, co) = pmath::sin_cos(ang);
     c + v * co + k.cross(v) * s + k * (k.dot(v) * (1.0 - co))
 }
 
@@ -460,13 +460,13 @@ fn build(
     let frame = |i: usize, p: Vec3| -> Option<(Vec3, Vec3, f64, f64, f64)> {
         let s = segs.get(i)?;
         let (m, t) = (into(s, p), up(i, p)?);
-        let phi = m.dot(t).clamp(-1.0, 1.0).acos();
+        let phi = pmath::acos(m.dot(t).clamp(-1.0, 1.0));
         if !(phi > 1e-3 && phi < std::f64::consts::PI - 1e-3) {
             return None;
         }
         let (sf, sw) = match sides {
             None => {
-                let sb = if round { r / (phi / 2.0).tan() } else { r };
+                let sb = if round { r / pmath::tan(phi / 2.0) } else { r };
                 (sb, sb)
             }
             Some((cs, _)) => {
@@ -474,23 +474,23 @@ fn build(
                     ChamferSide::Distance(d) => d,
                     // The triangle edge–A–B: angle φ at the edge, `a` at A (on the first side).
                     ChamferSide::Angle(a) => {
-                        let den = (phi + a).sin();
+                        let den = pmath::sin(phi + a);
                         if den <= 1e-9 {
                             return None;
                         }
-                        r * a.sin() / den
+                        r * pmath::sin(a) / den
                     }
                 };
                 if face_first { (r, d2) } else { (d2, r) }
             }
         };
-        Some((m, t, sf, sw, r / (phi / 2.0).sin()))
+        Some((m, t, sf, sw, r / pmath::sin(phi / 2.0)))
     };
     if let Some((ChamferSide::Angle(a), _)) = sides {
         for (i, s) in segs.iter().enumerate() {
             let p = s.start();
             if let Some(t) = up(i, p)
-                && (into(s, p).dot(t).clamp(-1.0, 1.0).acos() + a).sin() <= 1e-9
+                && pmath::sin(pmath::acos(into(s, p).dot(t).clamp(-1.0, 1.0)) + a) <= 1e-9
             {
                 return Err(KernelError::Invalid("that chamfer angle runs past the other face".into()));
             }

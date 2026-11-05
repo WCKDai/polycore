@@ -32,6 +32,11 @@ path = "src/lib.rs"
 name = "punched-cube-shapeops"
 path = "examples/punched-cube-shapeops.rs"
 
+[dependencies.pmath]
+version = "0.1.0"
+package = "polycore-pmath"
+path = "../pmath"
+
 [dependencies.derive_more]
 version = "0.99.18"
 

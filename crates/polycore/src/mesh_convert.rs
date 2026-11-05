@@ -363,7 +363,7 @@ fn fit_loop(points: &[Vec2], tolerance: f64, epsilon: f64) -> Loop2 {
                 let mut direction = 0f64;
                 let valid = (0..points.len()).all(|i| {
                     let (Some(a), Some(b)) = (points.get(i), points.get((i + 1) % points.len())) else { return false };
-                    let signed = ((*a - center).cross(*b - center)).atan2((*a - center).dot(*b - center));
+                    let signed = pmath::atan2((*a - center).cross(*b - center), (*a - center).dot(*b - center));
                     if direction == 0. {
                         direction = signed.signum();
                     }
@@ -372,7 +372,7 @@ fn fit_loop(points: &[Vec2], tolerance: f64, epsilon: f64) -> Loop2 {
                     }
                     sweep += signed;
                     let angle = signed.abs();
-                    angle <= std::f64::consts::PI / 6. + 1e-8 && radius * (1. - (angle * 0.5).cos()) + epsilon * 10. <= tolerance
+                    angle <= std::f64::consts::PI / 6. + 1e-8 && radius * (1. - pmath::cos(angle * 0.5)) + epsilon * 10. <= tolerance
                 });
                 if valid && (sweep.abs() - std::f64::consts::TAU).abs() <= 1e-7 {
                     return Loop2::circle(center, radius);
@@ -445,14 +445,14 @@ mod tests {
         let points: Vec<_> = (0..6)
             .map(|i| {
                 let angle = i as f64 * std::f64::consts::TAU / 6.;
-                Vec2::new(angle.cos(), angle.sin()) * 10.
+                Vec2::new(pmath::cos(angle), pmath::sin(angle)) * 10.
             })
             .collect();
         assert_eq!(fit_loop(&points, 1., 1e-6).segs.len(), 6);
         let points: Vec<_> = (0..16)
             .map(|i| {
                 let angle = i as f64 * std::f64::consts::TAU / 16.;
-                Vec2::new(angle.cos(), angle.sin()) * 10.
+                Vec2::new(pmath::cos(angle), pmath::sin(angle)) * 10.
             })
             .collect();
         assert_eq!(fit_loop(&points, 0.001, 1e-6).segs.len(), 16);
@@ -498,7 +498,7 @@ mod tests {
         let points: Vec<_> = (0..12)
             .map(|i| {
                 let angle = (i as f64 + 0.5) * std::f64::consts::TAU / 12.;
-                Vec2::new(angle.cos(), angle.sin()) * 1.02
+                Vec2::new(pmath::cos(angle), pmath::sin(angle)) * 1.02
             })
             .collect();
         let inner = Loop2::polygon(&points);

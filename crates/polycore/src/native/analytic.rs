@@ -14,8 +14,10 @@ pub(super) fn arc(frame: &b::Frame, radii: [f64; 2], angle: [f64; 2]) -> Result<
     let span = angle[1] - angle[0];
     let count = (span / std::f64::consts::FRAC_PI_2).ceil().clamp(1., 4.) as usize;
     let step = span / count as f64;
-    let weight = (step / 2.).cos();
-    let at = |t: f64, scale: f64| p(frame.origin) + v(frame.x_axis) * (radii[0] * t.cos() / scale) + v(frame.y_axis) * (radii[1] * t.sin() / scale);
+    let weight = pmath::cos(step / 2.);
+    let at = |t: f64, scale: f64| {
+        p(frame.origin) + v(frame.x_axis) * (radii[0] * pmath::cos(t) / scale) + v(frame.y_axis) * (radii[1] * pmath::sin(t) / scale)
+    };
     let mut controls = vec![at(angle[0], 1.).to_homogeneous()];
     let mut knots = vec![0.; 3];
     for i in 0..count {
@@ -48,7 +50,7 @@ pub(super) fn load_analytic(surface: b::Surface) -> Result<mt::Surface> {
         b::Surface::Cone { frame, radius_at_origin, half_angle, angle, height } => {
             full_turn(&angle)?;
             let z = axis(&frame);
-            let at = |h| p(frame.origin) + v(frame.x_axis) * (radius_at_origin + h * half_angle.tan()) + z * h;
+            let at = |h| p(frame.origin) + v(frame.x_axis) * (radius_at_origin + h * pmath::tan(half_angle)) + z * h;
             revolved(mt::Curve::Line(mt::Line(at(height[0]), at(height[1]))), p(frame.origin), z, true)
         }
         b::Surface::Sphere { frame, radius, longitude, latitude } => {

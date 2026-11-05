@@ -220,7 +220,7 @@ fn refine_sag(cdt: &mut Cdt, sag: &Sag, budget: usize, from: &dyn Fn(Point2<f64>
     let mut cache: HashMap<FixedVertexHandle, Option<(Vec3, Option<Vec3>)>> = HashMap::new();
     // The widest turn between two corner normals.
     let spread = |n: [Option<Vec3>; 3]| match n {
-        [Some(a), Some(b), Some(c)] => [(a, b), (b, c), (c, a)].iter().map(|(x, y)| x.dot(*y).clamp(-1.0, 1.0).acos()).fold(0.0, f64::max),
+        [Some(a), Some(b), Some(c)] => [(a, b), (b, c), (c, a)].iter().map(|(x, y)| pmath::acos(x.dot(*y).clamp(-1.0, 1.0))).fold(0.0, f64::max),
         _ => 0.0,
     };
     for _ in 0..SAG_ROUNDS {
@@ -428,7 +428,7 @@ fn dist_to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
+    pmath::hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy)
 }
 
 #[cfg(test)]
@@ -505,9 +505,9 @@ mod tests {
             assert!(clear(&outer) && clear(&hole), "{p:?}");
         }
         // Nearest neighbours one side apart, six of them in the open.
-        let near = |p: [f64; 2]| seeds.iter().filter(|q| ((q[0] - p[0]).hypot(q[1] - p[1]) - 1.0).abs() < 1e-9).count();
+        let near = |p: [f64; 2]| seeds.iter().filter(|q| (pmath::hypot(q[0] - p[0], q[1] - p[1]) - 1.0).abs() < 1e-9).count();
         assert!(seeds.iter().any(|p| near(*p) == 6));
-        assert!(seeds.iter().all(|p| seeds.iter().all(|q| p == q || (q[0] - p[0]).hypot(q[1] - p[1]) > 1.0 - 1e-9)));
+        assert!(seeds.iter().all(|p| seeds.iter().all(|q| p == q || pmath::hypot(q[0] - p[0], q[1] - p[1]) > 1.0 - 1e-9)));
     }
 
     #[test]

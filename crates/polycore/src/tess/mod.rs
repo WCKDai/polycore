@@ -826,7 +826,7 @@ fn plan_pieces(f: &Region) -> Option<(Vec<[f64; 2]>, Vec<[u32; 3]>)> {
 /// between them (sizes `sa · q^k` summing to the length), then each interval split in half while
 /// `fine` fails between its ends.
 fn graded(a: [f64; 2], b: [f64; 2], sa: f64, sb: f64, h: f64, speed: [f64; 2], fine: &dyn Fn([f64; 2], [f64; 2]) -> bool) -> Vec<f64> {
-    let len = ((b[0] - a[0]) * speed[0]).hypot((b[1] - a[1]) * speed[1]);
+    let len = pmath::hypot((b[0] - a[0]) * speed[0], (b[1] - a[1]) * speed[1]);
     let cap = |x: f64| {
         if x.is_finite() && x > 0.0 {
             x.min(if h > 0.0 { h } else { f64::INFINITY })
@@ -845,7 +845,7 @@ fn graded(a: [f64; 2], b: [f64; 2], sa: f64, sb: f64, h: f64, speed: [f64; 2], f
             let k = (len / (0.5 * (sa + sb))).round().clamp(1.0, 4096.0) as usize;
             vec![len / k as f64; k]
         } else {
-            let k = (1.0 + (sb / sa).ln() / q.ln()).round().clamp(1.0, 4096.0) as usize;
+            let k = (1.0 + pmath::ln(sb / sa) / pmath::ln(q)).round().clamp(1.0, 4096.0) as usize;
             let raw: Vec<f64> = (0..k).map(|j| sa * q.powi(j as i32)).collect();
             let total: f64 = raw.iter().sum();
             raw.into_iter().map(|x| x * len / total).collect()

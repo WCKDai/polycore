@@ -223,7 +223,7 @@ pub(crate) fn iso_curve(surface: &mt::Surface, along_u: bool, w: f64, from: f64,
                     return Err(KernelError::TooLarge("untrimming a surface revolved from an intersection curve".into()));
                 }
                 let turn = mt::Matrix4::from_translation(origin - mt::Point3::new(0.0, 0.0, 0.0))
-                    * mt::Matrix4::from_axis_angle(axis, mt::Rad(w))
+                    * mt::portable_trig::rotation(axis, mt::Rad(w))
                     * mt::Matrix4::from_translation(mt::Point3::new(0.0, 0.0, 0.0) - origin);
                 Ok(piece(profile.transformed(transform * turn), from, to))
             } else {

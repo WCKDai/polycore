@@ -253,7 +253,7 @@ fn constructed_annulus_sides_follow_exact_source_edges() {
                     continue;
                 }
                 for point in mesh.tri(triangle).unwrap() {
-                    assert!((point.x.hypot(point.y) - radius).abs() < 1e-8, "face {index}, source {radius}, {point:?}");
+                    assert!((pmath::hypot(point.x, point.y) - radius).abs() < 1e-8, "face {index}, source {radius}, {point:?}");
                     vertices += 1;
                 }
             }
@@ -304,7 +304,7 @@ fn constructed_large_arc_split_and_reversal_preserve_one_source_segment() {
         let mesh = body.tessellate(0.001).unwrap();
         for (triangle, face) in mesh.triangles.iter().zip(&mesh.tri_face) {
             if matches!(sources[*face as usize], Some(FaceSource::ExtrudeSide { segment: Seg2::Arc { .. }, .. })) {
-                assert!(mesh.tri(triangle).unwrap().iter().all(|point| (point.x.hypot(point.y) - 10.).abs() < 1e-7));
+                assert!(mesh.tri(triangle).unwrap().iter().all(|point| (pmath::hypot(point.x, point.y) - 10.).abs() < 1e-7));
             }
         }
     }

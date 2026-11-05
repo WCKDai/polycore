@@ -22,7 +22,7 @@ fn part() -> Body {
 /// Area a ball of radius `r` takes off the cusp: the quadrilateral tip–wall-contact–wall-centre–
 /// ball-centre-contact, less the wall's sector and the ball's.
 fn removed_area(r: f64) -> f64 {
-    let beta = ((R_WALL - r) / (R_WALL + r)).acos();
+    let beta = pmath::acos((R_WALL - r) / (R_WALL + r));
     let o = (TIP_X - (4.0 * R_WALL * r).sqrt(), -r);
     let c = (TIP_X, -R_WALL);
     let tip = (TIP_X, 0.0);
@@ -59,14 +59,14 @@ fn part_cut_from_a_box() -> Body {
 /// Area a chamfer of distance `d` takes off the cusp: the triangle between the plane's contact,
 /// the tip and the wall's contact, less the wall's circular segment.
 fn chamfered_area(d: f64) -> f64 {
-    let beta = ((R_WALL - d) / (R_WALL + d)).acos();
+    let beta = pmath::acos((R_WALL - d) / (R_WALL + d));
     let o = (TIP_X - (4.0 * R_WALL * d).sqrt(), -d);
     let c = (TIP_X, -R_WALL);
     let k = R_WALL / (R_WALL + d);
     let q2 = (c.0 + (o.0 - c.0) * k, c.1 + (o.1 - c.1) * k);
     let (t1, tip) = ((o.0, 0.0), (TIP_X, 0.0));
     let triangle = 0.5 * ((tip.0 - t1.0) * (q2.1 - t1.1) - (q2.0 - t1.0) * (tip.1 - t1.1)).abs();
-    triangle - 0.5 * R_WALL * R_WALL * (beta - beta.sin())
+    triangle - 0.5 * R_WALL * R_WALL * (beta - pmath::sin(beta))
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn knife_edge_blends_the_same_in_a_mirror() {
 
 /// A point on the arc's top edge (half way round the wall).
 fn arc_top() -> Vec3 {
-    let (s, c) = (std::f64::consts::FRAC_PI_4.sin(), std::f64::consts::FRAC_PI_4.cos());
+    let (s, c) = (pmath::sin(std::f64::consts::FRAC_PI_4), pmath::cos(std::f64::consts::FRAC_PI_4));
     Vec3::new(TIP_X - R_WALL * c, -R_WALL + R_WALL * s, HEIGHT)
 }
 
@@ -154,7 +154,7 @@ fn arc_top_removed(size: f64, round: bool) -> f64 {
                 (rho - R_WALL) + (HEIGHT - z) <= size
             };
             if inside {
-                total += rho * (R_WALL / rho).asin() * step * step;
+                total += rho * pmath::asin(R_WALL / rho) * step * step;
             }
         }
     }

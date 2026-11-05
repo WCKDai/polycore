@@ -11,8 +11,8 @@ const CENTRE: f64 = -10.0;
 const HALF_HEIGHT: f64 = 13.4;
 
 fn barrel() -> Body {
-    let angle = (HALF_HEIGHT / RADIUS).asin();
-    let end_radius = CENTRE + RADIUS * angle.cos();
+    let angle = pmath::asin(HALF_HEIGHT / RADIUS);
+    let end_radius = CENTRE + RADIUS * pmath::cos(angle);
     let region = Region2 {
         outer: Loop2 {
             segs: vec![
@@ -31,7 +31,7 @@ fn barrel() -> Body {
 // Integral of pi * (CENTRE + sqrt(r^2 - (z-HALF_HEIGHT)^2))^2.
 fn integral(r: f64, z: f64) -> f64 {
     let u = z - HALF_HEIGHT;
-    PI * ((CENTRE * CENTRE + r * r) * u - u.powi(3) / 3.0 + CENTRE * (u * (r * r - u * u).sqrt() + r * r * (u / r).asin()))
+    PI * ((CENTRE * CENTRE + r * r) * u - u.powi(3) / 3.0 + CENTRE * (u * (r * r - u * u).sqrt() + r * r * pmath::asin(u / r)))
 }
 
 fn check_volume(body: &Body, lo: f64, hi: f64) {

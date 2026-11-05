@@ -95,7 +95,7 @@ fn along_fraction(edge: &mt::Edge, q: Vec3) -> Option<f64> {
 
 /// The azimuth of `p` about the Z axis through `axis`.
 fn azimuth(axis: Vec3, p: Vec3) -> f64 {
-    (p.y - axis.y).atan2(p.x - axis.x)
+    pmath::atan2(p.y - axis.y, p.x - axis.x)
 }
 
 /// The point of the curves running round the Z axis through `axis` at the azimuth `phi`.

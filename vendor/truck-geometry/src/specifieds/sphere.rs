@@ -25,24 +25,24 @@ impl ParametricSurface for Sphere {
     fn uder(&self, u: f64, v: f64) -> Vector3 {
         self.radius
             * Vector3::new(
-                f64::cos(u) * f64::cos(v),
-                f64::cos(u) * f64::sin(v),
-                -f64::sin(u),
+                pmath::cos(u) * pmath::cos(v),
+                pmath::cos(u) * pmath::sin(v),
+                -pmath::sin(u),
             )
     }
     #[inline(always)]
     fn vder(&self, u: f64, v: f64) -> Vector3 {
-        self.radius * f64::sin(u) * Vector3::new(-f64::sin(v), f64::cos(v), 0.0)
+        self.radius * pmath::sin(u) * Vector3::new(-pmath::sin(v), pmath::cos(v), 0.0)
     }
     #[inline(always)]
     fn uuder(&self, u: f64, v: f64) -> Vector3 { -self.radius * self.normal(u, v) }
     #[inline(always)]
     fn uvder(&self, u: f64, v: f64) -> Vector3 {
-        self.radius * f64::cos(u) * Vector3::new(-f64::sin(v), f64::cos(v), 0.0)
+        self.radius * pmath::cos(u) * Vector3::new(-pmath::sin(v), pmath::cos(v), 0.0)
     }
     #[inline(always)]
     fn vvder(&self, u: f64, v: f64) -> Vector3 {
-        -self.radius * f64::sin(u) * Vector3::new(f64::cos(v), f64::sin(v), 0.0)
+        -self.radius * pmath::sin(u) * Vector3::new(pmath::cos(v), pmath::sin(v), 0.0)
     }
     #[inline(always)]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
@@ -59,9 +59,9 @@ impl ParametricSurface3D for Sphere {
     #[inline(always)]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
         Vector3::new(
-            f64::sin(u) * f64::cos(v),
-            f64::sin(u) * f64::sin(v),
-            f64::cos(u),
+            pmath::sin(u) * pmath::cos(v),
+            pmath::sin(u) * pmath::sin(v),
+            pmath::cos(u),
         )
     }
 }
@@ -119,7 +119,7 @@ impl ParameterDivision2D for Sphere {
             tol < self.radius,
             "Tolerance is larger than the radius of sphere."
         );
-        let delta = 2.0 * f64::acos(1.0 - tol / self.radius);
+        let delta = 2.0 * pmath::acos(1.0 - tol / self.radius);
         let u_div = 1 + ((urange.1 - urange.0) / delta).floor() as usize;
         let v_div = 1 + ((vrange.1 - vrange.0) / delta).floor() as usize;
         (
@@ -145,7 +145,7 @@ impl SearchParameter<D2> for Sphere {
         let radius = point - self.center;
         if (self.radius * self.radius).near(&radius.magnitude2()) {
             let radius = radius.normalize();
-            let u = f64::acos(radius[2]);
+            let u = pmath::acos(radius[2]);
             let sinu = f64::sqrt(1.0 - radius[2] * radius[2]);
             let cosv = f64::clamp(radius[0] / sinu, -1.0, 1.0);
             let v = if sinu.so_small() {
@@ -154,9 +154,9 @@ impl SearchParameter<D2> for Sphere {
                     _ => 0.0,
                 }
             } else if radius[1] > 0.0 {
-                f64::acos(cosv)
+                pmath::acos(cosv)
             } else {
-                2.0 * PI - f64::acos(cosv)
+                2.0 * PI - pmath::acos(cosv)
             };
             Some((u, v))
         } else {
@@ -175,13 +175,13 @@ impl SearchNearestParameter<D2> for Sphere {
         _: usize,
     ) -> Option<(f64, f64)> {
         let radius = (point - self.center).normalize();
-        let u = f64::acos(radius[2]);
+        let u = pmath::acos(radius[2]);
         let sinu = f64::sqrt(1.0 - radius[2] * radius[2]);
         let cosv = radius[0] / sinu;
         let v = if radius[1] > 0.0 {
-            f64::acos(cosv)
+            pmath::acos(cosv)
         } else {
-            2.0 * PI - f64::acos(cosv)
+            2.0 * PI - pmath::acos(cosv)
         };
         Some((u, v))
     }

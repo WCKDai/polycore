@@ -18,16 +18,16 @@ const SPAN: f64 = 0.6;
 
 /// A point on the vertical line at radius `r`, angle `a`, height `z` (Z up).
 fn at(a: f64, r: f64, z: f64) -> Vec3 {
-    Vec3::new(r * a.cos(), r * a.sin(), z)
+    Vec3::new(r * pmath::cos(a), r * pmath::sin(a), z)
 }
 
 /// The outward radial and the circumferential unit directions at the angle `a`.
 fn radial(a: f64) -> Vec3 {
-    Vec3::new(a.cos(), a.sin(), 0.0)
+    Vec3::new(pmath::cos(a), pmath::sin(a), 0.0)
 }
 
 fn circ(a: f64) -> Vec3 {
-    Vec3::new(-a.sin(), a.cos(), 0.0)
+    Vec3::new(-pmath::sin(a), pmath::cos(a), 0.0)
 }
 
 /// A cylindrical sheet of radius `r` between the angles `a0` and `a1`, `stations` high: the body
@@ -238,6 +238,6 @@ fn a_chains_middle_lies_on_its_curved_edge() {
     let mid = chain_mid(&[line, arc]).unwrap();
     assert!((mid.len() - 10.0).abs() < 1e-9, "{mid:?} is {} from the centre", mid.len());
     let along = (3.0 + 5.0 * std::f64::consts::PI) / 2.0 - 3.0;
-    let want = Vec3::new(10.0 * (along / 10.0).cos(), 10.0 * (along / 10.0).sin(), 0.0);
+    let want = Vec3::new(10.0 * pmath::cos(along / 10.0), 10.0 * pmath::sin(along / 10.0), 0.0);
     assert!(mid.dist(want) < 1e-3, "{mid:?} vs {want:?}");
 }

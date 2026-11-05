@@ -18,7 +18,7 @@ const PITCH: f64 = 22.0;
 /// The centreline of the spiral that starts `start` radians round from +X at `radius`, `t` radians along.
 fn centre(radius: f64, start: f64, t: f64) -> Vec3 {
     let (r, a) = (radius + PITCH / TAU * t, start + t);
-    Vec3::new(r * a.cos(), r * a.sin(), 0.0)
+    Vec3::new(r * pmath::cos(a), r * pmath::sin(a), 0.0)
 }
 
 /// A wall `WALL` thick and `HEIGHT` tall along that spiral for `turn` radians, in `stations` steps,

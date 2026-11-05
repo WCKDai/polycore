@@ -486,12 +486,12 @@ pub(crate) fn crescent(pin: f64, hole: f64, offset: f64) -> Crescent {
         };
     }
     // Half-angles of the lens's two segments, seen from each centre.
-    let alpha = ((e * e + r * r - q * q) / (2.0 * e * r)).clamp(-1.0, 1.0).acos();
-    let beta = ((e * e + q * q - r * r) / (2.0 * e * q)).clamp(-1.0, 1.0).acos();
+    let alpha = pmath::acos(((e * e + r * r - q * q) / (2.0 * e * r)).clamp(-1.0, 1.0));
+    let beta = pmath::acos(((e * e + q * q - r * r) / (2.0 * e * q)).clamp(-1.0, 1.0));
     let segment = |radius: f64, half: f64| {
-        let area = radius * radius * (half - half.sin() * half.cos());
-        let w = 2.0 * half - (2.0 * half).sin();
-        let from_centre = if w > 1e-12 { 4.0 * radius * half.sin().powi(3) / (3.0 * w) } else { radius };
+        let area = radius * radius * (half - pmath::sin(half) * pmath::cos(half));
+        let w = 2.0 * half - pmath::sin(2.0 * half);
+        let from_centre = if w > 1e-12 { 4.0 * radius * pmath::sin(half).powi(3) / (3.0 * w) } else { radius };
         (area, from_centre)
     };
     let (sa, da) = segment(r, alpha);
@@ -506,12 +506,12 @@ pub(crate) fn crescent(pin: f64, hole: f64, offset: f64) -> Crescent {
 /// Points around the crescent's outline (x toward the hole's centre, y across), for its box.
 fn crescent_outline(pin: f64, hole: f64, offset: f64) -> Vec<(f64, f64)> {
     let (r, q, e) = (pin, hole, offset);
-    let alpha = if e > 0.0 { ((e * e + r * r - q * q) / (2.0 * e * r)).clamp(-1.0, 1.0).acos() } else { 0.0 };
+    let alpha = if e > 0.0 { pmath::acos(((e * e + r * r - q * q) / (2.0 * e * r)).clamp(-1.0, 1.0)) } else { 0.0 };
     let n = 32;
     (0..=n)
         .map(|i| {
             let t = alpha + (2.0 * std::f64::consts::PI - 2.0 * alpha) * f64::from(i) / f64::from(n);
-            (r * t.cos(), r * t.sin())
+            (r * pmath::cos(t), r * pmath::sin(t))
         })
         .collect()
 }
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn crescent_matches_the_lens_formula() {
         let (r, e) = (3.0f64, 0.01f64);
-        let lens = 2.0 * r * r * (e / (2.0 * r)).acos() - e / 2.0 * (4.0 * r * r - e * e).sqrt();
+        let lens = 2.0 * r * r * pmath::acos(e / (2.0 * r)) - e / 2.0 * (4.0 * r * r - e * e).sqrt();
         let c = crescent(r, r, e);
         assert!((c.area - (std::f64::consts::PI * r * r - lens)).abs() < 1e-12, "{c:?}");
         // Thin: twice the radius times the offset, its centroid π/4 of the radius away from

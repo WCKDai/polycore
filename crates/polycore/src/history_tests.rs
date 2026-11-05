@@ -25,7 +25,7 @@ fn a_transform_keeps_every_face_and_edge_in_place() {
     assert!(h.faces.iter().enumerate().all(|(i, f)| f.origins == vec![face(0, i)] && f.change == Change::Kept));
     // Face i of the result is face i of the input, moved.
     let rot = |p: Vec3| {
-        let (s, c) = 0.7f64.sin_cos();
+        let (s, c) = pmath::sin_cos(0.7f64);
         Vec3::new(p.x * c - p.y * s, p.x * s + p.y * c, p.z) + t
     };
     for (before, after) in centroids(&a).into_iter().zip(centroids(&moved)) {

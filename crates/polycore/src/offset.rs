@@ -58,7 +58,7 @@ impl Surf {
             Surf::Cone { v, a, half, convex } => {
                 let w = p - v;
                 let q = (w - a * w.dot(a)).normalized()?;
-                let n = q * half.cos() - a * half.sin();
+                let n = q * pmath::cos(half) - a * pmath::sin(half);
                 Some(if convex { n } else { -n })
             }
             Surf::Torus { o, a, big, h, convex, .. } => {
@@ -90,7 +90,7 @@ impl Surf {
             // Moving a cone along its normal moves its apex along the axis.
             Surf::Cone { v, a, half, convex } => {
                 let s = if convex { s } else { -s };
-                let sh = half.sin();
+                let sh = pmath::sin(half);
                 (sh > 1e-9).then_some(Surf::Cone { v: v - a * (s / sh), a, half, convex })
             }
             Surf::Torus { o, a, big, h, r, convex } => {
@@ -110,7 +110,7 @@ impl Surf {
             Surf::Cone { v, a, half, .. } => {
                 let w = p - v;
                 let h = w.dot(a);
-                (w - a * h).len() * half.cos() - h * half.sin()
+                (w - a * h).len() * pmath::cos(half) - h * pmath::sin(half)
             }
             Surf::Torus { o, a, big, h, r, .. } => tube_centre(o, a, big, h, p).map(|c| p.dist(c) - r).unwrap_or(f64::INFINITY),
         }
@@ -355,7 +355,7 @@ fn sphere_or_cone(s: &[(Vec3, Vec3)], tol: f64) -> Option<Surf> {
     if a.dot(cen - v) < 0.0 {
         a = -a;
     }
-    let half = n0.dot(a).abs().clamp(0.0, 1.0).asin();
+    let half = pmath::asin(n0.dot(a).abs().clamp(0.0, 1.0));
     if !(half > 1e-3 && half < std::f64::consts::FRAC_PI_2 - 1e-3) {
         return None;
     }
@@ -1255,7 +1255,7 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &polycore_geom::P
         return Err(fail("the neutral plane is parallel to the pull direction"));
     }
     let height = |p: Vec3| (p - neutral.origin).dot(nn) / den;
-    let tan = angle.tan();
+    let tan = pmath::tan(angle);
     let mut vfaces: HashMap<mt::VertexID, Vec<usize>> = HashMap::new();
     let mut efaces: HashMap<mt::EdgeID, Vec<usize>> = HashMap::new();
     for (i, f) in faces.iter().enumerate() {
@@ -1330,7 +1330,7 @@ pub(crate) fn draft_walls(b: &Body, chosen: &[usize], neutral: &polycore_geom::P
         let (true, Some(sf)) = (chosen.contains(&i), *sf) else { continue };
         let surface = match sf {
             Surf::Plane { n, d } => {
-                let n2 = (n * angle.cos() + pull * angle.sin()).normalized().ok_or_else(|| fail("draft"))?;
+                let n2 = (n * pmath::cos(angle) + pull * pmath::sin(angle)).normalized().ok_or_else(|| fail("draft"))?;
                 // A point of the old plane on the neutral plane: the hinge.
                 let o = neutral.intersect_ray(n * d, pull).ok_or_else(|| fail("draft: hinge"))?;
                 let u = n2.cross(pull).normalized().ok_or_else(|| fail("draft"))?;

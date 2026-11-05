@@ -33,37 +33,37 @@ impl ParametricSurface for Torus {
     type Vector = Vector3;
     #[inline(always)]
     fn subs(&self, u: f64, v: f64) -> Point3 {
-        let sr = self.small_radius() * Vector2::new(f64::cos(v), f64::sin(v));
-        let lr = (self.large_radius() + sr.x) * Vector2::new(f64::cos(u), f64::sin(u));
+        let sr = self.small_radius() * Vector2::new(pmath::cos(v), pmath::sin(v));
+        let lr = (self.large_radius() + sr.x) * Vector2::new(pmath::cos(u), pmath::sin(u));
         self.center() + Vector3::new(lr.x, lr.y, sr.y)
     }
     #[inline(always)]
     fn uder(&self, u: f64, v: f64) -> Vector3 {
-        let sr = self.small_radius() * f64::cos(v);
-        let lr = (self.large_radius() + sr) * Vector2::new(f64::cos(u), f64::sin(u));
+        let sr = self.small_radius() * pmath::cos(v);
+        let lr = (self.large_radius() + sr) * Vector2::new(pmath::cos(u), pmath::sin(u));
         Vector3::new(-lr.y, lr.x, 0.0)
     }
     #[inline(always)]
     fn vder(&self, u: f64, v: f64) -> Vector3 {
-        let sv = self.small_radius() * Vector2::new(-f64::sin(v), f64::cos(v));
-        Vector3::new(sv.x * f64::cos(u), sv.x * f64::sin(u), sv.y)
+        let sv = self.small_radius() * Vector2::new(-pmath::sin(v), pmath::cos(v));
+        Vector3::new(sv.x * pmath::cos(u), sv.x * pmath::sin(u), sv.y)
     }
     #[inline(always)]
     fn uuder(&self, u: f64, v: f64) -> Vector3 {
-        let sr = self.small_radius() * f64::cos(v);
-        let lr = (self.large_radius() + sr) * Vector2::new(f64::cos(u), f64::sin(u));
+        let sr = self.small_radius() * pmath::cos(v);
+        let lr = (self.large_radius() + sr) * Vector2::new(pmath::cos(u), pmath::sin(u));
         Vector3::new(-lr.x, -lr.y, 0.0)
     }
     #[inline(always)]
     fn uvder(&self, u: f64, v: f64) -> Vector3 {
-        let sr = -self.small_radius() * f64::sin(v);
-        let lr = sr * Vector2::new(f64::cos(u), f64::sin(u));
+        let sr = -self.small_radius() * pmath::sin(v);
+        let lr = sr * Vector2::new(pmath::cos(u), pmath::sin(u));
         Vector3::new(-lr.y, lr.x, 0.0)
     }
     #[inline(always)]
     fn vvder(&self, u: f64, v: f64) -> Vector3 {
-        let sv = -self.small_radius() * Vector2::new(f64::cos(v), f64::sin(v));
-        Vector3::new(sv.x * f64::cos(u), sv.x * f64::sin(u), sv.y)
+        let sv = -self.small_radius() * Vector2::new(pmath::cos(v), pmath::sin(v));
+        Vector3::new(sv.x * pmath::cos(u), sv.x * pmath::sin(u), sv.y)
     }
     #[inline(always)]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
@@ -78,8 +78,8 @@ impl ParametricSurface for Torus {
 
 impl ParametricSurface3D for Torus {
     fn normal(&self, u: f64, v: f64) -> Vector3 {
-        let sv = Vector2::new(f64::cos(v), f64::sin(v));
-        Vector3::new(sv.x * f64::cos(u), sv.x * f64::sin(u), sv.y)
+        let sv = Vector2::new(pmath::cos(v), pmath::sin(v));
+        Vector3::new(sv.x * pmath::cos(u), sv.x * pmath::sin(u), sv.y)
     }
 }
 
@@ -95,7 +95,7 @@ impl SearchParameter<D2> for Torus {
     ) -> Option<(f64, f64)> {
         let r = point - self.center();
         let rxy = Vector2::new(r.x, r.y);
-        let v = f64::asin(f64::clamp(r.z / self.small_radius(), -1.0, 1.0));
+        let v = pmath::asin(f64::clamp(r.z / self.small_radius(), -1.0, 1.0));
         let minus = rxy.magnitude2() < self.large_radius() * self.large_radius();
         let v = match (minus, v < 0.0) {
             (true, _) => PI - v,
@@ -103,7 +103,7 @@ impl SearchParameter<D2> for Torus {
             (false, true) => 2.0 * PI + v,
         };
         let rxy_n = rxy.normalize();
-        let u = f64::acos(f64::clamp(rxy_n.x, -1.0, 1.0));
+        let u = pmath::acos(f64::clamp(rxy_n.x, -1.0, 1.0));
         let u = match rxy_n.y < 0.0 {
             true => 2.0 * PI - u,
             false => u,
@@ -136,12 +136,12 @@ impl SearchNearestParameter<D2> for Torus {
         }
         let small_r = diff.normalize();
 
-        let u = f64::acos(f64::clamp(rxy_n.x, -1.0, 1.0));
+        let u = pmath::acos(f64::clamp(rxy_n.x, -1.0, 1.0));
         let u = match rxy_n.y < 0.0 {
             true => 2.0 * PI - u,
             false => u,
         };
-        let v = f64::asin(f64::clamp(small_r.z, -1.0, 1.0));
+        let v = pmath::asin(f64::clamp(small_r.z, -1.0, 1.0));
         let v = match (small_r.dot(large_r) < 0.0, v < 0.0) {
             (true, _) => PI - v,
             (false, false) => v,
@@ -179,9 +179,9 @@ fn surface() {
             let u = 2.0 * PI * i as f64 / N as f64;
             let v = 2.0 * PI * j as f64 / N as f64;
             let p = torus.subs(u, v);
-            let r = large_radius * Point3::new(f64::cos(u), f64::sin(u), 0.0);
+            let r = large_radius * Point3::new(pmath::cos(u), pmath::sin(u), 0.0);
             assert_near!(p.distance(r), small_radius);
-            assert_near!(p.z, small_radius * f64::sin(v));
+            assert_near!(p.z, small_radius * pmath::sin(v));
 
             let uder0 = torus.uder(u, v);
             let uder1 = (torus.subs(u + EPS, v) - torus.subs(u - EPS, v)) / (2.0 * EPS);

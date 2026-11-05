@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(p.faces[blend].origins, vec![FaceOrigin::Edge { operand: 0, edge: e }]);
         assert_eq!(p.faces[blend].change, Change::Generated);
         // A sweep along a 3D path: each wall from the segment it starts on.
-        let path: Vec<Vec3> = (0..=20).map(|i| Vec3::new(0.0, 0.0, i as f64) + Vec3::new((i as f64 * 0.2).sin() * 10.0, 0.0, 0.0)).collect();
+        let path: Vec<Vec3> = (0..=20).map(|i| Vec3::new(0.0, 0.0, i as f64) + Vec3::new(pmath::sin(i as f64 * 0.2) * 10.0, 0.0, 0.0)).collect();
         let sq = Loop2::polygon(&[Vec2::new(-2.0, -2.0), Vec2::new(2.0, -2.0), Vec2::new(2.0, 2.0), Vec2::new(-2.0, 2.0)]);
         let sr = Region2 { outer: sq, holes: vec![] };
         let sw = crate::sweep_path(&plane, &sr, &path).unwrap();

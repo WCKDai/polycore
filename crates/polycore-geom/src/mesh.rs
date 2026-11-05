@@ -551,7 +551,7 @@ impl Mesh {
         };
         let size = self.bounds().diagonal().max(1e-9);
         let tol = size * 1e-7;
-        let cos = max_angle.cos();
+        let cos = pmath::cos(max_angle);
         let mut chain = vec![e];
         if self.smooth_seam(e, cos) {
             return chain;

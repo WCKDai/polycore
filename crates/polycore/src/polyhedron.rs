@@ -67,7 +67,7 @@ fn combinatorics(hs: &[HalfSpace]) -> Result<(Vec<Vec3>, Vec<(usize, Vec<usize>)
         let w = h.n.cross(u);
         let mut ordered = on.clone();
         ordered.sort_by(|a, b| {
-            let ang = |i: usize| verts.get(i).map(|v| (*v - c).dot(w).atan2((*v - c).dot(u))).unwrap_or(0.0);
+            let ang = |i: usize| verts.get(i).map(|v| pmath::atan2((*v - c).dot(w), (*v - c).dot(u))).unwrap_or(0.0);
             ang(*a).total_cmp(&ang(*b))
         });
         faces_idx.push((hi, ordered));
@@ -268,7 +268,7 @@ pub fn draft(b: &Body, faces: &[Vec3], neutral: &Plane, pull: Vec3, angle: f64) 
             return Err(KernelError::Failed("not supported yet: drafting faces that aren't parallel to the pull direction".into()));
         }
         // Hinge: the face's line on the neutral plane; rotate the normal toward the pull.
-        let n2 = (h.n * angle.cos() + pull * angle.sin()).normalized().ok_or_else(|| KernelError::Failed("draft".into()))?;
+        let n2 = (h.n * pmath::cos(angle) + pull * pmath::sin(angle)).normalized().ok_or_else(|| KernelError::Failed("draft".into()))?;
         let hinge_pt =
             neutral.intersect_ray(*c, pull).ok_or_else(|| KernelError::Failed("the neutral plane is parallel to the pull direction".into()))?;
         out.push(HalfSpace { n: n2, d: n2.dot(hinge_pt) });
@@ -423,7 +423,7 @@ pub fn round_all_edges(b: &Body, r: f64) -> Result<Body> {
             let u = axis.any_perp();
             let w2 = axis.cross(u);
             around.sort_by(|x, y| {
-                let ang = |h: usize| normal(h).dot(w2).atan2(normal(h).dot(u));
+                let ang = |h: usize| pmath::atan2(normal(h).dot(w2), normal(h).dot(u));
                 ang(*x).total_cmp(&ang(*y))
             });
             let k = around.len();

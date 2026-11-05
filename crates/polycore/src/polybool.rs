@@ -1274,11 +1274,11 @@ mod small_round_tests {
         let mut segs = Vec::new();
         for (k, (cx, cy)) in corners.iter().enumerate() {
             let start = k as f64 * FRAC_PI_2;
-            let at = |t: f64| Vec2::new(cx + r * t.cos(), cy + r * t.sin());
+            let at = |t: f64| Vec2::new(cx + r * pmath::cos(t), cy + r * pmath::sin(t));
             segs.push(Seg2::Arc { center: Vec2::new(*cx, *cy), radius: r, start, sweep: FRAC_PI_2 });
             let (nx, ny) = corners[(k + 1) % 4];
             let next = start + FRAC_PI_2;
-            segs.push(Seg2::Line { a: at(next), b: Vec2::new(nx + r * next.cos(), ny + r * next.sin()) });
+            segs.push(Seg2::Line { a: at(next), b: Vec2::new(nx + r * pmath::cos(next), ny + r * pmath::sin(next)) });
         }
         let holes = if hole { vec![Loop2::circle(Vec2::new(x - 100.0, 0.0), 2.0).reversed()] } else { Vec::new() };
         crate::extrude_planar_regions(&Plane::XY, &[Region2 { outer: Loop2 { segs }, holes }], 0.0, 1.0).unwrap()

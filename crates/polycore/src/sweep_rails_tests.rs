@@ -80,7 +80,7 @@ fn a_helical_rail_twists_a_square() {
         .map(|i| {
             let u = i as f64 / 200.0;
             let a = PI / 4.0 + u * PI / 2.0;
-            Vec3::new(r * a.cos(), r * a.sin(), 40.0 * u)
+            Vec3::new(r * pmath::cos(a), r * pmath::sin(a), 40.0 * u)
         })
         .collect();
     let b = sweep_path_with(&Plane::XY, &square(5.0), &up(), &railed(vec![rail], RailFit::Scale)).unwrap();
@@ -109,7 +109,7 @@ fn a_parallel_rail_along_a_curved_path_keeps_the_section() {
         (0..=180)
             .map(|i| {
                 let a = PI / 2.0 * i as f64 / 180.0;
-                Vec3::new(30.0 - radius * a.cos(), 0.0, radius * a.sin())
+                Vec3::new(30.0 - radius * pmath::cos(a), 0.0, radius * pmath::sin(a))
             })
             .collect()
     };
@@ -138,7 +138,7 @@ fn two_rails_carry_a_line_between_arcs() {
         let ctl = railed(vec![arc(-1.0), arc(1.0)], fit);
         let b = crate::sweep_sheet_points_with(&Plane::XY, &line, &up(), &ctl).unwrap();
         let m = measure(&b).unwrap();
-        let area = 2.0 * (20.0 * 15.0 + 625.0 * (0.8f64).asin()) - 400.0;
+        let area = 2.0 * (20.0 * 15.0 + 625.0 * pmath::asin(0.8f64)) - 400.0;
         assert!(close(m.area, area, 1e-3), "{fit:?}: area {} vs {area}", m.area);
         assert!(m.bbox.min.y.abs() < 1e-6 && m.bbox.max.y.abs() < 1e-6, "{fit:?}: {:?}", m.bbox);
     }

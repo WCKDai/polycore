@@ -258,7 +258,7 @@ impl EvalSurface {
             EvalSurface::Revolved { profile, origin, axis, transform, swap } => {
                 let (s, a) = if *swap { (v, u) } else { (u, v) };
                 let (c, dc) = profile.eval(s)?;
-                let (sin, cos) = a.sin_cos();
+                let (sin, cos) = pmath::sin_cos(a);
                 let rot = |x: Vec3| x * cos + axis.cross(x) * sin + *axis * (axis.dot(x) * (1.0 - cos));
                 let r = c - *origin;
                 let p = *origin + rot(r);
@@ -399,7 +399,7 @@ mod tests {
     /// translation scales with each weight) and a revolved one (composed with its own map).
     #[test]
     fn a_transformed_plan_evaluates_to_the_moved_points() {
-        let (c, s) = (0.6f64.cos(), 0.6f64.sin());
+        let (c, s) = (pmath::cos(0.6f64), pmath::sin(0.6f64));
         // Turned about z by 0.6 rad, then moved: by columns.
         let m = [[c, s, 0.0, 0.0], [-s, c, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [5.0, -2.0, 7.0, 1.0]];
         let apply = |p: Vec3| Vec3::new(c * p.x - s * p.y + 5.0, s * p.x + c * p.y - 2.0, p.z + 7.0);
@@ -469,9 +469,9 @@ mod tests {
         };
         for &(u, v) in &[(0.0, 0.0), (0.5, 1.0), (1.0, 4.0), (0.25, 6.0)] {
             let (p, n) = s.eval(u, v);
-            assert!(close(p, Vec3::new(2.0 * v.cos(), 2.0 * v.sin(), 5.0 * u), 1e-12), "{p:?}");
+            assert!(close(p, Vec3::new(2.0 * pmath::cos(v), 2.0 * pmath::sin(v), 5.0 * u), 1e-12), "{p:?}");
             // S_u = +Z, S_v = tangential: the normal points inward (−radial) for this profile.
-            assert!(close(n, Vec3::new(-v.cos(), -v.sin(), 0.0), 1e-12), "{n:?}");
+            assert!(close(n, Vec3::new(-pmath::cos(v), -pmath::sin(v), 0.0), 1e-12), "{n:?}");
         }
     }
 

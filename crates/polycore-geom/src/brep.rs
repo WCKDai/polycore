@@ -328,7 +328,7 @@ fn surface(s: &Surface, depth: usize, budget: &mut Budget) -> Result<()> {
             require(*radius_at_origin >= 0. && *half_angle > 0. && *half_angle < std::f64::consts::FRAC_PI_2, "cone dimensions")?;
             angle(a)?;
             range(height)?;
-            require(height.iter().all(|h| radius_at_origin + h * half_angle.tan() >= 0.), "negative cone radius")
+            require(height.iter().all(|h| radius_at_origin + h * pmath::tan(*half_angle) >= 0.), "negative cone radius")
         }
         Surface::Sphere { frame: f, radius: r, longitude, latitude } => {
             frame(f, budget)?;

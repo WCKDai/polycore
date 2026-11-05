@@ -280,7 +280,7 @@ impl NormalFilters for PolygonMesh {
         self
     }
     fn add_smooth_normals(&mut self, tol_ang: f64, overwrite: bool) -> &mut Self {
-        let vnmap = self.clustering_noraml_faces(tol_ang.cos());
+        let vnmap = self.clustering_noraml_faces(pmath::cos(tol_ang));
         self.reflect_normal_clusters(vnmap, overwrite);
         self
     }

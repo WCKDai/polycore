@@ -185,7 +185,7 @@ mod tests {
                                 let a = (1. - t) * (1. - t);
                                 let b = std::f64::consts::SQRT_2 * t * (1. - t);
                                 let c = t * t;
-                                let angle = (b + c).atan2(a + b) + quarter as f64 * std::f64::consts::FRAC_PI_2;
+                                let angle = pmath::atan2(b + c, a + b) + quarter as f64 * std::f64::consts::FRAC_PI_2;
                                 let v = quarter as f64 + t;
                                 let (old, new, n0, n1) = if processor.orientation() {
                                     (processor.subs(u, angle), converted.subs(u, v), processor.normal(u, angle), converted.normal(u, v))

@@ -50,7 +50,7 @@ impl<'a> Near<'a> {
         let min = bounds.min - Vec3::new(reach, reach, reach);
         let size = bounds.size() + Vec3::new(2.0 * reach, 2.0 * reach, 2.0 * reach);
         // About a few triangles a cell, at most 64^3 cells.
-        let n = (mesh.triangles.len().max(1) as f64).cbrt().clamp(1.0, 64.0);
+        let n = pmath::cbrt(mesh.triangles.len().max(1) as f64).clamp(1.0, 64.0);
         let cell = (size.x.max(size.y).max(size.z) / n).max(reach * 2.0).max(1e-9);
         let dims = [size.x, size.y, size.z].map(|s| ((s / cell).ceil() as usize).clamp(1, 256));
         let mut cells = vec![Vec::new(); dims[0] * dims[1] * dims[2]];

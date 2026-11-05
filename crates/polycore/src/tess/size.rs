@@ -95,7 +95,7 @@ impl Rules {
         let r = 1.0 / k;
         let mut across = (8.0 * r * self.tol).sqrt();
         if let Some(t) = self.turn
-            && r * (1.0 - (0.5 * t.angle).cos()) > t.floor
+            && r * (1.0 - pmath::cos(0.5 * t.angle)) > t.floor
         {
             across = across.min(r * t.angle);
         }

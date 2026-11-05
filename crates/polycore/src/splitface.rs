@@ -1591,7 +1591,7 @@ fn split_sides(body: &Body, tool: &SplitTool) -> Result<Option<Sides>> {
                 let mut bands: Vec<(f64, usize)> = Vec::new();
                 for (i, l) in loops.iter().enumerate() {
                     let pts = samples(&l.clone().into());
-                    let ang = |p: &mt::Point3| (p - o).dot(ey).atan2((p - o).dot(ex));
+                    let ang = |p: &mt::Point3| pmath::atan2((p - o).dot(ey), (p - o).dot(ex));
                     let turn: f64 = (0..pts.len())
                         .map(|k| {
                             let d = ang(&pts[(k + 1) % pts.len()]) - ang(&pts[k]);

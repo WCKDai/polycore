@@ -186,7 +186,7 @@ fn circle_span(c: &[H], center: Vec2, radius: f64, tol: f64, source_error: f64, 
     let half_plane = mid.len() > radius * 1e-8 && c.iter().all(|p| (point(*p) - center).dot(mid) > coordinate_error * mid.len());
     if (positive || negative) && half_plane {
         let cross = a.x * b.y - a.y * b.x;
-        let sweep = cross.atan2(a.dot(b));
+        let sweep = pmath::atan2(cross, a.dot(b));
         if (positive && sweep > 0.) || (negative && sweep < 0.) {
             return Some(sweep);
         }
@@ -405,7 +405,7 @@ fn arc(c: &mt::Curve, spans: &[Vec<H>], plane: &Plane, a: Vec2, b: Vec2, tol: f6
         sweep += ds;
     }
     let start = (a - center).angle();
-    let end = center + Vec2::new((start + sweep).cos(), (start + sweep).sin()) * radius;
+    let end = center + Vec2::new(pmath::cos(start + sweep), pmath::sin(start + sweep)) * radius;
     // The arc ends where the curve does, as closely as a profile loop must close: within `tol`
     // only (which grows with the model), a curve that is merely near a circle (a font's) would
     // come back as an arc ending off the next segment's start, and the loop would not close.
@@ -498,10 +498,10 @@ mod tests {
         let circle = edge(&x, &y, &[1., 2. * (w - 1.), 2. * (1. - w)], 19);
         for k in 0..=16 {
             let p = circle.curve().subs(k as f64 / 16.);
-            assert!((p.x.hypot(p.y) - 10.).abs() < 1e-3, "old sample locations must see a circle");
+            assert!((pmath::hypot(p.x, p.y) - 10.).abs() < 1e-3, "old sample locations must see a circle");
         }
         let p = circle.curve().subs(1. / 32.);
-        assert!((p.x.hypot(p.y) - 11.).abs() < 1e-5);
+        assert!((pmath::hypot(p.x, p.y) - 11.).abs() < 1e-5);
         assert!(segment(&circle, &Plane::XY, 1e-3, &mut 2_000_000).is_none());
     }
 
@@ -571,8 +571,8 @@ mod tests {
         for i in 0..8 {
             let a = i as f64 * std::f64::consts::FRAC_PI_2;
             let b = a + std::f64::consts::FRAC_PI_2;
-            points.push(p(10. * ((a + b) / 2.).cos(), 10. * ((a + b) / 2.).sin(), w));
-            points.push(p(10. * b.cos(), 10. * b.sin(), 1.));
+            points.push(p(10. * pmath::cos((a + b) / 2.), 10. * pmath::sin((a + b) / 2.), w));
+            points.push(p(10. * pmath::cos(b), 10. * pmath::sin(b), 1.));
             knots.extend([i as f64 + 1.; 2]);
         }
         knots.push(8.);

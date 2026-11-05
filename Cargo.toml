@@ -14,6 +14,9 @@ repository = "https://github.com/WCKDai/polycore"
 
 [workspace.dependencies]
 polycore-geom = { path = "crates/polycore-geom" }
+# The transcendental functions from IEEE 754 arithmetic alone (vendor/pmath): the same bits on
+# every platform. `clippy.toml` disallows the platform's libm everywhere else.
+pmath = { package = "polycore-pmath", path = "vendor/pmath" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }

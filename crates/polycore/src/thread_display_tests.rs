@@ -13,10 +13,10 @@ use crate::{Body, DISPLAY_ANGLE, EdgeSpec, FaceSpec, SurfSpec, sew};
 fn helix(r: f64, z0: f64, pitch: f64, a0: f64, a1: f64) -> EdgeSpec {
     let n = (((a1 - a0).abs() / (TAU / 16.0)).ceil() as usize).max(1);
     let h = (a1 - a0) / n as f64;
-    let k = 4.0 / 3.0 * (h / 4.0).tan();
-    let at = |a: f64| Vec3::new(r * a.cos(), r * a.sin(), z0 + pitch * a / TAU);
+    let k = 4.0 / 3.0 * pmath::tan(h / 4.0);
+    let at = |a: f64| Vec3::new(r * pmath::cos(a), r * pmath::sin(a), z0 + pitch * a / TAU);
     let rise = Vec3::new(0.0, 0.0, pitch * h / TAU / 3.0);
-    let turn = |a: f64| Vec3::new(-a.sin(), a.cos(), 0.0) * (r * k);
+    let turn = |a: f64| Vec3::new(-pmath::sin(a), pmath::cos(a), 0.0) * (r * k);
     let mut ctrl = vec![at(a0)];
     for i in 0..n {
         let (s, e) = (a0 + h * i as f64, a0 + h * (i + 1) as f64);
@@ -46,7 +46,7 @@ fn ends(e: &EdgeSpec) -> (Vec3, Vec3) {
 
 /// A full circle about Z at height `z`, as two arcs.
 fn circle(r: f64, z: f64) -> Vec<EdgeSpec> {
-    let p = |a: f64| Vec3::new(r * a.cos(), r * a.sin(), z);
+    let p = |a: f64| Vec3::new(r * pmath::cos(a), r * pmath::sin(a), z);
     vec![EdgeSpec::Arc { a: p(0.3), b: p(0.3 + PI), mid: p(0.3 + PI / 2.0) }, EdgeSpec::Arc { a: p(0.3 + PI), b: p(0.3), mid: p(0.3 + 1.5 * PI) }]
 }
 
@@ -69,9 +69,9 @@ fn ridge_thread(major: f64, pitch: f64, turns: f64) -> Body {
     let (fu0, fu1) = ends(&fu);
     let (cl0, cl1) = ends(&cl);
     let (cu0, cu1) = ends(&cu);
-    let at = |r: f64, a: f64, z: f64| Vec3::new(r * a.cos(), r * a.sin(), z);
+    let at = |r: f64, a: f64, z: f64| Vec3::new(r * pmath::cos(a), r * pmath::sin(a), z);
     let mid = z0 + pitch / 2.0;
-    let out = |a: f64| Vec3::new(a.cos(), a.sin(), 0.0);
+    let out = |a: f64| Vec3::new(pmath::cos(a), pmath::sin(a), 0.0);
     let flank = 0.5f64;
     let faces = vec![
         FaceSpec { loops: vec![circle(rc, 0.0).iter().rev().map(rev).collect()], surface: SurfSpec::Plane, probe: None },
@@ -136,7 +136,7 @@ fn quality(plan: &TessPlan, mesh: &Mesh) -> Quality {
         let n = (b - a).cross(c - a);
         let longest = (b - a).len().max((c - b).len()).max((a - c).len());
         let ang = |p: Vec3, q: Vec3, r: Vec3| {
-            ((q - p).normalized().unwrap_or(Vec3::X)).dot((r - p).normalized().unwrap_or(Vec3::X)).clamp(-1.0, 1.0).acos()
+            pmath::acos(((q - p).normalized().unwrap_or(Vec3::X)).dot((r - p).normalized().unwrap_or(Vec3::X)).clamp(-1.0, 1.0))
         };
         let mina = ang(a, b, c).min(ang(b, c, a)).min(ang(c, a, b)).to_degrees();
         if mina < q.min_angle {

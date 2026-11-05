@@ -353,7 +353,7 @@ fn loops(uses: &[Use]) -> Option<Vec<Vec<usize>>> {
                 .filter_map(|k| {
                     let d = uses.get(k)?.piece.leaving(false)?;
                     // Counter-clockwise from the way back, in (0, 2π].
-                    let turn = back.cross(d).atan2(back.dot(d));
+                    let turn = pmath::atan2(back.cross(d), back.dot(d));
                     Some((k, if turn <= 0.0 { turn + TAU } else { turn }))
                 })
                 .max_by(|x, y| x.1.total_cmp(&y.1))

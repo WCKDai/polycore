@@ -131,7 +131,7 @@ mod test_geom_impl {
         let theta = PI * pole[0];
         let z = pole[1];
         let zi = f64::sqrt(f64::max(1.0 - z * z, 0.0));
-        Vector3::new(f64::cos(theta) * zi, f64::sin(theta) * zi, z)
+        Vector3::new(pmath::cos(theta) * zi, pmath::sin(theta) * zi, z)
     }
 
     fn complex_boundary(angles: [f64; 10]) -> Vec<Point3> {
@@ -143,12 +143,12 @@ mod test_geom_impl {
                 let prev_angle = angle_store;
                 angle_store = angle;
                 let r = 10.0 - i as f64;
-                let min_theta = f64::acos(1.0 - 0.01 / r);
+                let min_theta = pmath::acos(1.0 - 0.01 / r);
                 let divs = 1 + (f64::abs(angle - prev_angle) / min_theta) as usize;
                 (0..=divs).map(move |i| {
                     let t = i as f64 / divs as f64;
                     let theta = (1.0 - t) * prev_angle + t * angle;
-                    Point3::new(r * f64::cos(theta), r * f64::sin(theta), 0.0)
+                    Point3::new(r * pmath::cos(theta), r * pmath::sin(theta), 0.0)
                 })
             })
             .chain([Point3::origin(), Point3::new(10.0, 0.0, 0.0)])
@@ -181,7 +181,7 @@ mod test_geom_impl {
             (0..=10)
                 .map(|j| {
                     let theta = j as f64 / 10.0 * 2.0 * PI;
-                    Point3::new(f64::sin(theta), f64::cos(theta), 0.0)
+                    Point3::new(pmath::sin(theta), pmath::cos(theta), 0.0)
                 })
                 .collect()
         }));
@@ -226,8 +226,8 @@ mod test_geom_impl {
             // Any point on the curve is on the same side as point `p2`.
             // Check by the circular angle theorem.
             let p3 = curve.subs(t);
-            let angle2 = (p2 - p1).angle(p2 - p0);
-            let angle3 = (p3 - p1).angle(p3 - p0);
+            let angle2 = portable_trig::angle(p2 - p1, p2 - p0);
+            let angle3 = portable_trig::angle(p3 - p1, p3 - p0);
             assert_near!(angle2, angle3);
         }
 
@@ -247,7 +247,7 @@ mod test_geom_impl {
 
             // front point and back point
             let trans = Matrix4::from_translation(origin.to_vec())
-                * Matrix4::from_axis_angle(axis, angle)
+                * portable_trig::rotation(axis, angle)
                 * Matrix4::from_translation(-origin.to_vec());
             let pt1 = trans.transform_point(pt0);
             assert_near!(curve.front(), pt0);
@@ -261,7 +261,7 @@ mod test_geom_impl {
 
             // Any point on the curve lies in the circle arc from `p0` to `p1`.
             // Check by the circular angle theorem.
-            let angle0 = (pt2 - pt1).angle(pt2 - pt0);
+            let angle0 = portable_trig::angle(pt2 - pt1, pt2 - pt0);
             assert_near!(angle0 * 2.0, Rad(2.0 * PI) - angle);
         }
 

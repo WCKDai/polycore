@@ -76,7 +76,7 @@ impl Xf {
         let m = &self.0;
         let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
             + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-        det.abs().cbrt()
+        pmath::cbrt(det.abs())
     }
 }
 
@@ -400,8 +400,8 @@ impl Arc {
         let sweep = self.a1 - self.a0;
         let pieces = (sweep / std::f64::consts::FRAC_PI_2).ceil().clamp(1.0, 8.0) as usize;
         let step = sweep / pieces as f64;
-        let w = (step / 2.0).cos();
-        let on = |t: f64, k: f64| x.point([self.c[0] + k * t.cos(), self.c[1] + k * t.sin(), self.c[2]]);
+        let w = pmath::cos(step / 2.0);
+        let on = |t: f64, k: f64| x.point([self.c[0] + k * pmath::cos(t), self.c[1] + k * pmath::sin(t), self.c[2]]);
         let mut pts = Vec::with_capacity(2 * pieces + 1);
         let mut knots = vec![0.0; 3];
         for i in 0..pieces {
@@ -544,7 +544,7 @@ impl<'a> Tr<'a> {
             100 => {
                 let Arc { c, rad, a0, a1 } = self.arc(seq)?;
                 let zt = c[2];
-                let at = |t: f64| x.point([c[0] + rad * t.cos(), c[1] + rad * t.sin(), zt]);
+                let at = |t: f64| x.point([c[0] + rad * pmath::cos(t), c[1] + rad * pmath::sin(t), zt]);
                 let z = unit(x.dir([0.0, 0.0, 1.0])).ok_or("degenerate arc frame")?;
                 let xa = unit(x.dir([1.0, 0.0, 0.0])).ok_or("degenerate arc frame")?;
                 let ax = self.o.placement(x.point(c), z, xa);
@@ -590,12 +590,12 @@ impl<'a> Tr<'a> {
                 let (ra, rb) = ((-f / a).sqrt() * u, (-f / c).sqrt() * u);
                 let s = [self.n(seq, 8)? * u, self.n(seq, 9)? * u];
                 let en = [self.n(seq, 10)? * u, self.n(seq, 11)? * u];
-                let t0 = (s[1] / rb).atan2(s[0] / ra);
-                let mut t1 = (en[1] / rb).atan2(en[0] / ra);
+                let t0 = pmath::atan2(s[1] / rb, s[0] / ra);
+                let mut t1 = pmath::atan2(en[1] / rb, en[0] / ra);
                 while t1 <= t0 + 1e-12 {
                     t1 += std::f64::consts::TAU;
                 }
-                let at = |t: f64| x.point([ra * t.cos(), rb * t.sin(), zt]);
+                let at = |t: f64| x.point([ra * pmath::cos(t), rb * pmath::sin(t), zt]);
                 let z = unit(x.dir([0.0, 0.0, 1.0])).ok_or("degenerate ellipse frame")?;
                 let xa = unit(x.dir([1.0, 0.0, 0.0])).ok_or("degenerate ellipse frame")?;
                 let ax = self.o.placement(x.point([0.0, 0.0, zt]), z, xa);
@@ -623,8 +623,8 @@ impl<'a> Tr<'a> {
         if !(rad > 0.0) {
             return Err(format!("entity {seq}: arc of zero radius"));
         }
-        let a0 = (s[1] - c[1]).atan2(s[0] - c[0]);
-        let mut a1 = (e[1] - c[1]).atan2(e[0] - c[0]);
+        let a0 = pmath::atan2(s[1] - c[1], s[0] - c[0]);
+        let mut a1 = pmath::atan2(e[1] - c[1], e[0] - c[0]);
         while a1 <= a0 + 1e-12 {
             a1 += std::f64::consts::TAU;
         }

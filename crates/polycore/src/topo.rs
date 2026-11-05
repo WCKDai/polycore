@@ -104,7 +104,7 @@ fn classify(pts: &[Vec3], nrm: &[Vec3], tol: f64, id: usize) -> Surf {
         let v = axis.cross(u);
         let pl: Vec<(f64, f64)> = pts.iter().map(|p| (p.dot(u), p.dot(v))).collect();
         if let Some((cu, cv, r)) = fit_circle(&pl)
-            && pl.iter().all(|(x, y)| ((x - cu).hypot(y - cv) - r).abs() < tol.max(r * 2e-3))
+            && pl.iter().all(|(x, y)| (pmath::hypot(x - cu, y - cv) - r).abs() < tol.max(r * 2e-3))
         {
             let axis = if axis.x + axis.y * 1e-3 + axis.z * 1e-6 < 0.0 { -axis } else { axis };
             return Surf::Cylinder { axis, p: u * cu + v * cv, r };

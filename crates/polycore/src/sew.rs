@@ -412,7 +412,7 @@ fn edge_sheets(faces: &[FaceSpec], group: &[(EdgeUse, Vec3, Vec3)]) -> Result<[[
         let face = faces.get(u.0).ok_or_else(|| fail("edge contact"))?;
         let (into, turn, ccw) = leaving(face, *u, *a, *b, t).ok_or_else(|| fail("unsupported edge contact"))?;
         let r: Vec3 = *reference.get_or_insert(into);
-        let angle = r.cross(into).dot(t).atan2(r.dot(into)).rem_euclid(std::f64::consts::TAU);
+        let angle = pmath::atan2(r.cross(into).dot(t), r.dot(into)).rem_euclid(std::f64::consts::TAU);
         rays.push((*u, key(*a), turn, ccw, if angle > std::f64::consts::TAU - SAME_WAY { 0.0 } else { angle }));
     }
     rays.sort_by(|p, q| p.4.total_cmp(&q.4));
@@ -1070,8 +1070,8 @@ mod tests {
             assert!(body.validity().is_empty(), "{o:?}");
             // The circular segment added to the slab (the measure follows flat arcs by chords).
             let r = (36.0 + bow * bow) / (2.0 * bow);
-            let half = (6.0 / r).asin();
-            let segment = r * r * (half - half.sin() * half.cos());
+            let half = pmath::asin(6.0 / r);
+            let segment = r * r * (half - pmath::sin(half) * pmath::cos(half));
             let want = (360.0 + segment) * 2.0;
             let got = crate::measure(&body).unwrap().volume;
             assert!((got - want).abs() < 1e-4 * want, "{o:?} {bow}: {got} vs {want}");
@@ -1206,7 +1206,7 @@ mod tests {
         // `n` control points bulging out from (4, 0) to (4, 3) at height `z`.
         let arch = |n: usize, z: f64| -> Vec<Vec3> {
             let at = |i: usize| i as f64 / (n - 1) as f64;
-            (0..n).map(|i| Vec3::new(4.0 + (std::f64::consts::PI * at(i)).sin(), 3.0 * at(i), z)).collect()
+            (0..n).map(|i| Vec3::new(4.0 + pmath::sin(std::f64::consts::PI * at(i)), 3.0 * at(i), z)).collect()
         };
         for top in [degree(0, &ctrl), degree(MAX_CHAIN_DEGREE + 1, &arch(MAX_CHAIN_DEGREE + 2, 2.0)), degree(4, &fifth)] {
             assert!(sew(&bulged_box(bulge(0.0), top)).is_err());
@@ -1228,8 +1228,8 @@ mod tests {
         // have such a face. (Thinner slabs meet another limit, at the origin too: a face
         // 0.00003 mm wide and askew to the axes is sewn but gets no triangles.)
         let turned = |about_z: f64, about_x: f64| {
-            let (sz, cz) = about_z.sin_cos();
-            let (sx, cx) = about_x.sin_cos();
+            let (sz, cz) = pmath::sin_cos(about_z);
+            let (sx, cx) = pmath::sin_cos(about_x);
             // The x, y and z axes turned about x, then about z.
             (Vec3::new(cz, sz, 0.0), Vec3::new(-sz * cx, cz * cx, sx), Vec3::new(sz * sx, -cz * sx, cx))
         };

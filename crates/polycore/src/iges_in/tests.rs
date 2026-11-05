@@ -122,7 +122,7 @@ fn iges_file_placed(ents: &[(i64, i64, String, i64)]) -> String {
 #[test]
 fn an_arc_revolved_about_its_centre_is_a_cap_not_a_ball() {
     let (r, polar) = (50.0f64, 30f64.to_radians());
-    let (rim_r, rim_z) = (r * polar.sin(), r * polar.cos());
+    let (rim_r, rim_z) = (r * pmath::sin(polar), r * pmath::cos(polar));
     let ents: Vec<(i64, i64, String, i64)> = vec![
         // 1: the meridian plane: local x stays x, local y becomes z.
         (124, 0, "1.,0.,0.,0.,0.,0.,-1.,0.,0.,1.,0.,0.".into(), 0),

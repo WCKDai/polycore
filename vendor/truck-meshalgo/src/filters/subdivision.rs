@@ -145,7 +145,7 @@ fn calc_new_position(
         Corner(_, _) => point,
         Boundary(w0, w1) => point + ((positions[w0] - point) + (positions[w1] - point)) / 8.0,
         Inner => {
-            let alpha = 3.0 / 8.0 + f64::cos(2.0 * PI / adjacency.len() as f64) / 4.0;
+            let alpha = 3.0 / 8.0 + pmath::cos(2.0 * PI / adjacency.len() as f64) / 4.0;
             let alpha = (5.0 / 8.0 - alpha * alpha) / adjacency.len() as f64;
             point
                 + adjacency
@@ -176,11 +176,11 @@ fn edge_positions(
             Some(second_wing) => {
                 let gamma = match VertexBoundaryCondition::new(v0, &vertex_adjacency[v0], edges) {
                     Boundary(_, _) => {
-                        5.0 / 8.0 - f64::cos(PI / vertex_adjacency[v0].len() as f64) / 4.0
+                        5.0 / 8.0 - pmath::cos(PI / vertex_adjacency[v0].len() as f64) / 4.0
                     }
                     Inner => match VertexBoundaryCondition::new(v1, &vertex_adjacency[v1], edges) {
                         Boundary(_, _) => {
-                            3.0 / 8.0 + f64::cos(PI / vertex_adjacency[v1].len() as f64) / 4.0
+                            3.0 / 8.0 + pmath::cos(PI / vertex_adjacency[v1].len() as f64) / 4.0
                         }
                         Inner => 0.5,
                         Corner(_, _) => unreachable!(),

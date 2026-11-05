@@ -12,7 +12,7 @@ use crate::{KernelError, Result, guard};
 
 /// Rotate `v` about the unit axis `k` by `ang` (Rodrigues).
 fn rot(v: Vec3, k: Vec3, ang: f64) -> Vec3 {
-    v * ang.cos() + k.cross(v) * ang.sin() + k * (k.dot(v) * (1.0 - ang.cos()))
+    v * pmath::cos(ang) + k.cross(v) * pmath::sin(ang) + k * (k.dot(v) * (1.0 - pmath::cos(ang)))
 }
 
 /// Sweep a planar region's outer loop along a helix about `axis` through `axis_origin`:

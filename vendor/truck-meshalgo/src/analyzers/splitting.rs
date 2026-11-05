@@ -296,7 +296,8 @@ fn is_signed_up_upper(
 fn get_angle(positions: &[Point3], face: &[Vertex], idx0: usize, idx1: usize, idx2: usize) -> f64 {
     let vec0 = positions[face[idx1].pos] - positions[face[idx0].pos];
     let vec1 = positions[face[idx2].pos] - positions[face[idx0].pos];
-    vec0.angle(vec1).0
+    // SolidCraft: cgmath's `angle` is the platform's `atan2`; `pmath`'s is the same everywhere.
+    pmath::atan2(vec0.cross(vec1).magnitude(), vec0.dot(vec1))
 }
 
 fn add_weights(weights: &mut [f64], positions: &[Point3], face: &[Vertex]) {

@@ -1710,7 +1710,7 @@ impl From<&ConicalSurface> for alias::ConicalSurface {
     ) -> Self {
         let mat = Matrix4::from(position);
         let p = Point3::new(*radius, 0.0, 0.0);
-        let v = Vector3::new(f64::tan(*semi_angle), 0.0, 1.0);
+        let v = Vector3::new(pmath::tan(*semi_angle), 0.0, 1.0);
         let rev =
             RevolutedCurve::by_revolution(Line(p, p + v), Point3::origin(), Vector3::unit_z());
         let mut processor = Processor::new(rev);

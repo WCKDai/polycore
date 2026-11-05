@@ -41,7 +41,7 @@ impl PolylineCurve<Point2> {
     /// ```
     pub fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
-        let r = Vector2::new(f64::cos(t), f64::sin(t));
+        let r = Vector2::new(pmath::cos(t), pmath::sin(t));
         self.iter()
             .circular_tuple_windows()
             .try_fold(0_i32, move |counter, (p0, p1)| {
@@ -118,7 +118,7 @@ pub fn include<'a>(
     c: Point2,
 ) -> bool {
     let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
-    let r = Vector2::new(f64::cos(t), f64::sin(t));
+    let r = Vector2::new(pmath::cos(t), pmath::sin(t));
     boundaries
         .into_iter()
         .flat_map(|boundary| boundary.iter().circular_tuple_windows())

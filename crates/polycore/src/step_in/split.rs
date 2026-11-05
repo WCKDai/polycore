@@ -174,7 +174,7 @@ fn iso_curve(s: &mt::Surface, d: Dir, mid: f64, q1: mt::Point3, q2: mt::Point3, 
             let (o, a) = (p.entity().origin(), p.entity().axis());
             let az = |x: mt::Point3, f: &Frame| {
                 let v = x - f.o;
-                v.dot(f.y).atan2(v.dot(f.x))
+                pmath::atan2(v.dot(f.y), v.dot(f.x))
             };
             let c = o + a * (q1 - o).dot(a);
             let r = (q1 - c).magnitude();
