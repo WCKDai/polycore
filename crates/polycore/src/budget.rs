@@ -13,6 +13,29 @@
 //! gives the item its own count (starting from what is left) and the caller's watch. After the
 //! items are done the caller is charged their total. An item's count does not depend on which
 //! thread ran it or when, so the outcome is the same on one thread and on many.
+//!
+//! # What keeps the count the same
+//!
+//! The count is what the kernel's own control flow charges, so it varies only where that flow
+//! does. Polykrom's case 243 (PC-16) spent 93 units on some runs and 102 on others, idle and
+//! loaded alike, because the fillet's vertex-ball stage ([`crate::blend_vertex`]) looked for a
+//! vertex with three picked edges in a `HashMap` keyed by vertex id: the ids hash by address,
+//! with a seed drawn per thread, so the first vertex met, and with it the corner rounded first
+//! and the attempts that followed, changed from run to run. It now takes the lowest vertex by
+//! position, a choice from the geometry alone. The corner build ([`crate::blend_corner`]) walked
+//! its vertices the same way, which chose the refusal it reported and the order of its corner
+//! patches among the faces; it now takes them in the selection's order. What else could vary,
+//! and why it cannot reach the count:
+//!
+//! - Other hash-keyed maps on the blend and boolean paths are read by key, folded in an
+//!   order-insensitive way (`heal::merge_coplanar` takes the lesser root, #707), or walked to
+//!   return the first refusal met: none decides whether a charged stage runs or how often.
+//! - Parallel items are charged as their sum, whatever order they finish in, and the work the
+//!   kernel runs on worker threads (tessellation) has no checkpoint.
+//! - Caches (`Body::recent_mesh`, the mesh memo, the volume memo) hold meshes and measures
+//!   only: no checkpoint lies in the work a hit skips, so a hit or a miss leaves the count alone.
+//! - [`crate::ops::with_deadline`] stops a boolean's tries by wall time, by contract: a budget
+//!   under a deadline counts differently on a slower machine. Polykrom's fillet installs none.
 
 use crate::{KernelError, Result};
 use std::cell::Cell;

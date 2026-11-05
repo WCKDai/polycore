@@ -379,6 +379,10 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)], round: bool) -> Result<Body> {
     // The filleted edges.
     let mut sels: HashMap<mt::EdgeID, Sel> = HashMap::new();
     let mut touched: HashMap<mt::VertexID, mt::Vertex> = HashMap::new();
+    // The touched vertices in the order the selection reaches them (a map's order is that of
+    // the ids' addresses: it would decide which corner's refusal is reported, and the order
+    // of the corner patches among the faces, differently from run to run).
+    let mut touched_order: Vec<mt::VertexID> = Vec::new();
     for id in &order {
         let e = edges.get(id).ok_or_else(|| KernelError::Failed("edge".into()))?;
         if !matches!(e.curve(), mt::Curve::Line(_)) {
@@ -425,14 +429,18 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)], round: bool) -> Result<Body> {
         let axis = mid + ta * s - na * r;
         let out = ((ta + tb) * -1.0).normalized().unwrap_or(na);
         let surf = orient(surf, axis + (mid - axis).normalized().unwrap_or(out) * r, mid - axis);
-        touched.insert(v0.id(), v0);
-        touched.insert(v1.id(), v1);
+        for v in [v0, v1] {
+            if touched.insert(v.id(), v.clone()).is_none() {
+                touched_order.push(v.id());
+            }
+        }
         sels.insert(*id, Sel { r, s, w, fa, fb, na, nb, ta, tb, p0, d, surf });
     }
 
     // The vertices at the ends of filleted edges: three planar faces, three straight edges.
     let mut around: HashMap<mt::VertexID, Around> = HashMap::new();
-    for (vid, v) in &touched {
+    for vid in &touched_order {
+        let v = touched.get(vid).ok_or_else(|| KernelError::Failed("vertex".into()))?;
         let (eids, fids) = at_vertex.get(vid).ok_or_else(|| KernelError::Failed("vertex".into()))?;
         if eids.len() != 3 || fids.len() != 3 {
             return Err(unsupported("fillets ending where more than three edges meet"));
@@ -473,7 +481,8 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)], round: bool) -> Result<Body> {
             let fb = on_edge.get(&b).cloned().unwrap_or_default();
             fa.into_iter().find(|f| fb.contains(f)).ok_or_else(|| KernelError::Failed("fillet corner: faces".into()))
         };
-        for (vid, ar) in &around {
+        for vid in &touched_order {
+            let ar = around.get(vid).ok_or_else(|| KernelError::Failed("vertex".into()))?;
             let v = vtx(touched.get(vid).ok_or_else(|| KernelError::Failed("vertex".into()))?);
             let mut chosen: Vec<(mt::EdgeID, Vec3)> = ar.edges.iter().filter(|(id, _)| sels.contains_key(id)).copied().collect();
             let rest: Vec<(mt::EdgeID, Vec3)> = ar.edges.iter().filter(|(id, _)| !sels.contains_key(id)).copied().collect();

@@ -1177,3 +1177,150 @@ fn a_work_budget_stops_a_fillet_at_the_same_stage_on_every_run_and_thread_count(
     assert!(spent.is_some_and(|n| n >= 2), "{spent:?}");
     assert_eq!(crate::work_spent(), None, "no budget lingers");
 }
+
+/// A closed C2 cubic spline through `pts` (chord-length parameters; the closing span runs
+/// back to the first point), as Polykrom's periodic fit spline is drawn.
+fn periodic_spline(pts: &[[f64; 2]]) -> polycore_geom::Loop2 {
+    use polycore_geom::{Loop2, Seg2, Vec2};
+    let mut points: Vec<Vec2> = pts.iter().map(|p| Vec2::new(p[0], p[1])).collect();
+    points.push(points[0]);
+    let n = points.len() - 1;
+    let h: Vec<f64> = points.windows(2).map(|p| p[0].dist(p[1])).collect();
+    let (mut diagonal, mut rhs) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    for i in 0..n {
+        let previous = (i + n - 1) % n;
+        diagonal.push(2.0 * (h[previous] + h[i]));
+        rhs.push(((points[i + 1] - points[i]) / h[i] - (points[i] - points[previous]) / h[previous]) * 6.0);
+    }
+    // The cyclic system's two corner entries, removed by a rank-one correction.
+    let corner = h[n - 1];
+    let gamma = -diagonal[0];
+    diagonal[0] -= gamma;
+    diagonal[n - 1] -= corner * corner / gamma;
+    let solve = |mut rhs: Vec<Vec2>| -> Vec<Vec2> {
+        let mut diagonal = diagonal.clone();
+        for i in 1..n {
+            let factor = h[i - 1] / diagonal[i - 1];
+            diagonal[i] -= factor * h[i - 1];
+            rhs[i] = rhs[i] - rhs[i - 1] * factor;
+        }
+        for i in (0..n).rev() {
+            let next = rhs.get(i + 1).copied().unwrap_or_default() * h[i];
+            rhs[i] = (rhs[i] - next) / diagonal[i];
+        }
+        rhs
+    };
+    let mut second = solve(rhs);
+    let mut correction_rhs = vec![Vec2::ZERO; n];
+    correction_rhs[0].x = gamma;
+    correction_rhs[n - 1].x = corner;
+    let correction = solve(correction_rhs);
+    let factor = (second[0] + second[n - 1] * (corner / gamma)) / (1.0 + correction[0].x + corner * correction[n - 1].x / gamma);
+    for (value, correction) in second.iter_mut().zip(&correction) {
+        *value -= factor * correction.x;
+    }
+    let segs = (0..n)
+        .map(|i| {
+            let next = (i + 1) % n;
+            let chord = points[i + 1] - points[i];
+            let t0 = chord - (second[i] * 2.0 + second[next]) * (h[i] * h[i] / 6.0);
+            let t1 = chord + (second[i] + second[next] * 2.0) * (h[i] * h[i] / 6.0);
+            Seg2::Cubic { p0: points[i], p1: points[i] + t0 / 3.0, p2: points[i + 1] - t1 / 3.0, p3: points[i + 1] }
+        })
+        .collect();
+    Loop2 { segs }
+}
+
+/// A part like Polykrom's kernel case 243 (TinyRex's foot): a sole with a 26-point spline
+/// outline, a box standing on it, a gusset between the box and the sole, and a tapered spline
+/// ridge crossing the gusset's foot. Built as Polykrom's extrudes build it: the gusset's profile
+/// grown into the box where its side lies on the box's face, its foot left on the sole (the
+/// boolean nudges that tool by a hair, which leaves the gusset's far corners convex); the
+/// ridge's sides standing straight for 0.01 mm before they slope. With the picks: the gusset's
+/// eight edges (the ridge having cut its foot in two).
+fn gusset_on_spline_sole() -> (Body, Vec<Vec3>) {
+    use polycore_geom::{Loop2, Plane, Region2, Vec2};
+    let region = |l: Loop2| Region2 { outer: l.ccw(), holes: vec![] };
+    let join = |a: &Body, b: &Body| boolean(a, b, BoolOp::Union).unwrap().unwrap();
+    let sole = [
+        [-28.0, 34.0],
+        [-25.0, 22.0],
+        [-15.0, 12.0],
+        [0.0, 6.0],
+        [20.0, 4.5],
+        [38.0, 4.0],
+        [50.0, 4.5],
+        [59.0, 7.0],
+        [61.0, 11.0],
+        [57.0, 16.0],
+        [48.0, 21.0],
+        [57.0, 27.0],
+        [67.0, 30.0],
+        [70.0, 34.0],
+        [67.0, 38.0],
+        [57.0, 41.0],
+        [48.0, 47.0],
+        [57.0, 52.0],
+        [61.0, 57.0],
+        [59.0, 61.0],
+        [50.0, 63.5],
+        [38.0, 64.0],
+        [20.0, 63.5],
+        [0.0, 62.0],
+        [-15.0, 56.0],
+        [-25.0, 46.0],
+    ];
+    let mut foot = crate::extrude(&Plane::XY, &[region(periodic_spline(&sole))], 0.0, 5.0).unwrap().pop().unwrap();
+    foot = join(&foot, &crate::box_solid(Vec3::new(30.125, 22.0, 0.0), Vec3::new(33.125, 46.0, 43.5)).unwrap());
+    // The gusset: a triangle in the plane y = 26, extruded to y = 23; its back grown into the
+    // box by what Polykrom grows a profile lying on a face (its hypotenuse keeps its line).
+    let grow = (foot.size() * 0.005).max(1e-3);
+    let plane = Plane { origin: Vec3::new(0.0, 26.0, 0.0), x: Vec3::X, y: Vec3::Z };
+    let tri = Loop2::polygon(&[Vec2::new(33.125 - grow, 5.0), Vec2::new(52.0, 5.0), Vec2::new(33.125 - grow, 36.5 + 31.5 * grow / 18.875)]);
+    foot = join(&foot, &crate::extrude(&plane, &[region(tri)], 0.0, 3.0).unwrap().pop().unwrap());
+    let top = Plane { origin: Vec3::new(0.0, 0.0, 5.0), x: Vec3::X, y: Vec3::Y };
+    let ridge = periodic_spline(&[[38.0, 22.0], [47.0, 16.0], [55.0, 11.0], [58.0, 12.5], [49.0, 19.5], [40.0, 24.5]]);
+    foot = join(&foot, &crate::extrude_tapered_between(&top, &region(ridge), 0.0, 2.0, 0.01, 1.0, -20f64.to_radians()).unwrap());
+    let picks = [
+        [33.125, 24.4999, 5.0002],
+        [42.5626, 25.9999, 20.7503],
+        [42.5626, 25.9999, 5.0002],
+        [35.8147, 22.9999, 5.0002],
+        [52.0001, 24.4999, 5.0002],
+        [48.4247, 22.9999, 5.0002],
+        [42.5626, 22.9999, 20.7503],
+        [41.5772, 22.9999, 7.0],
+    ];
+    (foot, picks.iter().map(|p| Vec3::new(p[0], p[1], p[2])).collect())
+}
+
+/// Polykrom's case 243 (PC-16): the fillet is refused, and the work its first attempt spends
+/// was 93 units on some runs and 102 on others, so a budget near that refused it on some runs
+/// only. The vertex-ball stage found the gusset's two far corners (three picked edges each) in
+/// a `HashMap`'s order, which is the order of the vertex ids' hashes (addresses, randomly
+/// seeded): rounding one corner first costs a boolean and three rounds more than the other.
+#[test]
+fn a_fillet_spends_the_same_work_on_every_run_and_thread_count() {
+    let (body, picks) = gusset_on_spline_sole();
+    let run = || {
+        crate::budget::TRAIL.with(|t| t.borrow_mut().clear());
+        let (r, spent) = crate::with_work_budget(1_000_000, || (fillet(&body, &picks, 0.3).map(|b| b.size()), crate::work_spent()));
+        let trail = crate::budget::TRAIL.with(|t| t.borrow().clone());
+        (format!("{r:?}"), spent, trail)
+    };
+    let first = run();
+    assert!(!first.0.contains("BudgetSpent"), "{}", first.0);
+    assert!(first.1.is_some_and(|n| n >= 10), "{:?}", first.1);
+    let mut runs = vec![first];
+    for _ in 0..2 {
+        runs.push(run());
+        runs.push(std::thread::scope(|s| s.spawn(run).join().unwrap()));
+        runs.push(on_threads(1, run));
+        runs.push(on_threads(4, run));
+    }
+    for (i, r) in runs.iter().enumerate() {
+        assert_eq!((r.1, &r.0), (runs[0].1, &runs[0].0), "run {i} spent {:?} units ({}) and the first {:?} ({})", r.1, r.0, runs[0].1, runs[0].0);
+        assert_eq!(r.2, runs[0].2, "run {i} charged other stages than the first");
+    }
+    assert_eq!(crate::work_spent(), None, "no budget lingers");
+}

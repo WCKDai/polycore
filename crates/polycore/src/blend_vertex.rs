@@ -68,23 +68,28 @@ fn find_vertex(cur: &Body, picks: &[Vec3]) -> Result<Option<(Vec3, Vec<Vec3>)>> 
             picked.push((e.id(), *p));
         }
     }
-    let mut at_vertex: HashMap<mt::VertexID, Vec<(mt::EdgeID, Vec3)>> = HashMap::new();
+    let mut at_vertex: HashMap<mt::VertexID, (Vec3, Vec<(mt::EdgeID, Vec3)>)> = HashMap::new();
     for e in &all {
         let Some((_, p)) = picked.iter().find(|(id, _)| *id == e.id()) else { continue };
         for v in [e.absolute_front(), e.absolute_back()] {
-            at_vertex.entry(v.id()).or_default().push((e.id(), *p));
+            at_vertex.entry(v.id()).or_insert_with(|| (vtx(v), Vec::new())).1.push((e.id(), *p));
         }
     }
-    for (vid, list) in at_vertex {
+    // Several vertices may qualify (the two far corners of a gusset). The map's order is that
+    // of the ids' hashes (their addresses, with a random seed), so taking the first met made
+    // the order the vertices are rounded in, and with it the work spent and the refusal
+    // reached, differ from run to run (Polykrom #243, PC-16). The lowest vertex (by x, then
+    // y, then z) goes first: a choice from the geometry alone, the same in every run, thread
+    // and platform, and whatever order the body lists its edges in.
+    let lowest = |a: Vec3, b: Vec3| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)).then(a.z.total_cmp(&b.z));
+    let mut found: Option<(Vec3, Vec<Vec3>)> = None;
+    for (vid, (at, list)) in at_vertex {
         let degree = all.iter().filter(|e| e.absolute_front().id() == vid || e.absolute_back().id() == vid).count();
-        if list.len() == 3 && degree == 3 {
-            let v = all.iter().find_map(|e| [e.absolute_front(), e.absolute_back()].into_iter().find(|v| v.id() == vid));
-            if let Some(v) = v {
-                return Ok(Some((vtx(v), list.iter().map(|(_, p)| *p).collect())));
-            }
+        if list.len() == 3 && degree == 3 && found.as_ref().is_none_or(|(best, _)| lowest(at, *best).is_lt()) {
+            found = Some((at, list.iter().map(|(_, p)| *p).collect()));
         }
     }
-    Ok(None)
+    Ok(found)
 }
 
 /// The ball touching three faces from inside, near the corner `v`: its centre and contacts.
