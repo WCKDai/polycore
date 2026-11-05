@@ -66,6 +66,20 @@ pub fn circle_arc(vertex0: &Vertex, vertex1: &Vertex, transit: Point3) -> Edge {
     Edge::new(vertex0, vertex1, curve.into())
 }
 
+/// SolidCraft: the angle [`circle_arc`] turns through from `pt0` to `pt1` via `transit`. Public
+/// but hidden, for the kernel's platform-independence tests.
+#[doc(hidden)]
+pub fn circle_arc_angle(pt0: Point3, pt1: Point3, transit: Point3) -> Rad<f64> {
+    geom_impls::circle_arc_angle(pt0, pt1, transit)
+}
+
+/// SolidCraft: the arc of `angle` on the unit circle from (1, 0, 0) that [`circle_arc`] places.
+/// Public but hidden, for the kernel's platform-independence tests.
+#[doc(hidden)]
+pub fn unit_circle_arc(angle: Rad<f64>) -> NurbsCurve<Vector4> {
+    geom_impls::unit_circle_arc(angle)
+}
+
 /// Returns a Bezier curve from `vertex0` to `vertex1` with inter control points `inter_points`.
 /// # Examples
 /// ```
@@ -450,7 +464,8 @@ pub fn rotated<T: Mapped<Point3, Curve, Surface>>(
     angle: Rad<f64>,
 ) -> T {
     let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_axis_angle(axis, angle);
+    // SolidCraft: the platform-independent rotation (cgmath's uses the libm's sine and cosine).
+    let mat1 = portable_trig::rotation(axis, angle);
     let mat2 = Matrix4::from_translation(origin.to_vec());
     transformed(elem, mat2 * mat1 * mat0)
 }
@@ -647,7 +662,9 @@ fn partial_rsweep<T: MultiSweep<Point3, Curve, Surface>>(
 ) -> T::Swept {
     let division = if angle.0.abs() < PI.0 { 2 } else { 3 };
     let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_axis_angle(axis, angle / division as f64);
+    // SolidCraft: each band is turned by the platform-independent rotation; cgmath's takes the
+    // libm's sine and cosine, and macOS rounds those of 2π/3 an ULP off glibc's.
+    let mat1 = portable_trig::rotation(axis, angle / division as f64);
     let mat2 = Matrix4::from_translation(origin.to_vec());
     let trsl = mat2 * mat1 * mat0;
     elem.multi_sweep(
@@ -673,7 +690,9 @@ fn whole_rsweep<T: ClosedSweep<Point3, Curve, Surface>>(
 ) -> T::Swept {
     const DIVISION: usize = 3;
     let mat0 = Matrix4::from_translation(-origin.to_vec());
-    let mat1 = Matrix4::from_axis_angle(axis, PI * 2.0 / DIVISION as f64);
+    // SolidCraft: as in `partial_rsweep`, the band's third of a turn is the platform-independent
+    // rotation (the second band is this one applied twice).
+    let mat1 = portable_trig::rotation(axis, PI * 2.0 / DIVISION as f64);
     let mat2 = Matrix4::from_translation(origin.to_vec());
     let trsl = mat2 * mat1 * mat0;
     elem.closed_sweep(

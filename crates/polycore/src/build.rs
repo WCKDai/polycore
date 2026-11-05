@@ -1500,7 +1500,9 @@ fn revolve_on_axis(plane: &Plane, numbered: &NumberedLoop, axis_origin: Vec2, d:
     let local = Plane { origin: plane.origin - shift, ..*plane };
     let plane = &local;
     let axis = plane.dir_to_world(d);
-    let turned = |by: f64| mt::Matrix4::from_axis_angle(v3(axis), mt::Rad(by));
+    // The platform-independent rotation (cgmath's takes the libm's sine and cosine, which differ
+    // by an ULP between platforms at a third of a turn).
+    let turned = |by: f64| mt::portable_trig::rotation(v3(axis), mt::Rad(by));
     let turn = |m: &mt::Matrix4, p: Vec3| from_p3(mt::EuclideanSpace::from_vec((m * p3(p).to_homogeneous()).truncate()));
     guard("revolve", || {
         let fail = |m: &str| KernelError::Failed(format!("revolve: {m}"));

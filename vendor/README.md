@@ -97,9 +97,30 @@ Changes:
   bit for bit. `crates/polycore/src/tests.rs` (`split_field_searches_from_one_grid`) holds it to
   that.
 
+## truck-modeling 0.6.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
+
+Changes:
+- `builder.rs` (`rotated`, `partial_rsweep`, `whole_rsweep`), `geom_impls.rs` (`unit_circle_arc`,
+  `circle_arc_by_three_points`): every rotation and arc on the revolve and sweep path is built
+  from truck-geometry's `portable_trig` (below) instead of cgmath's `Matrix4::from_axis_angle`,
+  `Rad::sin`/`cos` and `Vector3::angle`, which are the platform's libm. A full revolve is built in
+  bands of a third of a turn; macOS rounds `sin(2π/3)` an ULP off glibc's, the band's surfaces
+  carried that ULP, and Polykrom's robustness seed 36 built a different body there (PolyCore
+  PC-12). `builder::circle_arc_angle` and `builder::unit_circle_arc` are public but hidden, for
+  the kernel's `portable_trig_tests`. `geometry.rs` re-exports `portable_trig`.
+
 ## truck-geometry 0.5.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 
 Changes:
+- `portable_trig.rs` (new): `sin_cos`, `atan2`, `angle` and `rotation` from IEEE 754 arithmetic
+  alone (double-double evaluation, no fused multiply-add), the same bits on every platform, and
+  correctly rounded for every angle the kernel builds with: 2π/3, 4π/3, π/2, π, k·2π/n for n ≤ 64,
+  the snapped rephase grid; `crates/polycore/src/portable_trig_tests.rs` proves it against exact
+  integer arithmetic. The platform's libm is not correctly rounded (glibc's `sin(2π/39)` is an
+  ULP above the nearest float to the true value, and it misrounds about 0.3 % of angles), so
+  results can differ from glibc's by an ULP at such angles. truck-modeling's revolve path and the
+  kernel's `revolve_on_axis` and `transform` use it; `RevolutedCurve`'s evaluation keeps
+  `Matrix4::from_axis_angle`.
 - `decorators/intersection_curve.rs`: a transformed intersection curve scales its tolerance by
   the norm of the transform's linear part. The norm of the whole 4×4 matrix grows with the
   translation: a 100 mm move made a 0.144 mm tolerance 14.4 mm, its points projected across a

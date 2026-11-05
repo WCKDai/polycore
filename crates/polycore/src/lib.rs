@@ -116,6 +116,8 @@ mod planar_faces_tests;
 mod plane_fit;
 mod polybool;
 mod polyhedron;
+#[cfg(test)]
+mod portable_trig_tests;
 mod prism;
 mod prism_curve;
 mod prism_local;

@@ -9,8 +9,16 @@ pub(super) fn circle_arc_by_three_points(
     let origin = circum_center(point0, point1, transit);
     let (vec0, vec1) = (point0 - transit, point1 - transit);
     let axis = vec1.cross(vec0).normalize();
-    let angle = Rad(PI) - vec0.angle(vec1);
-    circle_arc(point0, origin, axis, angle * 2.0)
+    circle_arc(point0, origin, axis, circle_arc_angle(point0, point1, transit))
+}
+
+/// SolidCraft: the angle the arc from `point0` to `point1` through `transit` turns through, twice
+/// the supplement of the angle at `transit`. cgmath's `angle` is the libm's `atan2`; this one is
+/// the same bits everywhere.
+pub(super) fn circle_arc_angle(point0: Point3, point1: Point3, transit: Point3) -> Rad<f64> {
+    let (vec0, vec1) = (point0 - transit, point1 - transit);
+    let angle = Rad(PI) - portable_trig::angle(vec0, vec1);
+    angle * 2.0
 }
 
 fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
@@ -20,14 +28,17 @@ fn circum_center(pt0: Point3, pt1: Point3, pt2: Point3) -> Point3 {
     pt0 + u / (2.0 * det) * vec0 + v / (2.0 * det) * vec1
 }
 
-fn unit_circle_arc(angle: Rad<f64>) -> NurbsCurve<Vector4> {
-    let (cos2, sin2) = (Rad::cos(angle / 2.0), Rad::sin(angle / 2.0));
+pub(super) fn unit_circle_arc(angle: Rad<f64>) -> NurbsCurve<Vector4> {
+    // SolidCraft: the control points' sine and cosine from the platform-independent `sin_cos`,
+    // not the libm's (these arcs bound the faces of a revolve).
+    let (sin2, cos2) = portable_trig::sin_cos((angle / 2.0).0);
+    let (sin, cos) = portable_trig::sin_cos(angle.0);
     let mut curve = NurbsCurve::new(BSplineCurve::new(
         KnotVec::bezier_knot(2),
         vec![
             Vector4::new(1.0, 0.0, 0.0, 1.0),
             Vector4::new(cos2, sin2, 0.0, cos2),
-            Vector4::new(Rad::cos(angle), Rad::sin(angle), 0.0, 1.0),
+            Vector4::new(cos, sin, 0.0, 1.0),
         ],
     ));
     curve.add_knot(0.25);

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 #[doc(hidden)]
 pub use truck_geometry::prelude::{algo, inv_or_zero};
 pub use truck_geometry::{decorators::*, nurbs::*, specifieds::*};
+// SolidCraft: the platform-independent sine, cosine, angle and rotation of the revolve path.
+pub use truck_geometry::portable_trig;
 pub use truck_polymesh::PolylineCurve;
 
 /// Leading curve for intersection
