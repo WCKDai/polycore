@@ -275,7 +275,7 @@ mod tests {
         (0..n)
             .map(|k| {
                 let a = std::f64::consts::TAU * k as f64 / n as f64 * if ccw { 1.0 } else { -1.0 };
-                [c[0] + r * a.cos(), c[1] + r * a.sin()]
+                [c[0] + r * pmath::cos(a), c[1] + r * pmath::sin(a)]
             })
             .collect()
     }

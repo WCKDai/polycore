@@ -28,7 +28,7 @@ fn expected_removed(distance: f64) -> f64 {
     let depth = distance * 60.0 / (60.0 + distance);
     let area = |y: f64| {
         let u = (y - 10.0).clamp(-10.0, 0.0);
-        u * (100.0 - u * u).sqrt() + 100.0 * (u / 10.0).asin() + 20.0 * (y - 10.0).max(0.0)
+        u * (100.0 - u * u).sqrt() + 100.0 * pmath::asin(u / 10.0) + 20.0 * (y - 10.0).max(0.0)
     };
     let n = 4000;
     let h = depth / n as f64;

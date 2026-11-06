@@ -354,7 +354,7 @@ fn crown_net(
     let degree = base.degree();
     let knots = base.knots();
     let domain = base.domain();
-    let size = (domain[0][1] - domain[0][0]).hypot(domain[1][1] - domain[1][0]);
+    let size = pmath::hypot(domain[0][1] - domain[0][0], domain[1][1] - domain[1][0]);
     if !(size > 0.0 && size.is_finite()) {
         return invalid("the loop's extent is not finite");
     }
@@ -505,13 +505,13 @@ fn check_projectable(points: &[Vec3], uv: &[[f64; 2]]) -> SplineResult<()> {
     };
     for k in 0..m {
         let d = step(k);
-        let flat = d[0].hypot(d[1]);
+        let flat = pmath::hypot(d[0], d[1]);
         let space = p(k).dist(p(k + 1));
         if space > 0.0 && flat < MIN_STEP_SLOPE * space {
             return Err(SplineError::Unsupported("filling a loop that runs along its plane's normal".into()));
         }
         let e = step(k + 1);
-        let fe = e[0].hypot(e[1]);
+        let fe = pmath::hypot(e[0], e[1]);
         if flat > 0.0 && fe > 0.0 && (d[0] * e[0] + d[1] * e[1]) < FOLD_COS * flat * fe {
             return Err(SplineError::Unsupported("filling a loop that folds back on itself".into()));
         }
@@ -873,7 +873,7 @@ mod tests {
     }
 
     fn ring(n: usize, r: f64) -> Vec<[f64; 2]> {
-        (0..n).map(|k| k as f64 * std::f64::consts::TAU / n as f64).map(|a| [r * a.cos(), r * a.sin()]).collect()
+        (0..n).map(|k| k as f64 * std::f64::consts::TAU / n as f64).map(|a| [r * pmath::cos(a), r * pmath::sin(a)]).collect()
     }
 
     /// The farthest the surface is from `z` over the polygon's inside (sampled on a grid).
@@ -971,7 +971,7 @@ mod tests {
             let place = |p: Vec3| {
                 // Scaled, turned by 0.9 about `axis` (Rodrigues), moved.
                 let p = p * scale;
-                let (c, s) = (0.9f64.cos(), 0.9f64.sin());
+                let (c, s) = (pmath::cos(0.9f64), pmath::sin(0.9f64));
                 p * c + axis.cross(p) * s + axis * (axis.dot(p) * (1.0 - c)) + shift * scale
             };
             let mut moved = |k: usize, t: f64| lifted(&arrow, &z)(k, t).map(place);
@@ -1019,7 +1019,7 @@ mod tests {
         let back = [[0.0, 0.0], [10.0, 0.0], [4.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
         assert!(unsupported(fill_loop(5, &mut lifted(&back, &flat), 1e-4, 0.0)));
         // A loop too wavy for one surface.
-        let wavy = |x: f64, y: f64| (x * 9.0).sin() * (y * 7.0).cos();
+        let wavy = |x: f64, y: f64| pmath::sin(x * 9.0) * pmath::cos(y * 7.0);
         assert!(unsupported(fill_loop(64, &mut lifted(&ring(64, 10.0), &wavy), 1e-6, 0.0)));
     }
 
@@ -1059,7 +1059,7 @@ mod tests {
         // The middle of the box rises by `crown` times the loop's size: the bubble is 1 there.
         let [du, dv] = plain.surface.domain();
         let (uc, vc) = ((du[0] + du[1]) / 2.0, (dv[0] + dv[1]) / 2.0);
-        let size = (du[1] - du[0]).hypot(dv[1] - dv[0]);
+        let size = pmath::hypot(du[1] - du[0], dv[1] - dv[0]);
         let mid = |f: &LoopFill| f.surface.eval(uc, vc).unwrap_or(Vec3::ZERO);
         let bump = (mid(&full) - mid(&plain)).dot(plain.normal);
         eprintln!("crown {crown}: {} points took the bump, the middle rose by {bump} of {}", full.crowned, crown * size);

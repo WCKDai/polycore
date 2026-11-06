@@ -78,6 +78,11 @@ path = "examples/tsudumi.rs"
 name = "topo_traits"
 path = "tests/topo_traits.rs"
 
+[dependencies.pmath]
+version = "0.1.0"
+package = "polycore-pmath"
+path = "../pmath"
+
 [dependencies.derive_more]
 version = "0.99.18"
 

@@ -247,7 +247,7 @@ fn curved_section(
         None
     };
     // Closer together toward the ends, where the face may only touch the blend.
-    let across = |t: f64| (1.0 - (std::f64::consts::PI * t).cos()) * 0.5;
+    let across = |t: f64| (1.0 - pmath::cos(std::f64::consts::PI * t)) * 0.5;
     let mut m = 8;
     loop {
         let mut pts = vec![a];
@@ -406,13 +406,13 @@ fn build(cur: &Body, sel_pts: &[(Vec3, f64)], round: bool) -> Result<Body> {
         if ia.dot(ta) < 1e-6 || ib.dot(tb) < 1e-6 {
             return Err(unsupported("fillets of concave edges with other radii"));
         }
-        let alpha = ta.dot(tb).clamp(-1.0, 1.0).acos();
+        let alpha = pmath::acos(ta.dot(tb).clamp(-1.0, 1.0));
         if !(alpha > 1e-3 && alpha < std::f64::consts::PI - 1e-3) {
             return Err(unsupported("the faces at the edge are tangent"));
         }
         let r = radius.get(id).copied().unwrap_or(1.0);
-        let s = if round { r / (alpha / 2.0).tan() } else { r };
-        let w = (alpha / 2.0).sin();
+        let s = if round { r / pmath::tan(alpha / 2.0) } else { r };
+        let w = pmath::sin(alpha / 2.0);
         // The cylinder, well past both ends (sections on oblique end faces reach beyond them).
         let m = 4.0 * (s + r);
         let (q0, q1) = (p0 - d * m, p1 + d * m);
@@ -769,7 +769,7 @@ fn crease(a: &Sel, b: &Sel, q: Vec3, end: Vec3, size: f64) -> Result<mt::Curve> 
     let hh = (a.nb - g * a.nb.dot(g)).normalized().ok_or_else(|| unsupported("the faces at the edge are tangent"))?;
     let angle = |p: Vec3| {
         let x = p - ca;
-        x.dot(hh).atan2(x.dot(g))
+        pmath::atan2(x.dot(hh), x.dot(g))
     };
     let (th0, th1) = (angle(q), angle(end));
     let (l0, l1) = ((q - ca).dot(da), (end - ca).dot(da));
@@ -784,7 +784,7 @@ fn crease(a: &Sel, b: &Sel, q: Vec3, end: Vec3, size: f64) -> Result<mt::Curve> 
         let f = i as f64 / n as f64;
         let th = th0 + (th1 - th0) * f;
         let target = l0 + (l1 - l0) * f;
-        let base = ca + (g * th.cos() + hh * th.sin()) * a.r;
+        let base = ca + (g * pmath::cos(th) + hh * pmath::sin(th)) * a.r;
         let b0 = (base - cb) - db * (base - cb).dot(db);
         let (k1, k0) = (b0.dot(dd), b0.dot(b0) - b.r * b.r);
         let disc = (k1 * k1 - k2 * k0).max(0.0);
@@ -955,7 +955,7 @@ fn section(s: &Sel, a: Vec3, b: Vec3, psi: f64) -> Result<(Vec3, mt::NurbsCurve<
     let c = (b - a).normalized().ok_or_else(|| unsupported("a corner this small"))?;
     let bis = s.na + s.nb;
     let bis = (bis - c * bis.dot(c)).normalized().ok_or_else(|| unsupported("the faces at the edge are tangent"))?;
-    let dir = bis * psi.cos() + c.cross(bis) * psi.sin();
+    let dir = bis * pmath::cos(psi) + c.cross(bis) * pmath::sin(psi);
     let cut_n = c.cross(dir).normalized().ok_or_else(|| unsupported("a corner this small"))?;
     let m = planes3((s.na, s.p0), (s.nb, s.p0), (cut_n, a))?;
     if m.dist(a) > 10.0 * (s.s + s.r) {
@@ -1312,7 +1312,7 @@ mod tests {
                             s.normal(u, v)
                         };
                         let (a, bb) = (n(f.oriented_surface()), n(g.oriented_surface()));
-                        worst = worst.max(a.dot(bb).abs().min(1.0).acos().to_degrees());
+                        worst = worst.max(pmath::acos(a.dot(bb).abs().min(1.0)).to_degrees());
                     }
                 }
             }

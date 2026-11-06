@@ -117,7 +117,7 @@ fn circle_through(s: &[Vec3], tol: f64) -> Option<EdgeCircle> {
     let y = axis.cross(x);
     let turn = |p: Vec3| {
         let d = p - center;
-        let t = d.dot(y).atan2(d.dot(x));
+        let t = pmath::atan2(d.dot(y), d.dot(x));
         if t < 0.0 { t + std::f64::consts::TAU } else { t }
     };
     // Accumulate the turn sample to sample so the span is right whichever way the curve runs.
@@ -158,7 +158,7 @@ impl FaceSurface {
                 let w = p - apex;
                 let out = (w - axis * w.dot(axis)).normalized()?;
                 // The cone's line through the apex that p is nearest, in the plane of the axis and p.
-                let line = axis * half_angle.cos() + out * half_angle.sin();
+                let line = axis * pmath::cos(half_angle) + out * pmath::sin(half_angle);
                 Some(apex + line * w.dot(line).max(0.0))
             }
             FaceSurface::Sphere { center, radius } => Some(center + (p - center).normalized()? * radius),

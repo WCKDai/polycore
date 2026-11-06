@@ -16,10 +16,10 @@ fn spec(points: &[Vec3]) -> FillSpec<'_> {
 
 /// The radial and tangential unit vectors of a cylinder about z at angle `a`.
 fn radial(a: f64) -> Vec3 {
-    Vec3::new(a.cos(), a.sin(), 0.0)
+    Vec3::new(pmath::cos(a), pmath::sin(a), 0.0)
 }
 fn around(a: f64) -> Vec3 {
-    Vec3::new(-a.sin(), a.cos(), 0.0)
+    Vec3::new(-pmath::sin(a), pmath::cos(a), 0.0)
 }
 
 /// The open end of a tube about z (radius `r`, its wall below z = 0), one side: G1 (or G2) to
@@ -74,7 +74,7 @@ fn a_tube_end_capped_g1_meets_the_wall_and_rises_over_it() {
         // The middle rises over the rim (the cap leaves the wall upwards).
         let mid = at(&f.surface, 0.5, 0.5);
         eprintln!("the cap's middle: {mid:?}");
-        assert!(mid.z > 2.0 && mid.x.hypot(mid.y) < 1.0, "{mid:?}");
+        assert!(mid.z > 2.0 && pmath::hypot(mid.x, mid.y) < 1.0, "{mid:?}");
     }
 }
 
@@ -176,7 +176,7 @@ fn hostile_loops_and_specs_are_refused() {
             .iter()
             .map(|t| {
                 let a = t * TAU;
-                Station { p: Vec3::new(10.0 * a.sin(), 5.0 * (2.0 * a).sin(), 0.0), up: Vec3::Z, across: None, corner: false, clash: false }
+                Station { p: Vec3::new(10.0 * pmath::sin(a), 5.0 * pmath::sin(2.0 * a), 0.0), up: Vec3::Z, across: None, corner: false, clash: false }
             })
             .collect())
     };
@@ -229,10 +229,10 @@ fn ellipse_end(a: f64, b: f64) -> impl FnMut(usize, &[f64]) -> Result<Vec<Statio
             .iter()
             .map(|t| {
                 let th = t * TAU;
-                let tangent = Vec3::new(-a * th.sin(), b * th.cos(), 0.0).normalized().unwrap_or(Vec3::X);
+                let tangent = Vec3::new(-a * pmath::sin(th), b * pmath::cos(th), 0.0).normalized().unwrap_or(Vec3::X);
                 let out = tangent.cross(Vec3::Z);
                 let across = Across { leave: Vec3::Z, normal: out, bend: None };
-                Station { p: Vec3::new(a * th.cos(), b * th.sin(), 0.0), up: out, across: Some(across), corner: false, clash: false }
+                Station { p: Vec3::new(a * pmath::cos(th), b * pmath::sin(th), 0.0), up: out, across: Some(across), corner: false, clash: false }
             })
             .collect())
     }

@@ -40,7 +40,7 @@ fn section_end_at(body: &Body, u: f64) -> (Vec3, Vec3, Vec3, Vec3) {
 
 /// The angle between two vectors, in degrees.
 fn angle_deg(a: Vec3, b: Vec3) -> f64 {
-    (a.normalized().unwrap().dot(b.normalized().unwrap())).clamp(-1.0, 1.0).acos().to_degrees()
+    pmath::acos((a.normalized().unwrap().dot(b.normalized().unwrap())).clamp(-1.0, 1.0)).to_degrees()
 }
 
 /// Two planes 10 mm apart: the lower one leaves along +y, the upper one has no curvature, and the
@@ -255,7 +255,7 @@ fn open_tube(z0: f64, turn: f64, open_at: f64) -> Body {
 
 /// Points round a radius-10 rim at height `z`.
 fn rim_at(z: f64) -> Vec<Vec3> {
-    (0..8).map(|k| f64::from(k) * std::f64::consts::FRAC_PI_4 + 0.1).map(|a| Vec3::new(10.0 * a.cos(), 10.0 * a.sin(), z)).collect()
+    (0..8).map(|k| f64::from(k) * std::f64::consts::FRAC_PI_4 + 0.1).map(|a| Vec3::new(10.0 * pmath::cos(a), 10.0 * pmath::sin(a), z)).collect()
 }
 
 /// How far a blend between two coaxial rims turns round the axis: the most, over its stations,

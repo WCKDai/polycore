@@ -315,18 +315,18 @@ fn build_cut_tool(target: &Body, face: WholeFace, depth: f64, built: Option<&Bod
         let b = edges.get(j - 1)?.0.back().clone();
         let (pa, pb) = (at(&a), at(&b));
         let (da, db) = ((pa - centre).normalized()?, (pb - centre).normalized()?);
-        let (t0, mut t1) = (da.y.atan2(da.x), db.y.atan2(db.x));
+        let (t0, mut t1) = (pmath::atan2(da.y, da.x), pmath::atan2(db.y, db.x));
         // Round the same way as the run, which goes from a to b with the outline.
         while (t1 - t0) * turn <= 0.0 {
             t1 += TAU * turn;
         }
         let steps = (((t1 - t0).abs() / (PI / 8.0)).ceil() as usize).clamp(2, 64);
         // A polygon round a circle `far` out (its corners 1/cos(π/16) further), clear of it.
-        let r = far / (PI / 16.0).cos();
+        let r = far / pmath::cos(PI / 16.0);
         let mut path = vec![pa];
         path.extend((0..=steps).map(|s| {
             let t = t0 + (t1 - t0) * s as f64 / steps as f64;
-            centre + Vec2::new(t.cos(), t.sin()) * if s == 0 || s == steps { far } else { r }
+            centre + Vec2::new(pmath::cos(t), pmath::sin(t)) * if s == 0 || s == steps { far } else { r }
         }));
         path.push(pb);
         let mut verts = vec![a];

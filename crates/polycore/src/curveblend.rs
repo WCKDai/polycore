@@ -234,7 +234,7 @@ fn section_fits(fit: &Fit, section: &Section, along: f64, round: bool, sigma: f6
             let Some(want) = ((section.c - exact) * sigma).normalized() else { return false };
             let normal = fit.surface.normal(probe_u, probe_v);
             let Some(normal) = Vec3::new(normal.x, normal.y, normal.z).normalized() else { return false };
-            if normal.dot(want).abs() < 0.5f64.to_radians().cos() {
+            if normal.dot(want).abs() < pmath::cos(0.5f64.to_radians()) {
                 return false;
             }
         }
@@ -429,7 +429,7 @@ fn tangent_cap(fit: &Fit, g: &mt::Face, tangent_side: u8, seams: [Option<&mt::Ed
         for i in 0..=m {
             // Clustered at both ends, where the curve can meet a contact tangentially (a square
             // root in the station) and a uniform spacing would fit it poorly.
-            let v = v_a + (v_t - v_a) * 0.5 * (1.0 - (std::f64::consts::PI * i as f64 / m as f64).cos());
+            let v = v_a + (v_t - v_a) * 0.5 * (1.0 - pmath::cos(std::f64::consts::PI * i as f64 / m as f64));
             let u = if i == 0 {
                 u_o
             } else if i == m {
@@ -703,7 +703,7 @@ fn solve_chord(
 ) -> Option<(Section, f64)> {
     let normal = |fs: &[&mt::Face]| fs.iter().filter_map(|f| project(f, p, None)).min_by(|a, b| a.0.dist(p).total_cmp(&b.0.dist(p))).map(|x| x.1);
     let (n1, n2) = (normal(f1)?, normal(f2)?);
-    let half = (n1.dot(n2).clamp(-1.0, 1.0).acos() / 2.0).sin();
+    let half = pmath::sin(pmath::acos(n1.dot(n2).clamp(-1.0, 1.0)) / 2.0);
     if !(half > 1e-3) {
         return None;
     }
@@ -822,11 +822,11 @@ fn section_controls(s: &Section, round: bool) -> Option<[mt::Vector4; 3]> {
         return Some([h(s.c, 1.0), h(s.c, 1.0), h(s.c, 1.0)]);
     }
     let (a, b) = (s.q1 - s.c, s.q2 - s.c);
-    let theta = a.normalized()?.dot(b.normalized()?).clamp(-1.0, 1.0).acos();
+    let theta = pmath::acos(a.normalized()?.dot(b.normalized()?).clamp(-1.0, 1.0));
     if !(theta > 1e-6 && theta < std::f64::consts::PI - 1e-6) {
         return None;
     }
-    let half = (theta / 2.0).cos();
+    let half = pmath::cos(theta / 2.0);
     let bis = (a + b).normalized()?;
     let m = s.c + bis * (a.len() / half);
     Some([h(s.q1, 1.0), h(m, half), h(s.q2, 1.0)])
@@ -910,7 +910,7 @@ fn meet_smoothly(a: &mt::Face, b: &mt::Face, v: &mt::Vertex) -> bool {
     (1..=5).all(|k| {
         let m = from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 6.0));
         match (project(a, m, None), project(b, m, None)) {
-            (Some((_, na, _)), Some((_, nb, _))) => na.dot(nb) > 1f64.to_radians().cos(),
+            (Some((_, na, _)), Some((_, nb, _))) => na.dot(nb) > pmath::cos(1f64.to_radians()),
             _ => false,
         }
     })
@@ -972,12 +972,12 @@ pub(crate) fn circle_of(e: &mt::Edge, tol: f64) -> Option<(Vec3, f64, Vec3)> {
 fn revolve(ctrl: [mt::Vector4; 3], c: Vec3, axis: Vec3, angle: f64) -> Option<mt::Surface> {
     let pieces = ((angle.abs() / std::f64::consts::FRAC_PI_2).ceil() as usize).clamp(1, 8);
     let step = angle / pieces as f64;
-    let half = (step / 2.0).cos();
+    let half = pmath::cos(step / 2.0);
     if !(half.is_finite() && half > 1e-6) {
         return None;
     }
     let rot = |x: Vec3, phi: f64| {
-        let (s, co) = phi.sin_cos();
+        let (s, co) = pmath::sin_cos(phi);
         x * co + axis.cross(x) * s + axis * (axis.dot(x) * (1.0 - co))
     };
     let h = |p: Vec3, w: f64| mt::Vector4::new(p.x * w, p.y * w, p.z * w, w);
@@ -2129,8 +2129,8 @@ fn curve_blend_sized(solid: &Solid, ids: &[mt::EdgeID], size: f64, size_law: Siz
                 let (s0, s1e) = (list.first().ok_or_else(|| fail("section"))?, list.last().ok_or_else(|| fail("section"))?);
                 let (qa, qb) = if pv.side == 1 { (s0.q2, s1e.q2) } else { (s0.q1, s1e.q1) };
                 let (a, b) = (qa - pv.c, qb - pv.c);
-                let angle = pv.axis.dot(a.cross(b)).atan2(a.dot(b));
-                let (sn, cs) = (angle / 2.0).sin_cos();
+                let angle = pmath::atan2(pv.axis.dot(a.cross(b)), a.dot(b));
+                let (sn, cs) = pmath::sin_cos(angle / 2.0);
                 let mid = pv.c + a * cs + pv.axis.cross(a) * sn + pv.axis * (pv.axis.dot(a) * (1.0 - cs));
                 let surface = section_controls(s0, round).and_then(|ctrl| revolve(ctrl, pv.c, pv.axis, angle)).ok_or_else(|| fail("pivot"))?;
                 let (from, to) = if pv.side == 1 { (a2, b2) } else { (a1, b1) };

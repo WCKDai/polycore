@@ -9,6 +9,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// The transcendental functions from IEEE 754 arithmetic alone: the same bits on every platform.
+/// The kernel computes every sine, exponential and logarithm through this crate; a consumer that
+/// wants to match the kernel bit for bit uses it too.
+pub use pmath;
+
 mod aabb2;
 mod arcfit;
 pub mod blend;

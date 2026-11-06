@@ -91,7 +91,7 @@ fn enclosed_apex(surface: &mt::Surface, ring: &mt::Wire, tol: f64) -> Option<mt:
                 return None;
             }
             let d = q - o;
-            let ang = d.dot(y).atan2(d.dot(x));
+            let ang = pmath::atan2(d.dot(y), d.dot(x));
             if let Some(l) = last {
                 let mut step = ang - l;
                 step -= (step / std::f64::consts::TAU).round() * std::f64::consts::TAU;
@@ -605,7 +605,7 @@ fn whole_torus(cx: &Ctx, file_face: u64, face: &mt::Face) -> Option<Vec<mt::Face
         let d = p - frame.o;
         let height = d.dot(frame.z);
         let rho = (d - frame.z * height).magnitude();
-        ((rho - big).hypot(height) - small).abs() <= tol
+        (pmath::hypot(rho - big, height) - small).abs() <= tol
     };
     let samples = |e: &&mt::Edge| {
         let c = e.curve();

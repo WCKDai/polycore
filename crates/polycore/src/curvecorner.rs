@@ -95,7 +95,7 @@ impl Strip {
         use mt::ParametricSurface;
         let (v0, s0) = self.sections.iter().min_by(|a, b| a.1.c.dist(x).total_cmp(&b.1.c.dist(x)))?;
         let (a, b, w) = (s0.q1 - s0.c, s0.q2 - s0.c, x - s0.c);
-        let angle = |p: Vec3, q: Vec3| (p.dot(q) / (p.len() * q.len()).max(1e-300)).clamp(-1.0, 1.0).acos();
+        let angle = |p: Vec3, q: Vec3| pmath::acos((p.dot(q) / (p.len() * q.len()).max(1e-300)).clamp(-1.0, 1.0));
         let total = angle(a, b);
         let mut uv = ((angle(a, w) / total.max(1e-12)).clamp(0.0, 1.0), *v0);
         let dist = |uv: (f64, f64)| from_p3(self.surface.subs(uv.0, uv.1)).dist(x);
@@ -423,7 +423,7 @@ fn trace(s: &Strip, a: (f64, f64, Vec3), b: (f64, f64, Vec3), side: &Away, out: 
         }
         None
     };
-    let across = |t: f64| (1.0 - (std::f64::consts::PI * t).cos()) * 0.5;
+    let across = |t: f64| (1.0 - pmath::cos(std::f64::consts::PI * t)) * 0.5;
     let mut m = 8;
     loop {
         let mut pts = vec![pa];
@@ -710,7 +710,7 @@ fn g2_side(strip: &Strip, c: Vec3, r: f64, q_from: Vec3, q_to: Vec3, apex: Vec3)
     let b = (q_to - c).normalized().ok_or_else(|| fail("corner contact"))?;
     let dot = a.dot(b).clamp(-1.0, 1.0);
     let w = (b - a * dot).normalized().ok_or_else(|| fail("corner contact"))?;
-    let theta = dot.acos();
+    let theta = pmath::acos(dot);
     // The blend's own direction of leave and curvature across the seam, at its corner station.
     let speed = vec_of(strip.surface.vder(0.5, v)).len();
     if !(speed > 1e-30) {
@@ -724,7 +724,7 @@ fn g2_side(strip: &Strip, c: Vec3, r: f64, q_from: Vec3, q_to: Vec3, apex: Vec3)
     let mut out = Vec::with_capacity(STATIONS);
     for k in 0..STATIONS {
         let t = theta * k as f64 / (STATIONS - 1) as f64;
-        let p = c + (a * t.cos() + w * t.sin()) * r;
+        let p = c + (a * pmath::cos(t) + w * pmath::sin(t)) * r;
         // The patch leaves the blend towards the material the corner caps, so the sign is the one
         // towards the corner's apex (the blends' own v direction runs away from the vertex).
         let leave = if leave.dot(apex - p) < 0.0 { -leave } else { leave };
@@ -851,7 +851,7 @@ pub(crate) fn corner_blend_style(solid: &Solid, ids: &[mt::EdgeID], size: f64, r
                             .filter_map(|k| {
                                 let m = from_p3(c.subs(t0 + (t1 - t0) * k));
                                 let (na, nb) = (super::project(faces.get(a)?, m, None)?.1, super::project(faces.get(b)?, m, None)?.1);
-                                Some(r * (na.dot(nb).clamp(-1.0, 1.0).acos() * 0.5).tan())
+                                Some(r * pmath::tan(pmath::acos(na.dot(nb).clamp(-1.0, 1.0)) * 0.5))
                             })
                             .filter(|t| t.is_finite() && *t > 0.0)
                             .collect()

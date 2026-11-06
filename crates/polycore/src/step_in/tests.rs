@@ -10,8 +10,8 @@ fn rel(a: f64, b: f64) -> f64 {
 /// A single spherical face bounded by one meridian edge used in both directions.
 /// `end_angle` is measured from the north pole toward the seam; PI is the south pole.
 fn seam_sphere_step(center: Vec3, radius: f64, axis: Vec3, reference: Vec3, azimuth: f64, reverse_edge: bool, end_angle: f64) -> String {
-    let seam = reference * azimuth.cos() + axis.cross(reference) * azimuth.sin();
-    let end = center + (axis * end_angle.cos() + seam * end_angle.sin()) * radius;
+    let seam = reference * pmath::cos(azimuth) + axis.cross(reference) * pmath::sin(azimuth);
+    let end = center + (axis * pmath::cos(end_angle) + seam * pmath::sin(end_angle)) * radius;
     let north = center + axis * radius;
     let circle_axis = axis.cross(seam);
     let point = |p: Vec3| format!("({:.16},{:.16},{:.16})", p.x, p.y, p.z);
@@ -448,8 +448,8 @@ fn offset_surface_analytic_geometry_and_orientation() {
         ("TOROIDAL_SURFACE('',#2,10.,2.)".to_string(), mt::Point3::new(13.0, 0.0, 0.0), mt::Vector3::unit_x()),
         (
             format!("CONICAL_SURFACE('',#2,5.,{angle})"),
-            mt::Point3::new(5.0 + 1.0 / angle.cos() + 2.0 * angle.tan(), 0.0, 2.0),
-            mt::Vector3::new(angle.cos(), 0.0, -angle.sin()),
+            mt::Point3::new(5.0 + 1.0 / pmath::cos(angle) + 2.0 * pmath::tan(angle), 0.0, 2.0),
+            mt::Vector3::new(pmath::cos(angle), 0.0, -pmath::sin(angle)),
         ),
     ];
     for (definition, point, normal) in cases {
@@ -719,7 +719,7 @@ fn instanced_assembly_of(parts: u64, n: u64) -> String {
         let (a, turn, pd) = (3000 + k * 10, k as f64 * 0.7, 1000 + (k % parts) * 100);
         t += &format!("#{a}=AXIS2_PLACEMENT_3D('',#{},#{},#{});\n", a + 1, a + 2, a + 3);
         t += &format!("#{}=CARTESIAN_POINT('',({}.,0.,0.));\n", a + 1, 50 * k);
-        t += &format!("#{}=DIRECTION('',(0.,0.,1.));\n#{}=DIRECTION('',({},{},0.));\n", a + 2, a + 3, turn.cos(), turn.sin());
+        t += &format!("#{}=DIRECTION('',(0.,0.,1.));\n#{}=DIRECTION('',({},{},0.));\n", a + 2, a + 3, pmath::cos(turn), pmath::sin(turn));
         let u = 6000 + k * 10;
         t += &format!("#{u}=NEXT_ASSEMBLY_USAGE_OCCURRENCE('{k}','Block:{k}','',#70,#{pd},$);\n");
         t += &format!("#{}=PRODUCT_DEFINITION_SHAPE('','',#{u});\n", u + 1);
@@ -753,7 +753,7 @@ fn instanced_parts_are_oriented_once() {
         assert!(rel(m.volume, 1000.0) < 1e-9, "instance {k}: {}", m.volume);
         let centre = (m.bbox.min + m.bbox.max) * 0.5;
         let turn = k as f64 * 0.7;
-        let expected = Vec3::new(50.0 * k as f64 + 5.0 * (turn.cos() - turn.sin()), 5.0 * (turn.sin() + turn.cos()), 5.0);
+        let expected = Vec3::new(50.0 * k as f64 + 5.0 * (pmath::cos(turn) - pmath::sin(turn)), 5.0 * (pmath::sin(turn) + pmath::cos(turn)), 5.0);
         assert!(centre.dist(expected) < 1e-6, "instance {k}: {centre:?} vs {expected:?}");
     }
     assert_same_import(&imp, &step_import_with_workers(&t, 8).unwrap());
@@ -1124,13 +1124,13 @@ impl RingEdgeTube {
 
     /// The volume the closed pentagon prism encloses (mm³).
     fn volume(&self) -> f64 {
-        2.5 * self.r * self.r * (std::f64::consts::TAU / 5.0).sin() * self.h
+        2.5 * self.r * self.r * pmath::sin(std::f64::consts::TAU / 5.0) * self.h
     }
 
     /// The area of the five sides and the two five-sided ends together (mm²).
     fn area(&self) -> f64 {
-        let side = 2.0 * self.r * (std::f64::consts::TAU / 10.0).sin();
-        5.0 * side * self.h + 5.0 * side * self.r * (std::f64::consts::TAU / 10.0).cos()
+        let side = 2.0 * self.r * pmath::sin(std::f64::consts::TAU / 10.0);
+        5.0 * side * self.h + 5.0 * side * self.r * pmath::cos(std::f64::consts::TAU / 10.0)
     }
 
     fn step(&self) -> String {
@@ -1141,7 +1141,7 @@ impl RingEdgeTube {
 fn ring_edge_tube_step(r: f64, h: f64, off: f64, uncertainty: f64) -> String {
     let corner = |k: usize, radius: f64| {
         let a = std::f64::consts::TAU * (k % 5) as f64 / 5.0;
-        (radius * a.cos(), radius * a.sin())
+        (radius * pmath::cos(a), radius * pmath::sin(a))
     };
     let mut t = String::from(HEAD);
     // Control net: the corners around (the first repeated to close it) x the two ends.
@@ -1207,7 +1207,7 @@ fn assert_ring_edge_tube_meshes(tube: &RingEdgeTube) {
             *sum += 0.5 * (b - a).cross(c - a).len();
         }
     }
-    let side = 2.0 * tube.r * (std::f64::consts::TAU / 10.0).sin();
+    let side = 2.0 * tube.r * pmath::sin(std::f64::consts::TAU / 10.0);
     let want = tube.area();
     assert!(rel(area.iter().sum::<f64>(), want) < 5e-3, "{area:?} sums to {} not {want}", area.iter().sum::<f64>());
     // Neither half of the split is a sliver: the split line runs from ring to ring.
@@ -1841,7 +1841,7 @@ fn band_face_with_a_zero_width_slit_is_still_meshed() {
     const LENS: f64 = 1.0e-5;
     let corner = |k: usize, r: f64| {
         let a = std::f64::consts::TAU * (k % 5) as f64 / 5.0;
-        (r * a.cos(), r * a.sin())
+        (r * pmath::cos(a), r * pmath::sin(a))
     };
     let mut t = String::from(HEAD);
     // Control net: the five corners around (the first repeated to close it) × the two ends.
@@ -1906,8 +1906,8 @@ fn band_face_with_a_zero_width_slit_is_still_meshed() {
             *sum += 0.5 * (b - a).cross(c - a).len();
         }
     }
-    let side = 2.0 * R * (std::f64::consts::TAU / 10.0).sin();
-    let want = 5.0 * side * H + 5.0 * side * R * (std::f64::consts::TAU / 10.0).cos();
+    let side = 2.0 * R * pmath::sin(std::f64::consts::TAU / 10.0);
+    let want = 5.0 * side * H + 5.0 * side * R * pmath::cos(std::f64::consts::TAU / 10.0);
     assert!(rel(area.iter().sum::<f64>(), want) < 5e-3, "{area:?} sums to {} not {want}", area.iter().sum::<f64>());
     // The band itself is drawn once over: not folded over itself, and with no gap left in it.
     let band: f64 = (0..ib.body.face_count()).filter(|i| ib.face_origin.get(*i) == Some(&352)).map(|i| area[i]).sum();
@@ -2104,7 +2104,7 @@ fn circle_net(first: u64, x: f64, r: f64, z: f64) -> (String, Vec<String>) {
     for i in 0..9u64 {
         let a = i as f64 * std::f64::consts::FRAC_PI_4;
         let q = if i % 2 == 1 { r * std::f64::consts::SQRT_2 } else { r };
-        s += &format!("#{}=CARTESIAN_POINT('',({:?},{:?},{z:?}));\n", first + i, x + q * a.cos(), q * a.sin());
+        s += &format!("#{}=CARTESIAN_POINT('',({:?},{:?},{z:?}));\n", first + i, x + q * pmath::cos(a), q * pmath::sin(a));
         ids.push(format!("#{}", first + i));
     }
     (s, ids)
@@ -2164,7 +2164,7 @@ fn periodic_knot_bsplines_are_read_on_their_domain() {
     let ex = p21::parse(&text).unwrap();
     let cx = Ctx { ex: &ex, len: 1.0, ang: 1.0, tol: 1e-6, snap: 1e-6 };
     let pi = std::f64::consts::PI;
-    let on_tube = |p: mt::Point3| (p.x.hypot(p.y) - r).abs() < 1e-9 && p.z > -1e-9 && p.z < h + 1e-9;
+    let on_tube = |p: mt::Point3| (pmath::hypot(p.x, p.y) - r).abs() < 1e-9 && p.z > -1e-9 && p.z < h + 1e-9;
 
     let surface_id = ex.get(face).and_then(|e| e.params().get(2)).and_then(Param::as_ref_id).unwrap();
     let surface = geom::bspline_surface(&cx, ex.get(surface_id).unwrap()).unwrap();
@@ -2218,7 +2218,7 @@ fn shallow_cylinder_patch(sense: bool, outer: bool) -> String {
 
 fn shallow_cylinder_patch_at_radius(sense: bool, outer: bool, r: f64) -> String {
     let (angle, h) = (6.0 / r, 7.0);
-    let (x, y) = (10.0 + r * (angle.cos() - 1.0), r * angle.sin());
+    let (x, y) = (10.0 + r * (pmath::cos(angle) - 1.0), r * pmath::sin(angle));
     let origin = 10.0 - r;
     let bound = if outer { "FACE_OUTER_BOUND" } else { "FACE_BOUND" };
     let sense = if sense { "T" } else { "F" };
@@ -2299,7 +2299,7 @@ fn explicit_outer_bound_crossing_a_closed_nurbs_seam_stays_trimmed() {
     let mut weights = Vec::new();
     let w = std::f64::consts::FRAC_1_SQRT_2;
     let circle = [(1., 0., 1.), (1., 1., w), (0., 1., 1.), (-1., 1., w), (-1., 0., 1.), (-1., -1., w), (0., -1., 1.), (1., -1., w), (1., 0., 1.)];
-    let (sin, cos) = 0.001_f64.sin_cos();
+    let (sin, cos) = pmath::sin_cos(0.001_f64);
     for (i, (x, y, weight)) in circle.into_iter().enumerate() {
         let id = 1000 + i * 2;
         let (x, y) = (10.0 - 3000.0 + 3000.0 * (x * cos - y * sin), 3000.0 * (x * sin + y * cos));
@@ -2338,8 +2338,8 @@ fn extruded_ellipse_patch_crossing_profile_seam_stays_trimmed() {
 #35=ELLIPSE('',#36,{radius},{radius});
 #36=AXIS2_PLACEMENT_3D('',#1,#2,#37);
 #37=DIRECTION('',({},{},0.));",
-                angle.cos(),
-                angle.sin()
+                pmath::cos(angle),
+                pmath::sin(angle)
             );
             assert!(text.contains(&old));
             let text = text.replacen(&old, &surface, 1);

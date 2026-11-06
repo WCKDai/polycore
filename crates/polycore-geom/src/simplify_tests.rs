@@ -5,7 +5,7 @@ use super::*;
 fn sphere(r: f64, n: u32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let at = |i: u32, j: u32| {
         let (t, p) = (std::f64::consts::PI * f64::from(i) / f64::from(n), std::f64::consts::TAU * f64::from(j) / f64::from(2 * n));
-        let (st, ct, sp, cp) = (t.sin(), t.cos(), p.sin(), p.cos());
+        let (st, ct, sp, cp) = (pmath::sin(t), pmath::cos(t), pmath::sin(p), pmath::cos(p));
         // The poles exactly, and the seam the same as the start, so corners weld.
         let (st, sp, cp) = (if i == 0 || i == n { 0.0 } else { st }, if j == 2 * n { 0.0 } else { sp }, if j == 2 * n { 1.0 } else { cp });
         Vec3::new(r * st * cp, r * st * sp, r * ct)
@@ -65,7 +65,7 @@ fn a_sphere_comes_down_to_each_target_within_its_error() {
         assert!(l.error >= last, "the error grows: {} after {last}", l.error);
         last = l.error;
         // Each point within the error of the sphere (its faces' planes lie within their sag of it).
-        let sag = 50.0 * (1.0 - (std::f64::consts::PI / 100.0).cos());
+        let sag = 50.0 * (1.0 - pmath::cos(std::f64::consts::PI / 100.0));
         for p in &l.positions {
             assert!((p.len() - 50.0).abs() <= l.error + sag + 1e-9, "{} from the centre, error {}", p.len(), l.error);
         }

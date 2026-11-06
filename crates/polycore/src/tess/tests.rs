@@ -71,7 +71,7 @@ fn min_angle(m: &Mesh) -> f64 {
         for (p, q, r) in [(a, b, c), (b, c, a), (c, a, b)] {
             let (u, v) = (q - p, r - p);
             if let (Some(u), Some(v)) = (u.normalized(), v.normalized()) {
-                least = least.min(u.dot(v).clamp(-1.0, 1.0).acos().to_degrees());
+                least = least.min(pmath::acos(u.dot(v).clamp(-1.0, 1.0)).to_degrees());
             }
         }
     }
@@ -202,7 +202,7 @@ fn render_wireframes() {
 
 /// Isometric, painter-sorted, flat-shaded triangles with their edges, in an 800×800 panel.
 fn draw(m: &Mesh, x0: f64) -> String {
-    let (c30, s30) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+    let (c30, s30) = (pmath::cos(30f64.to_radians()), pmath::sin(30f64.to_radians()));
     let proj = |p: Vec3| -> (f64, f64, f64) {
         // Turn 45° about Z, tilt 30° about X; depth along the view.
         let (x, y) = ((p.x - p.y) * std::f64::consts::FRAC_1_SQRT_2, (p.x + p.y) * std::f64::consts::FRAC_1_SQRT_2);
@@ -256,7 +256,7 @@ fn a_drill_point_apex_leaves_no_zero_area_triangles() {
         [(Vec3::new(40.0, 30.0, 15.0), Vec3::new(20.0, 15.0, 15.0), 3.4, 8.0), (Vec3::new(60.0, 40.0, 15.0), Vec3::new(50.0, 20.0, 15.0), 3.0, 10.0)];
     for (size, at, r, depth) in cases {
         let bx = ok(crate::box_solid(Vec3::ZERO, size));
-        let tip = r / (118f64 / 2.0).to_radians().tan();
+        let tip = r / pmath::tan((118f64 / 2.0).to_radians());
         let Some(rp) = Plane::new(at, Vec3::X, Vec3::Z) else { panic!("plane") };
         let pts = [Vec2::new(0.0, 0.6), Vec2::new(r, 0.6), Vec2::new(r, -depth), Vec2::new(0.0, -depth - tip)];
         let region = Region2 { outer: Loop2::polygon(&pts), holes: vec![] };
@@ -306,7 +306,7 @@ fn a_closed_spline_surface_is_periodic_and_evaluates_outside_its_range() {
     // A five-sided tube: the control net's last column repeats its first.
     let corner = |k: usize| {
         let a = std::f64::consts::TAU * (k % 5) as f64 / 5.0;
-        (10.0 * a.cos(), 10.0 * a.sin())
+        (10.0 * pmath::cos(a), 10.0 * pmath::sin(a))
     };
     let mut ctrl = Vec::new();
     for j in 0..2 {
@@ -414,7 +414,7 @@ fn a_point_on_a_long_helical_spline_projects() {
     let n = turns * per_turn + 1;
     let at = |i: usize, r: f64| {
         let t = std::f64::consts::TAU * i as f64 / per_turn as f64;
-        [r * t.cos(), r * t.sin(), pitch * t / std::f64::consts::TAU, 1.0]
+        [r * pmath::cos(t), r * pmath::sin(t), pitch * t / std::f64::consts::TAU, 1.0]
     };
     let mut ctrl: Vec<[f64; 4]> = Vec::with_capacity(2 * n);
     for i in 0..n {

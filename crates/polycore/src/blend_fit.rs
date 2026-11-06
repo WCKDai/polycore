@@ -81,14 +81,14 @@ impl Frame {
     /// tangent or the size doesn't make a blend.
     fn setbacks(&self, size: Size) -> Option<(f64, f64)> {
         let cos = self.ta.dot(self.tb).clamp(-1.0, 1.0);
-        let phi = cos.acos();
+        let phi = pmath::acos(cos);
         if !(1e-3..std::f64::consts::PI - 1e-3).contains(&phi) {
             return None;
         }
         match size {
             // The round touches each face at r / tan(φ/2) from the edge.
             Size::Round(r) => {
-                let t = r / (phi * 0.5).tan();
+                let t = r / pmath::tan(phi * 0.5);
                 Some((t, t))
             }
             Size::Chamfer(s) => Some((s, s)),
@@ -99,11 +99,11 @@ impl Frame {
                 let d2 = match side {
                     ChamferSide::Distance(d) => d,
                     ChamferSide::Angle(a) => {
-                        let den = (phi + a).sin();
+                        let den = pmath::sin(phi + a);
                         if den <= 1e-9 {
                             return None;
                         }
-                        d1 * a.sin() / den
+                        d1 * pmath::sin(a) / den
                     }
                 };
                 Some(if a_is_first { (d1, d2) } else { (d2, d1) })
@@ -124,9 +124,9 @@ impl Frame {
     fn arc(&self, size: Size) -> Option<Vec<Vec3>> {
         let Size::Round(r) = size else { return None };
         let (sa, sb) = self.setbacks(size)?;
-        let half = 0.5 * self.ta.dot(self.tb).clamp(-1.0, 1.0).acos();
+        let half = 0.5 * pmath::acos(self.ta.dot(self.tb).clamp(-1.0, 1.0));
         // The ball's centre, on the bisector, `r` from both faces.
-        let centre = (self.ta + self.tb).normalized()? * (r / half.sin());
+        let centre = (self.ta + self.tb).normalized()? * (r / pmath::sin(half));
         let (a, b) = (self.ta * sa - centre, self.tb * sb - centre);
         (0..=ARC_PIECES).map(|k| Some(centre + (a + (b - a) * (k as f64 / ARC_PIECES as f64)).normalized()? * r)).collect()
     }
@@ -428,7 +428,7 @@ fn blends_cross(fi: &Frame, wi: &Wedge, fj: &Frame, wj: &Wedge, size: Size, eps:
 
 /// The step the largest fitting size is given to: three significant digits.
 fn step(v: f64) -> f64 {
-    10f64.powf(v.log10().floor() - 3.0)
+    pmath::powf(10f64, pmath::log10(v).floor() - 3.0)
 }
 
 /// Why a blend of `edges` at `size` doesn't fit `body` and the largest size that does (to

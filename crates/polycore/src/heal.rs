@@ -708,7 +708,7 @@ mod tests {
         let pts: Vec<Vec3> = (0..=40)
             .map(|k| {
                 let t = std::f64::consts::FRAC_PI_2 * k as f64 / 40.0;
-                Vec3::new(10.0 * t.cos(), 10.0 * t.sin(), 0.0)
+                Vec3::new(10.0 * pmath::cos(t), 10.0 * pmath::sin(t), 0.0)
             })
             .collect();
         let curve = mt::Curve::BSplineCurve(crate::build::interpolate_cubic(&pts).expect("spline"));

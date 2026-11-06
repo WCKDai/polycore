@@ -589,7 +589,7 @@ mod shortcut_tests {
     fn rotated_extrusion_bounds_use_exact_cap_separation_and_keep_sources() {
         use polycore_geom::{Loop2, Plane, Region2, Vec2};
         let rectangle = |angle: f64, offset: f64| {
-            let (c, s) = (angle.cos(), angle.sin());
+            let (c, s) = (pmath::cos(angle), pmath::sin(angle));
             Region2 {
                 outer: Loop2::polygon(
                     &[(-2., -0.5), (2., -0.5), (2., 0.5), (-2., 0.5)].map(|(x, y)| Vec2::new(x * c - (y + offset) * s, x * s + (y + offset) * c)),
@@ -2493,7 +2493,9 @@ pub fn transform(body: &Body, translate: Vec3, origin: Vec3, axis: Vec3, angle: 
     {
         // Same motion as a matrix: rotate about the line through `origin`, then translate.
         let ax = if angle.abs() > 1e-12 { axis.normalized().ok_or_else(|| KernelError::Invalid("rotation axis".into()))? } else { Vec3::Z };
-        let (c, s) = (angle.cos(), angle.sin());
+        // The platform-independent sine and cosine (a pattern turns by 2π/n; the libm's differ
+        // by an ULP between platforms at some of those angles).
+        let (s, c) = mt::portable_trig::sin_cos(angle);
         let t = 1.0 - c;
         let r = [
             [t * ax.x * ax.x + c, t * ax.x * ax.y + s * ax.z, t * ax.x * ax.z - s * ax.y],

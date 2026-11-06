@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+pmath = { workspace = true }
 polycore-geom = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,6 +25,12 @@ web-time = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
+
+# Every pmath function against the platform's libm on the kernel's arguments (PC-12.perf):
+# `cargo bench -p polycore --bench pmath`.
+[[bench]]
+name = "pmath"
+harness = false
 
 [dev-dependencies]
 # The vendored crate tests never build in CI, so its equivalence checks run from kernel tests.

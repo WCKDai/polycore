@@ -572,7 +572,7 @@ fn angle_deg(a: Vec3, b: Vec3) -> f64 {
     if !d.is_finite() {
         return f64::NAN;
     }
-    d.abs().clamp(0.0, 1.0).acos().to_degrees()
+    pmath::acos(d.abs().clamp(0.0, 1.0)).to_degrees()
 }
 
 /// The geometric shape of a surface curve at a point from its first three derivatives along the

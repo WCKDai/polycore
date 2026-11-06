@@ -12,7 +12,7 @@ fn seam(centre: Vec3, u: Vec3, w: Vec3, leave: Vec3, r: f64, n: usize) -> Vec<Fr
     (0..n)
         .map(|i| {
             let theta = FRAC_PI_2 * i as f64 / (n - 1) as f64;
-            Frame { p: centre + (u * theta.cos() + w * theta.sin()) * r, leave, bend: Vec3::ZERO, bend_change: Vec3::ZERO }
+            Frame { p: centre + (u * pmath::cos(theta) + w * pmath::sin(theta)) * r, leave, bend: Vec3::ZERO, bend_change: Vec3::ZERO }
         })
         .collect()
 }

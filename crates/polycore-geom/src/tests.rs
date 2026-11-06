@@ -139,7 +139,7 @@ fn tangent_chains_follow_smooth_edges() {
     let arc: Vec<Vec3> = (0..=16)
         .map(|k| {
             let a = -std::f64::consts::FRAC_PI_2 + std::f64::consts::FRAC_PI_2 * k as f64 / 16.0;
-            Vec3::new(10.0 + 5.0 * a.cos(), 5.0 + 5.0 * a.sin(), 0.0)
+            Vec3::new(10.0 + 5.0 * pmath::cos(a), 5.0 + 5.0 * pmath::sin(a), 0.0)
         })
         .collect();
     m.edges.push(arc);
@@ -171,7 +171,7 @@ fn tangent_chains_follow_smooth_edges() {
 #[test]
 fn a_long_helical_tangent_chain_is_found_quickly() {
     let pieces = 3_000usize;
-    let at = |t: f64| Vec3::new(4.0 * t.cos(), 4.0 * t.sin(), 0.2 * t);
+    let at = |t: f64| Vec3::new(4.0 * pmath::cos(t), 4.0 * pmath::sin(t), 0.2 * t);
     let step = 0.05;
     let mut m = Mesh::default();
     for k in 0..pieces {
@@ -196,7 +196,7 @@ fn circular_rims_group_only_closed_cocircular_edges() {
         (0..=32)
             .map(|i| {
                 let a = start + sweep * i as f64 / 32.0;
-                Vec3::new(10.0 * a.cos(), yscale * 10.0 * a.sin(), 5.0)
+                Vec3::new(10.0 * pmath::cos(a), yscale * 10.0 * pmath::sin(a), 5.0)
             })
             .collect()
     };
@@ -406,8 +406,8 @@ fn mass_properties_of_a_cylinder_are_close() {
     let mut positions = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, h)];
     for k in 0..n {
         let t = std::f64::consts::TAU * k as f64 / n as f64;
-        positions.push(Vec3::new(r * t.cos(), r * t.sin(), 0.0));
-        positions.push(Vec3::new(r * t.cos(), r * t.sin(), h));
+        positions.push(Vec3::new(r * pmath::cos(t), r * pmath::sin(t), 0.0));
+        positions.push(Vec3::new(r * pmath::cos(t), r * pmath::sin(t), h));
     }
     let mut triangles = Vec::new();
     for k in 0..n as u32 {
@@ -755,7 +755,7 @@ mod blend {
             assert!(cubic.derivatives(t, 1).unwrap()[0].dist(cubic.derivative(t)) < 1e-9, "t={t}");
         }
         // A degree-9 piece (the G4 blend's own shape) at both ends.
-        let pts: Vec<Vec2> = (0..10).map(|i| Vec2::new(i as f64 * 0.7, (i as f64 * 1.3).sin())).collect();
+        let pts: Vec<Vec2> = (0..10).map(|i| Vec2::new(i as f64 * 0.7, pmath::sin(i as f64 * 1.3))).collect();
         let seg = bezier(&pts).unwrap();
         assert!(matches!(seg, Seg2::Bezier { n: 9, .. }));
         for (t, at_end) in [(0.0, false), (1.0, true)] {

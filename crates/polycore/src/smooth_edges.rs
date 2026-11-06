@@ -229,9 +229,9 @@ mod tests {
 
     fn circle(radius: f64, count: usize) -> Loop2 {
         let step = std::f64::consts::TAU / count as f64;
-        let k = 4. / 3. * (step / 4.).tan() * radius;
-        let point = |angle: f64| Vec2::new(angle.cos(), angle.sin()) * radius;
-        let tangent = |angle: f64| Vec2::new(-angle.sin(), angle.cos()) * k;
+        let k = 4. / 3. * pmath::tan(step / 4.) * radius;
+        let point = |angle: f64| Vec2::new(pmath::cos(angle), pmath::sin(angle)) * radius;
+        let tangent = |angle: f64| Vec2::new(-pmath::sin(angle), pmath::cos(angle)) * k;
         Loop2 {
             segs: (0..count)
                 .map(|i| {

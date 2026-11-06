@@ -73,7 +73,7 @@ fn angles_around(m: &Mesh, face: usize, origin: Vec3, axis: Vec3) -> Vec<f64> {
         .filter(|(_, f)| **f as usize == face)
         .flat_map(|(t, _)| t.iter())
         .filter_map(|k| m.positions.get(*k as usize))
-        .map(|p| (*p - origin).dot(v).atan2((*p - origin).dot(u)))
+        .map(|p| pmath::atan2((*p - origin).dot(v), (*p - origin).dot(u)))
         .collect();
     a.sort_by(f64::total_cmp);
     // Start at the widest gap, so an arc that crosses ±π stays in one piece.
@@ -144,7 +144,7 @@ fn rim(m: &Mesh, centre: Vec2, radius: f64, z: f64) -> (usize, f64) {
     for e in m.edges.iter().filter(|e| e.len() >= 2 && e.iter().all(on)) {
         for w in e.windows(2) {
             segments += 1;
-            widest = widest.max(2.0 * (w[0].dist(w[1]) / (2.0 * radius)).clamp(0.0, 1.0).asin());
+            widest = widest.max(2.0 * pmath::asin((w[0].dist(w[1]) / (2.0 * radius)).clamp(0.0, 1.0)));
         }
     }
     (segments, widest)
@@ -155,7 +155,7 @@ fn a_small_bend_on_a_large_sheet_is_meshed_round() {
     let b = bent_sheet(3000.0);
     let tol = display_tol(&b);
     // The tolerance is larger than either side's sagitta: 1 - cos 45° of the radius.
-    assert!(tol > 3.0 * (1.0 - (PI / 4.0).cos()));
+    assert!(tol > 3.0 * (1.0 - pmath::cos(PI / 4.0)));
     let coarse = b.display_mesh(tol).unwrap();
     let round = b.display_mesh_angular(tol, DISPLAY_ANGLE).unwrap();
     // A quarter turn in facets of at most DISPLAY_ANGLE.
@@ -176,7 +176,7 @@ fn a_small_bend_on_a_large_sheet_is_meshed_round() {
         // Within the chord tolerance of the cylinder, and by much: a facet that turns no more
         // than the angle sags no more than 1 - cos(angle / 2) of the radius.
         let s = sag(&round, face, origin, *axis, radius);
-        assert!(s <= radius * (1.0 - (DISPLAY_ANGLE / 2.0).cos()) * 1.001 && s < tol, "radius {radius}: sag {s}");
+        assert!(s <= radius * (1.0 - pmath::cos(DISPLAY_ANGLE / 2.0)) * 1.001 && s < tol, "radius {radius}: sag {s}");
     }
     // The flat faces along the sheet meet the bends in straight lines and need nothing more:
     // only the bends, and the two ends where their arcs now have more points, gain triangles.
@@ -240,7 +240,7 @@ fn a_small_hole_on_a_large_plate_has_a_round_rim() {
     for (face, origin, axis) in cylinder_faces(&b, 2.0) {
         let a = angles_around(&round, face, origin, *axis);
         assert!(a.windows(2).map(|w| w[1] - w[0]).fold(0.0, f64::max) <= DISPLAY_ANGLE * 1.001);
-        assert!(sag(&round, face, origin, *axis, 2.0) <= 2.0 * (1.0 - (DISPLAY_ANGLE / 2.0).cos()) * 1.001);
+        assert!(sag(&round, face, origin, *axis, 2.0) <= 2.0 * (1.0 - pmath::cos(DISPLAY_ANGLE / 2.0)) * 1.001);
     }
     assert_eq!(open_sides(&round, 1e-6), 0);
 }
@@ -336,7 +336,7 @@ fn round_faces_of_every_kind_are_divided_by_the_angle() {
             .filter(|(_, f)| !flat[**f as usize])
             .flat_map(|(t, _)| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
             .filter(|(a, b)| m.positions[*a as usize].dist(m.positions[*b as usize]) > 1e-9)
-            .map(|(a, b)| m.normals[a as usize].dot(m.normals[b as usize]).clamp(-1.0, 1.0).acos())
+            .map(|(a, b)| pmath::acos(m.normals[a as usize].dot(m.normals[b as usize]).clamp(-1.0, 1.0)))
             .fold(0.0, f64::max)
     };
     let check = |name: &str, b: &Body| {

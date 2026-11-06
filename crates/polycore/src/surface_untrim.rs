@@ -271,7 +271,7 @@ mod tests {
         let line = vec![Seg2::Line { a: Vec2::new(5.0, 0.0), b: Vec2::new(10.0, 10.0) }];
         let sheet = crate::revolve_sheet(&Plane::XZ, &[line], Vec2::ZERO, Vec2::Y, 0.0, 1.0).unwrap();
         let tool = crate::SplitTool::Plane(Plane::from_normal(Vec3::new(0.0, 0.0, -8.0), Vec3::new(0.0, -0.5, 1.0)).unwrap());
-        let (c, s) = (0.25f64.cos(), 0.25f64.sin());
+        let (c, s) = (pmath::cos(0.25f64), pmath::sin(0.25f64));
         let cut = crate::trim(&sheet, &tool, Vec3::new(5.0 * c, 5.0 * s, 0.0)).unwrap();
         let face = face_at(&cut, Vec3::new(5.5 * c, 5.5 * s, -1.0));
         let restored = untrim(&cut, face, UntrimHoles::All, true, false).unwrap();

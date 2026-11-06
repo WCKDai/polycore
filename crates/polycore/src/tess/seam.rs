@@ -412,7 +412,7 @@ pub(crate) fn turns_more_than_once(solid: &crate::body::Solid) -> bool {
         let e2 = k.cross(e1);
         let angle = |p: mt::Point3| {
             let d = crate::body::from_p3(p) - o;
-            d.dot(e2).atan2(d.dot(e1))
+            pmath::atan2(d.dot(e2), d.dot(e1))
         };
         for wire in face.boundaries() {
             let (mut total, mut lo, mut hi) = (0.0f64, 0.0f64, 0.0f64);

@@ -356,8 +356,8 @@ mod tests {
             (
                 b::Surface::Cone { frame: frame.clone(), radius_at_origin: 2., half_angle: 0.2, angle: [0., TAU], height: [0., 3.] },
                 0.5,
-                [3. + 1.5 * 0.2f64.tan(), 2., 4.5],
-                [1., 0., -0.2f64.tan()],
+                [3. + 1.5 * pmath::tan(0.2f64), 2., 4.5],
+                [1., 0., -pmath::tan(0.2f64)],
             ),
             (
                 b::Surface::Sphere { frame: frame.clone(), radius: 2., longitude: [0., TAU], latitude: [-FRAC_PI_2, FRAC_PI_2] },
@@ -406,7 +406,9 @@ mod tests {
         let mt::Surface::RevolutedCurve(mut placed) = revolved(line, mt::Point3::new(0., 1., 0.), mt::Vector3::new(0., 0., 1.), true) else {
             panic!("a revolution")
         };
-        placed.transform_by(mt::Matrix4::from_translation(mt::Vector3::new(1., 2., 3.)) * mt::Matrix4::from_angle_x(mt::Rad(0.3)));
+        placed.transform_by(
+            mt::Matrix4::from_translation(mt::Vector3::new(1., 2., 3.)) * mt::portable_trig::rotation(mt::Vector3::unit_x(), mt::Rad(0.3)),
+        );
         let placed = mt::Surface::RevolutedCurve(placed);
         let record = save_surface(&placed, 0).unwrap();
         assert!(matches!(record, b::Surface::PlacedRevolution { forward: false, .. }));

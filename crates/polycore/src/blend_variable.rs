@@ -20,7 +20,7 @@ use crate::{KernelError, Result, guard};
 /// The radius of a chord-length fillet between faces whose in-face directions (away from the
 /// edge) make the angle `phi`: the arc spans π − φ, so the chord is 2 r cos(φ/2).
 fn chord_radius(chord: f64, phi: f64) -> f64 {
-    chord / (2.0 * (phi / 2.0).cos())
+    chord / (2.0 * pmath::cos(phi / 2.0))
 }
 
 /// The two planar faces at an edge, the in-face directions away from it (`t1`, `t2`), the
@@ -46,7 +46,7 @@ fn edge_frame(faces: &[&mt::Face], edge: &mt::Edge) -> Result<EdgeFrame> {
         n.cross(dir).normalized()
     };
     let (Some(t1), Some(t2)) = (into(f1, n1), into(f2, n2)) else { return Err(KernelError::Failed("blend: edge direction".into())) };
-    let phi = t1.dot(t2).clamp(-1.0, 1.0).acos();
+    let phi = pmath::acos(t1.dot(t2).clamp(-1.0, 1.0));
     let convex = n1.dot(t2) < -1e-9 && n2.dot(t1) < -1e-9;
     let concave = n1.dot(t2) > 1e-9 && n2.dot(t1) > 1e-9;
     if !(phi > 1e-3 && phi < std::f64::consts::PI - 1e-3) || !(convex || concave) {
@@ -271,7 +271,7 @@ impl<'a> EdgeSetup<'a> {
 
     /// How far a blend of radius `r` reaches into each face from the edge.
     fn back(&self, r: f64) -> f64 {
-        r / (self.fr.phi / 2.0).tan()
+        r / pmath::tan(self.fr.phi / 2.0)
     }
 
     /// Whether the band a blend of radius `r` takes from the faces at position `u` (strictly
@@ -313,7 +313,7 @@ impl<'a> EdgeSetup<'a> {
                 return None;
             }
             let other = if side.front() == v { side.back() } else { side.front() };
-            room = room.min((vtx(other) - vtx(v)).dot(t) * (self.fr.phi / 2.0).tan());
+            room = room.min((vtx(other) - vtx(v)).dot(t) * pmath::tan(self.fr.phi / 2.0));
         }
         Some(room)
     }
@@ -453,7 +453,7 @@ fn build(body: &Body, s: &EdgeSetup, edge: &mt::Edge, law: &RadiusSpline) -> Res
     }
     // The blend surface: rational quadratic arcs (tangent points and the edge point, middle
     // weight sin(φ/2)) at each end, joined along the radius spline.
-    let w = (fr.phi / 2.0).sin();
+    let w = pmath::sin(fr.phi / 2.0);
     let h = |p: Vec3, wt: f64| mt::Vector4::new(p.x * wt, p.y * wt, p.z * wt, wt);
     let row = |t: Vec3, wt: f64, off: bool| -> Vec<mt::Vector4> {
         g.iter().zip(&law.radii).map(|(gj, rj)| h(p0 + (p1 - p0) * *gj + if off { t * back(*rj) } else { Vec3::ZERO }, wt)).collect()

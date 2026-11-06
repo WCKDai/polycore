@@ -1368,7 +1368,7 @@ fn many_closed_boundary_cylinder() {
         let mut vertices = vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1.0)];
         vertices.extend((0..NUM_OF_CIRCLES).map(|i| {
             let t = 2.0 * PI * i as f64 / NUM_OF_CIRCLES as f64;
-            Point3::new(f64::cos(t), f64::sin(t), 0.4)
+            Point3::new(pmath::cos(t), pmath::sin(t), 0.4)
         }));
         vertices
     };
@@ -1452,10 +1452,10 @@ fn many_closed_boundary_cylinder() {
     assert_near!(vertices[NUM_OF_CIRCLES + 3], Point3::new(-1.0, 0.0, 1.0));
     (0..NUM_OF_CIRCLES).for_each(|i| {
         let t = 2.0 * PI * i as f64 / NUM_OF_CIRCLES as f64;
-        assert_near!(vertices[2 + i], Point3::new(f64::cos(t), f64::sin(t), 0.4));
+        assert_near!(vertices[2 + i], Point3::new(pmath::cos(t), pmath::sin(t), 0.4));
         assert_near!(
             vertices[4 + i + NUM_OF_CIRCLES],
-            Point3::new(f64::cos(t), f64::sin(t), 0.6)
+            Point3::new(pmath::cos(t), pmath::sin(t), 0.6)
         );
     });
 

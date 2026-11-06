@@ -962,7 +962,7 @@ mod curve_n_tests {
     fn interpolates_its_points_and_their_slope() {
         // A helix with a fourth coordinate rising linearly: the cubic passes through every
         // point and follows the curve between them.
-        let at = |t: f64| [t.cos(), t.sin(), 0.3 * t, 2.0 * t];
+        let at = |t: f64| [pmath::cos(t), pmath::sin(t), 0.3 * t, 2.0 * t];
         let params: Vec<f64> = (0..=24).map(|k| f64::from(k) * 0.25).collect();
         let points: Vec<[f64; 4]> = params.iter().map(|&t| at(t)).collect();
         let Ok(c) = CurveN::interpolate(&params, &points, 3) else { panic!("interpolates") };

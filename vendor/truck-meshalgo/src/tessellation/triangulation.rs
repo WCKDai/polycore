@@ -852,7 +852,11 @@ impl PolyBoundary {
     /// whether `c` is included in the domain with boundary = `self`.
     fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
-        let r = Vector2::new(f64::cos(t), f64::sin(t));
+        let r = {
+            // PolyCore: one `sin_cos` (the same bits as `pmath::cos` and `pmath::sin`).
+            let (s, c) = pmath::sin_cos(t);
+            Vector2::new(c, s)
+        };
         // SolidCraft: a closed loop whose box is clear of `c` winds zero times around it, and
         // no crossing with it lies within the tolerance of `c`: it changes nothing here.
         let margin = 2.0 * TOLERANCE;
@@ -1031,11 +1035,11 @@ impl UvScale {
         if count == 0 || !(ratio.is_finite() && ratio > 0.0) {
             return Self::IDENTITY;
         }
-        let e = ratio.log2().round().clamp(-Self::MAX_EXPONENT, Self::MAX_EXPONENT);
+        let e = pmath::log2(ratio).round().clamp(-Self::MAX_EXPONENT, Self::MAX_EXPONENT);
         // The faster parameter keeps its values; the slower one is shrunk.
         match e >= 0.0 {
-            true => UvScale([1.0, (-e).exp2()]),
-            false => UvScale([e.exp2(), 1.0]),
+            true => UvScale([1.0, pmath::exp2(-e)]),
+            false => UvScale([pmath::exp2(e), 1.0]),
         }
     }
 
@@ -1703,7 +1707,7 @@ pub mod include_test_hooks {
 
     fn old_include(b: &PolyBoundary, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
-        let r = Vector2::new(f64::cos(t), f64::sin(t));
+        let r = Vector2::new(pmath::cos(t), pmath::sin(t));
         let margin = 2.0 * TOLERANCE;
         let near = |bdb: &BoundingBox<Point2>| {
             let (min, max) = (bdb.min(), bdb.max());
@@ -1765,7 +1769,7 @@ pub mod include_test_hooks {
                     .map(|i| {
                         let a = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
                         let rr = rad * (0.7 + 0.3 * g.unit());
-                        let (x, y) = (cx + rr * a.cos(), cy + rr * a.sin());
+                        let (x, y) = (cx + rr * pmath::cos(a), cy + rr * pmath::sin(a));
                         if grid { Point2::new((x * 4.0).round() / 4.0, (y * 4.0).round() / 4.0) } else { Point2::new(x, y) }
                     })
                     .collect();

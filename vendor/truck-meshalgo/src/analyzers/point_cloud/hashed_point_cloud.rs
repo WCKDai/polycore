@@ -30,7 +30,7 @@ impl HashedPointCloud {
             bdb.push(pt);
             counter + 1
         });
-        let size = 1.0 + f64::powf(len as f64, 1.0 / 3.0);
+        let size = 1.0 + pmath::powf(len as f64, 1.0 / 3.0);
         let size = bdb.diagonal().map(|a| {
             if a / size < inf {
                 1 + (a / inf) as usize

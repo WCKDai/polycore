@@ -34,6 +34,11 @@ repository = "https://github.com/ricosjp/truck"
 name = "truck_geometry"
 path = "src/lib.rs"
 
+[dependencies.pmath]
+version = "0.1.0"
+package = "polycore-pmath"
+path = "../pmath"
+
 [dependencies.serde]
 version = "1.0.210"
 features = ["derive"]

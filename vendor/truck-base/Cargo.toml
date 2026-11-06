@@ -38,6 +38,11 @@ path = "src/lib.rs"
 name = "hash"
 path = "tests/hash.rs"
 
+[dependencies.pmath]
+version = "0.1.0"
+package = "polycore-pmath"
+path = "../pmath"
+
 [dependencies.cgmath]
 version = "0.18.0"
 features = ["serde"]

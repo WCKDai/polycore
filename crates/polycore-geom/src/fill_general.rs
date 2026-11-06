@@ -334,7 +334,7 @@ fn develop(st: &[Station]) -> SplineResult<Developed> {
         let (Some(a), Some(b), Some(&up)) = (chord.get((k + m - 1) % m), chord.get(k), up.get(k)) else { continue };
         let (la, lb) = (a.len(), b.len());
         let cos = (a.dot(*b) / (la * lb)).clamp(-1.0, 1.0);
-        let turn = cos.acos();
+        let turn = pmath::acos(cos);
         if turn > FOLD_TURN {
             return Err(SplineError::Unsupported("filling a loop that folds back on itself".into()));
         }
@@ -377,7 +377,7 @@ fn develop(st: &[Station]) -> SplineResult<Developed> {
     for k in 0..m {
         heading += turns.get(k).copied().unwrap_or(0.0);
         let l = len.get(k).copied().unwrap_or(0.0);
-        steps.push([l * heading.cos(), l * heading.sin()]);
+        steps.push([l * pmath::cos(heading), l * pmath::sin(heading)]);
     }
     let gap = steps.iter().fold([0.0, 0.0], |g, s| [g[0] + s[0], g[1] + s[1]]);
     for (s, l) in steps.iter_mut().zip(&len) {
@@ -405,13 +405,13 @@ fn develop(st: &[Station]) -> SplineResult<Developed> {
     }
     let (mut c4, mut s4) = (0.0, 0.0);
     for st in &steps {
-        let (l, a) = (st[0].hypot(st[1]), st[1].atan2(st[0]));
-        c4 += l * (4.0 * a).cos();
-        s4 += l * (4.0 * a).sin();
+        let (l, a) = (pmath::hypot(st[0], st[1]), pmath::atan2(st[1], st[0]));
+        c4 += l * pmath::cos(4.0 * a);
+        s4 += l * pmath::sin(4.0 * a);
     }
-    let angle = if c4.hypot(s4) > RECTILINEAR * total { 0.25 * s4.atan2(c4) } else { 0.5 * (2.0 * sxy).atan2(sxx - syy) };
+    let angle = if pmath::hypot(c4, s4) > RECTILINEAR * total { 0.25 * pmath::atan2(s4, c4) } else { 0.5 * pmath::atan2(2.0 * sxy, sxx - syy) };
     let turned = |angle: f64| -> Vec<[f64; 2]> {
-        let (c, s) = (angle.cos(), angle.sin());
+        let (c, s) = (pmath::cos(angle), pmath::sin(angle));
         d.iter()
             .map(|p| {
                 let (x, y) = (p[0] - centre[0], p[1] - centre[1]);
@@ -443,12 +443,12 @@ fn develop(st: &[Station]) -> SplineResult<Developed> {
         let (prev, next) = (get2(&d, k + m - 1), get2(&d, k + 1));
         let here = get2(&d, k);
         let (a, b) = ([here[0] - prev[0], here[1] - prev[1]], [next[0] - here[0], next[1] - here[1]]);
-        let (la, lb) = (a[0].hypot(a[1]), b[0].hypot(b[1]));
+        let (la, lb) = (pmath::hypot(a[0], a[1]), pmath::hypot(b[0], b[1]));
         if !(la > 0.0 && lb > 0.0) {
             return Err(SplineError::Unsupported("filling a loop with two stations in one place".into()));
         }
         let t = [a[0] / la + b[0] / lb, a[1] / la + b[1] / lb];
-        let lt = t[0].hypot(t[1]);
+        let lt = pmath::hypot(t[0], t[1]);
         let t = if lt > 1e-9 { [t[0] / lt, t[1] / lt] } else { [b[0] / lb, b[1] / lb] };
         // The left normal is inward on a counter-clockwise domain.
         nu.push([-t[1] * sense, t[0] * sense]);
@@ -702,7 +702,8 @@ struct Near {
 
 impl Near {
     fn of(d: &[[f64; 2]], corners: &[[f64; 2]], rough: &[[f64; 2]], clashes: &[[f64; 2]], reach: f64) -> Near {
-        let close = |set: &[[f64; 2]]| -> Vec<bool> { d.iter().map(|q| set.iter().any(|c| (c[0] - q[0]).hypot(c[1] - q[1]) <= reach)).collect() };
+        let close =
+            |set: &[[f64; 2]]| -> Vec<bool> { d.iter().map(|q| set.iter().any(|c| pmath::hypot(c[0] - q[0], c[1] - q[1]) <= reach)).collect() };
         Near { corner: close(corners), rough: close(rough), clash: close(clashes) }
     }
 
@@ -1040,7 +1041,7 @@ fn locate(net: &Net, d: &[[f64; 2]], p: Vec3) -> SplineResult<[f64; 2]> {
         }
         let (ga, gb) = (su.dot(r), sv.dot(r));
         let next = [(q[0] - (c * ga - b * gb) / det).clamp(lo[0], hi[0]), (q[1] - (a * gb - b * ga) / det).clamp(lo[1], hi[1])];
-        let moved = (next[0] - q[0]).hypot(next[1] - q[1]);
+        let moved = pmath::hypot(next[0] - q[0], next[1] - q[1]);
         q = next;
         if moved < 1e-13 * (hi[0] - lo[0]) {
             break;
@@ -1071,7 +1072,7 @@ fn measure(net: &Net, st: &[Station], dev: &Developed, spec: &FillSpec, located:
         let (normal, su, sv) = net.frame(q).ok_or_else(|| off("on the loop"))?;
         // The neighbour's normal turned to the side the patch's normal should be on.
         let want = if across.normal.dot(s.up) * sense >= 0.0 { across.normal } else { across.normal * -1.0 };
-        let a = normal.dot(want).clamp(-1.0, 1.0).acos();
+        let a = pmath::acos(normal.dot(want).clamp(-1.0, 1.0));
         angle_all = angle_all.max(a);
         if near.clash(k) || fade.at(k) < 1.0 {
             continue;

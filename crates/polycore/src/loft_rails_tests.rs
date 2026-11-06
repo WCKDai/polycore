@@ -25,7 +25,7 @@ fn square(h: f64) -> Loop2 {
 
 /// The bulge of the rails: 0 at both ends, 1 halfway up the 40 mm loft.
 fn bulge(z: f64) -> f64 {
-    (PI * z / 40.0).sin()
+    pmath::sin(PI * z / 40.0)
 }
 
 /// A rail in the XZ plane at `x(z)`, from z = 0 to z = 40.

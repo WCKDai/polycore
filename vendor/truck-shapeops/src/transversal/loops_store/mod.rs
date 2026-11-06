@@ -354,7 +354,7 @@ fn sweep(from: Vector3, to: Vector3, normal: Vector3) -> Option<f64> {
     }
     let e1 = e1.normalize();
     let e2 = normal.cross(e1);
-    let angle = to.dot(e2).atan2(to.dot(e1));
+    let angle = pmath::atan2(to.dot(e2), to.dot(e1));
     Some(if angle < 0.0 { angle + 2.0 * std::f64::consts::PI } else { angle })
 }
 

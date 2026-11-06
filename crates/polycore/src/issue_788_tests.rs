@@ -62,11 +62,11 @@ fn equal_bores_crossing_along_every_axis_pair() {
 fn equal_bores_crossing_at_an_angle() {
     // Two infinite cylinders of radius r at angle t share 16r³ / (3 sin t).
     let (r, t) = (5.0f64, PI / 3.0);
-    let axis = Vec3::new(0.0, t.sin(), t.cos());
+    let axis = Vec3::new(0.0, pmath::sin(t), pmath::cos(t));
     let body = crossed(r, Vec3::ZERO, axis).unwrap().unwrap();
     let first = PI * r * r * SIDE;
-    let second = PI * r * r * SIDE / t.sin();
-    let shared = 16.0 * r.powi(3) / (3.0 * t.sin());
+    let second = PI * r * r * SIDE / pmath::sin(t);
+    let shared = 16.0 * r.powi(3) / (3.0 * pmath::sin(t));
     within(volume(&body), SIDE.powi(3) - first - second + shared, "60 degrees");
 }
 

@@ -63,7 +63,7 @@ fn tee(scale: f64, origin: Vec3) -> Body {
 }
 
 fn analytic_section(theta: f64, scale: f64, origin: Vec3) -> (Vec3, Vec3, Vec3) {
-    let centre = Vec3::new(13.0 * theta.cos(), 13.0 * theta.sin(), (324.0 - 169.0 * theta.sin().powi(2)).sqrt());
+    let centre = Vec3::new(13.0 * pmath::cos(theta), 13.0 * pmath::sin(theta), (324.0 - 169.0 * pmath::sin(theta).powi(2)).sqrt());
     let main = Vec3::new(centre.x, centre.y * 15.0 / 18.0, centre.z * 15.0 / 18.0);
     let branch = Vec3::new(centre.x * 10.0 / 13.0, centre.y * 10.0 / 13.0, centre.z);
     (origin + centre * scale, origin + main * scale, origin + branch * scale)
@@ -90,16 +90,16 @@ fn distance_to_analytic_arc(theta: f64, point: Vec3) -> f64 {
     let radial = point - centre;
     let projected = radial - plane * radial.dot(plane);
     let direction = projected.normalized().unwrap();
-    let angle = a.dot(b).clamp(-1.0, 1.0).acos();
-    let from_main = a.dot(direction).clamp(-1.0, 1.0).acos();
-    let from_branch = b.dot(direction).clamp(-1.0, 1.0).acos();
+    let angle = pmath::acos(a.dot(b).clamp(-1.0, 1.0));
+    let from_main = pmath::acos(a.dot(direction).clamp(-1.0, 1.0));
+    let from_branch = pmath::acos(b.dot(direction).clamp(-1.0, 1.0));
     if (from_main + from_branch - angle).abs() < 1e-7 { point.dist(centre + direction * 3.0) } else { point.dist(main).min(point.dist(branch)) }
 }
 
 fn distance_to_analytic_band(point: Vec3) -> f64 {
     // The arc's XY azimuth stays between its two contacts' azimuths. Their difference
     // for this tee is less than 0.1 rad; bracket generously around the query azimuth.
-    let azimuth = point.y.atan2(point.x);
+    let azimuth = pmath::atan2(point.y, point.x);
     let (mut lo, mut hi) = (azimuth - 0.3, azimuth + 0.3);
     for _ in 0..55 {
         let a = lo + (hi - lo) * 0.38196601125;
@@ -157,17 +157,17 @@ fn rolling_ball_matches_analytic_tee_and_contacts() {
             let (centre, main, branch) = analytic_section(theta, scale, origin);
             let a = (main - centre).normalized().unwrap();
             let b = (branch - centre).normalized().unwrap();
-            let angle = a.dot(b).clamp(-1.0, 1.0).acos();
+            let angle = pmath::acos(a.dot(b).clamp(-1.0, 1.0));
             for fraction in [0.0, 0.25, 0.5, 0.75, 1.0] {
                 // Spherical linear interpolation of the radial unit vectors, independent of
                 // the production rational control-point construction and fitting parameters.
-                let radial = (a * ((1.0 - fraction) * angle).sin() + b * (fraction * angle).sin()) / angle.sin();
+                let radial = (a * pmath::sin((1.0 - fraction) * angle) + b * pmath::sin(fraction * angle)) / pmath::sin(angle);
                 let exact = centre + radial * (3.0 * scale);
                 let (error, normal) = nearest_blend(&surfaces, exact);
                 distance = distance.max(error);
                 if fraction == 0.0 || fraction == 1.0 {
                     let want = (centre - exact).normalized().unwrap();
-                    tangent_angle = tangent_angle.max(normal.dot(want).abs().min(1.0).acos().to_degrees());
+                    tangent_angle = tangent_angle.max(pmath::acos(normal.dot(want).abs().min(1.0)).to_degrees());
                 }
             }
         }
@@ -266,13 +266,13 @@ fn gap(c1: Vec3, r1: f64, c2: Vec3, r2: f64, corner: Vec3, r: f64) -> Gap {
     }
     let f = c1 + u * along + side * (a * a - along * along).sqrt();
     let (t1, t2) = (c1 + (f - c1) * (r1 / a), c2 + (f - c2) * (r2 / b));
-    let angle = |c: Vec3, p: Vec3, q: Vec3| (p - c).normalized().unwrap().dot((q - c).normalized().unwrap()).clamp(-1.0, 1.0).acos();
+    let angle = |c: Vec3, p: Vec3, q: Vec3| pmath::acos((p - c).normalized().unwrap().dot((q - c).normalized().unwrap()).clamp(-1.0, 1.0));
     let angles = [angle(c1, t1, corner), angle(c2, corner, t2), angle(f, t2, t1)];
     // Shoelace over the three short arcs: circle 1 to the corner, circle 2 on, fillet back.
     let mut ring = Vec::new();
     for (c, p, q) in [(c1, t1, corner), (c2, corner, t2), (f, t2, t1)] {
         let (p0, q0) = (p - c, q - c);
-        let (a0, a1) = (p0.y.atan2(p0.x), q0.y.atan2(q0.x));
+        let (a0, a1) = (pmath::atan2(p0.y, p0.x), pmath::atan2(q0.y, q0.x));
         let mut sweep = a1 - a0;
         while sweep > std::f64::consts::PI {
             sweep -= std::f64::consts::TAU;
@@ -283,12 +283,15 @@ fn gap(c1: Vec3, r1: f64, c2: Vec3, r2: f64, corner: Vec3, r: f64) -> Gap {
         let rr = p0.len();
         for i in 0..20_000 {
             let t = a0 + sweep * i as f64 / 20_000.0;
-            ring.push(c + Vec3::new(t.cos(), t.sin(), 0.0) * rr);
+            ring.push(c + Vec3::new(pmath::cos(t), pmath::sin(t), 0.0) * rr);
         }
     }
     let area = ring.iter().map(|p| polycore_geom::Vec2::new(p.x, p.y)).collect::<polycore_geom::Ring<_>>().signed_area().abs();
     let (p, q) = ((t1 - f).normalized().unwrap(), (t2 - f).normalized().unwrap());
-    let arc = (0..=8).map(|i| angles[2] * i as f64 / 8.0).map(|t| f + (p * ((angles[2] - t).sin()) + q * t.sin()) * (r / angles[2].sin())).collect();
+    let arc = (0..=8)
+        .map(|i| angles[2] * i as f64 / 8.0)
+        .map(|t| f + (p * (pmath::sin(angles[2] - t)) + q * pmath::sin(t)) * (r / pmath::sin(angles[2])))
+        .collect();
     Gap { arc, angles, area }
 }
 
@@ -489,7 +492,7 @@ fn removed_volume(side: f64, size: f64, depth: impl Fn(f64) -> f64) -> f64 {
             } else {
                 2.0
             };
-            w * depth(x) * 2.0 * rho * (20.0 / rho).asin()
+            w * depth(x) * 2.0 * rho * pmath::asin(20.0 / rho)
         })
         .sum::<f64>()
         * h
@@ -529,7 +532,7 @@ fn rolling_ball_along_an_arc_ends_in_side_walls_at_an_angle() {
                     let x = 40.0 * i as f64 / 40.0;
                     for a in 1..8 {
                         let t = std::f64::consts::FRAC_PI_2 * a as f64 / 8.0;
-                        let (rho, z) = (ring - side * r * t.cos(), r - r * t.sin());
+                        let (rho, z) = (ring - side * r * pmath::cos(t), r - r * pmath::sin(t));
                         let dx = x - axis.x;
                         let dy = (rho * rho - dx * dx).sqrt() * if concave { 1.0 } else { -1.0 };
                         let p = Vec3::new(x, axis.y + dy, z);
@@ -580,7 +583,7 @@ fn rolling_ball_runs_into_a_knife_edge_tip() {
             } else {
                 2.0
             };
-            w * (r - (r * r - (r - x) * (r - x)).max(0.0).sqrt()) * rho * ((21.0 / rho).asin() - (21.0 / rho).acos())
+            w * (r - (r * r - (r - x) * (r - x)).max(0.0).sqrt()) * rho * (pmath::asin(21.0 / rho) - pmath::acos(21.0 / rho))
         })
         .sum::<f64>()
         * h
@@ -667,7 +670,7 @@ fn chamfer_a_chain_of_a_line_and_an_arc_into_a_slanted_end() {
     // radius ρ inside x ≤ 40.
     use polycore_geom::{Loop2, Plane, Region2, Seg2, Vec2};
     let start = -std::f64::consts::FRAC_PI_2;
-    let end = (-21.0f64).atan2(20.0);
+    let end = pmath::atan2(-21.0f64, 20.0);
     let segs = vec![
         Seg2::Line { a: Vec2::new(0.0, 0.0), b: Vec2::new(20.0, 0.0) },
         Seg2::Arc { center: Vec2::new(20.0, 29.0), radius: 29.0, start, sweep: end - start },
@@ -684,7 +687,7 @@ fn chamfer_a_chain_of_a_line_and_an_arc_into_a_slanted_end() {
         .map(|i| {
             let rho = 27.0 + i as f64 * h;
             let w = if i == 0 || i == n { 1.0 } else { [2.0, 4.0][i % 2] };
-            w * (rho - 27.0) * rho * (20.0 / rho).asin()
+            w * (rho - 27.0) * rho * pmath::asin(20.0 / rho)
         })
         .sum::<f64>()
         * h
@@ -809,7 +812,7 @@ fn round_errors(before: &Body, after: &Body, floor: f64, r: f64) -> (f64, f64, u
             for k in 1..8 {
                 let m = from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 8.0));
                 let (Some((_, a, _)), Some((_, b, _))) = (project(faces[*i], m, None), project(faces[j], m, None)) else { continue };
-                angle = angle.max(a.dot(b).clamp(-1.0, 1.0).acos().to_degrees());
+                angle = angle.max(pmath::acos(a.dot(b).clamp(-1.0, 1.0)).to_degrees());
             }
         }
     }
@@ -873,14 +876,14 @@ fn rolling_ball_round_on_a_sloped_loft_matches_its_volume() {
     // the two contacts and the ball's centre, less the ball's sector between the contacts. Its
     // area, and its centroid's distance in from the edge (first moments of the two triangles of
     // the kite and of the sector).
-    let phi = 30f64.atan2(5.0);
-    let t = r / (phi / 2.0).tan();
+    let phi = pmath::atan2(30f64, 5.0);
+    let t = r / pmath::tan(phi / 2.0);
     let alpha = PI - phi;
     let section = t * r - r * r * alpha / 2.0;
     let triangle = |a: (f64, f64), b: (f64, f64)| (a.0 * b.1 - a.1 * b.0) / 2.0 * (a.0 + b.0) / 3.0;
-    let kite = triangle((t, 0.0), (t, r)) + triangle((t, r), (t * phi.cos(), t * phi.sin()));
-    let reach = 2.0 * r * (alpha / 2.0).sin() / (3.0 * alpha / 2.0);
-    let sector = r * r * alpha / 2.0 * (t + reach * (-PI / 2.0 - alpha / 2.0).cos());
+    let kite = triangle((t, 0.0), (t, r)) + triangle((t, r), (t * pmath::cos(phi), t * pmath::sin(phi)));
+    let reach = 2.0 * r * pmath::sin(alpha / 2.0) / (3.0 * alpha / 2.0);
+    let sector = r * r * alpha / 2.0 * (t + reach * pmath::cos(-PI / 2.0 - alpha / 2.0));
     let centroid = (kite - sector) / section;
     let (a0, l0) = (2400.0 - (4.0 - PI) * 100.0, 120.0 + 20.0 * PI);
     let want = 30.0 * a0 - 75.0 * l0 + 250.0 * PI - section * (l0 - 2.0 * PI * centroid);
@@ -938,7 +941,7 @@ fn seam_angle(body: &Body, face: &mt::Face) -> f64 {
         for k in 1..8 {
             let m = from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 8.0));
             if let (Some((_, a, _)), Some((_, b, _))) = (project(face, m, None), project(other, m, None)) {
-                angle = angle.max(a.dot(b).clamp(-1.0, 1.0).acos().to_degrees());
+                angle = angle.max(pmath::acos(a.dot(b).clamp(-1.0, 1.0)).to_degrees());
             }
         }
     }
@@ -991,13 +994,13 @@ fn a_round_whose_floor_arcs_equal_its_setback_turns_on_the_spot() {
     assert!(angle < 0.5, "the round meets its neighbours at {angle} degrees");
     // Steiner, as in the case: the section in the 135 deg corner swept square to the outline.
     let phi = 0.75 * PI;
-    let t = r / (phi / 2.0).tan();
+    let t = r / pmath::tan(phi / 2.0);
     let alpha = PI - phi;
     let section = t * r - r * r * alpha / 2.0;
     let triangle = |a: (f64, f64), b: (f64, f64)| (a.0 * b.1 - a.1 * b.0) / 2.0 * (a.0 + b.0) / 3.0;
-    let kite = triangle((t, 0.0), (t, r)) + triangle((t, r), (t * phi.cos(), t * phi.sin()));
-    let reach = 2.0 * r * (alpha / 2.0).sin() / (3.0 * alpha / 2.0);
-    let sector = r * r * alpha / 2.0 * (t + reach * (-PI / 2.0 - alpha / 2.0).cos());
+    let kite = triangle((t, 0.0), (t, r)) + triangle((t, r), (t * pmath::cos(phi), t * pmath::sin(phi)));
+    let reach = 2.0 * r * pmath::sin(alpha / 2.0) / (3.0 * alpha / 2.0);
+    let sector = r * r * alpha / 2.0 * (t + reach * pmath::cos(-PI / 2.0 - alpha / 2.0));
     let centroid = (kite - sector) / section;
     let (a0, l0) = (1200.0 - 4.0 * (4.0 - PI), 124.0 + 4.0 * PI);
     let want = 20.0 * a0 + 200.0 * l0 + 8000.0 * PI / 3.0 - section * (l0 - 2.0 * PI * centroid);

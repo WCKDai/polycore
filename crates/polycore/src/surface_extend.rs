@@ -420,7 +420,7 @@ impl<'a> Extension<'a> {
             return Err(KernelError::Failed("extend: the corners of an edge".into()));
         };
         let (a, b) = (fr.local(i, t0, self.accept)?, fr.local(i, t1, self.accept)?);
-        Ok(Run { i, t0, t1, phi0: c0.r.dot(a.d).atan2(c0.r.dot(a.out)), phi1: c1.r.dot(b.d).atan2(c1.r.dot(b.out)) })
+        Ok(Run { i, t0, t1, phi0: pmath::atan2(c0.r.dot(a.d), c0.r.dot(a.out)), phi1: pmath::atan2(c1.r.dot(b.d), c1.r.dot(b.out)) })
     }
 
     /// Where the extension of edge `run` at curve parameter `t` ends.
@@ -428,7 +428,7 @@ impl<'a> Extension<'a> {
         let at = fr.local(run.i, t, self.accept)?;
         let w = if run.t1 != run.t0 { (t - run.t0) / (run.t1 - run.t0) } else { 0.0 };
         let phi = run.phi0 + (run.phi1 - run.phi0) * w;
-        let r = at.out * phi.cos() + at.d * phi.sin();
+        let r = at.out * pmath::cos(phi) + at.d * pmath::sin(phi);
         let reach = |cos: f64| -> f64 {
             match self.opts.limit {
                 ExtendLimit::Distance(d) => d / cos.max(MIN_COS),
@@ -441,7 +441,7 @@ impl<'a> Extension<'a> {
                 let kappa = if self.opts.mode == ExtendMode::Curvature { normal_curvature(&fr.surface, at.q, ab, at.n) } else { 0.0 };
                 let mut far = Far { at, r, l: 0.0, kappa, f: at.p, fq: at.q };
                 far.l = match self.opts.limit {
-                    ExtendLimit::Distance(_) => reach(phi.cos()),
+                    ExtendLimit::Distance(_) => reach(pmath::cos(phi)),
                     ExtendLimit::UpTo(_) => self.meet(|s| Ok(far.section(s)), at.p)?,
                     ExtendLimit::Bounds => return Err(KernelError::Invalid("only a natural extension goes back to the surface's bounds".into())),
                 };
@@ -451,7 +451,7 @@ impl<'a> Extension<'a> {
             ExtendMode::Natural => {
                 let line = |s: f64| [at.q[0] + ab[0] * s, at.q[1] + ab[1] * s];
                 let s = match self.opts.limit {
-                    ExtendLimit::Distance(_) => arc_param(fr, at.q, ab, reach(phi.cos()))?,
+                    ExtendLimit::Distance(_) => arc_param(fr, at.q, ab, reach(pmath::cos(phi)))?,
                     ExtendLimit::UpTo(_) => self.meet(|s| fr.at(line(s)), at.p)?,
                     ExtendLimit::Bounds => self.to_bounds(fr, at.q, ab)?,
                 };
@@ -1367,7 +1367,7 @@ mod tests {
 
     /// Arc length of z = x²/20 from 0 to x.
     fn parabola_arc(x: f64) -> f64 {
-        0.5 * x * (1.0 + (x / 10.0).powi(2)).sqrt() + 5.0 * (x / 10.0).asinh()
+        0.5 * x * (1.0 + (x / 10.0).powi(2)).sqrt() + 5.0 * pmath::asinh(x / 10.0)
     }
     /// The parabolic sheet z = x²/20 over 0 ≤ x, y ≤ 10: a B-spline quadratic along x (u),
     /// straight along y (v), its four edges on its parameter lines.
@@ -1446,7 +1446,7 @@ mod tests {
     fn a_cylinder_strip_extended_along_its_axis_and_around() {
         let c = cylinder_strip(FRAC_PI_2);
         assert!(rel(area(&c), 100.0 * PI) < 1e-3);
-        let top = Vec3::new(10.0 * FRAC_PI_4.cos(), 10.0 * FRAC_PI_4.sin(), 20.0);
+        let top = Vec3::new(10.0 * pmath::cos(FRAC_PI_4), 10.0 * pmath::sin(FRAC_PI_4), 20.0);
         let side = Vec3::new(0.0, 10.0, 10.0);
         let cylinder =
             |b: &Body| matches!(crate::face_surface(b, 0), Some(crate::FaceSurface::Cylinder { radius, .. }) if (radius - 10.0).abs() < 1e-6);
@@ -1462,7 +1462,7 @@ mod tests {
         assert!(rel(area(&round), want) < 1e-3, "{} vs {want}", area(&round)); // (measured on meshes)
         assert!(round.face_count() == 1 && cylinder(&round) && edges(&round) == 4);
         // The moved edge is at angle π/2 + ½ (5 mm of arc): x = −10 sin ½.
-        assert!((measure(&round).unwrap().bbox.min.x + 10.0 * 0.5f64.sin()).abs() < 1e-6, "{:?}", measure(&round).unwrap().bbox);
+        assert!((measure(&round).unwrap().bbox.min.x + 10.0 * pmath::sin(0.5f64)).abs() < 1e-6, "{:?}", measure(&round).unwrap().bbox);
 
         let both = extend_surface(&c, &[top, side], &natural(5.0)).unwrap();
         let want = 10.0 * (FRAC_PI_2 + 0.5) * 25.0;
@@ -1485,7 +1485,7 @@ mod tests {
     fn an_extruded_cylinder_strip_continues_on_its_cylinder() {
         let arc = vec![Seg2::Arc { center: Vec2::new(0.0, 0.0), radius: 10.0, start: 0.0, sweep: FRAC_PI_2 }];
         let sheet = crate::extrude_sheet(&Plane::XY, &[arc], 0.0, 20.0).unwrap();
-        let top = Vec3::new(10.0 * FRAC_PI_4.cos(), 10.0 * FRAC_PI_4.sin(), 20.0);
+        let top = Vec3::new(10.0 * pmath::cos(FRAC_PI_4), 10.0 * pmath::sin(FRAC_PI_4), 20.0);
         let up = extend_surface(&sheet, &[top], &natural(5.0)).unwrap();
         let want = 10.0 * FRAC_PI_2 * 25.0;
         assert!(rel(area(&up), want) < 1e-3, "{} vs {want}", area(&up)); // (measured on meshes)
@@ -1557,10 +1557,10 @@ mod tests {
         let off = from_p3(s.subs(u, v)).dist(Vec3::new(12.0, 5.0, 7.2));
         assert!(off < 1e-7, "{off}");
 
-        let kappa = 0.1 / 2f64.powf(1.5);
+        let kappa = 0.1 / pmath::powf(2f64, 1.5);
         let curv = extend_surface(&p, &edge, &with(ExtendMode::Curvature, ExtendLimit::Distance(5.0), true)).unwrap();
         assert_eq!((curv.face_count(), shared(&curv)), (2, 1));
-        let arc = 2.5 * (1.0 + 25.0 * kappa * kappa).sqrt() + (5.0 * kappa).asinh() / (2.0 * kappa);
+        let arc = 2.5 * (1.0 + 25.0 * kappa * kappa).sqrt() + pmath::asinh(5.0 * kappa) / (2.0 * kappa);
         assert!(rel(area(&curv), base + 10.0 * arc) < 1e-4, "{} vs {}", area(&curv), base + 10.0 * arc); // (measured on meshes)
         // G1 and G2 at the old edge, measured on the run-off along its length.
         let run = curv.solid.face_iter().nth(1).unwrap().surface();

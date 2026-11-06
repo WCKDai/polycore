@@ -8,7 +8,7 @@ use truck_modeling::ParametricSurface;
 
 /// The angle between two vectors, in degrees.
 fn angle_deg(a: Vec3, b: Vec3) -> f64 {
-    (a.normalized().unwrap().dot(b.normalized().unwrap())).clamp(-1.0, 1.0).acos().to_degrees()
+    pmath::acos((a.normalized().unwrap().dot(b.normalized().unwrap())).clamp(-1.0, 1.0)).to_degrees()
 }
 
 /// The geometric shape of a surface curve from its first three derivatives along it: the unit

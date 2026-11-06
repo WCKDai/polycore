@@ -27,6 +27,17 @@ const CLEARANCE: f64 = 0.5;
 /// Rounds of sag refinement.
 const SAG_ROUNDS: usize = 16;
 
+/// Ruppert refinement's threshold for [`MIN_ANGLE_DEG`]: the circumradius to shortest edge
+/// ratio 1 / (2 sin θ), which is what spade's `AngleLimit::from_deg` computes, except that
+/// spade's `from_rad` takes the sine from the platform's libm (spade 2.15.1,
+/// delaunay_core/refinement.rs) and this takes it from `pmath`. The threshold decides which
+/// triangles of every non-planar face are split, and `Body::volume_at` measures from that mesh,
+/// so it must be the same bits on every platform (PC-12); glibc rounds this sine correctly, so
+/// the Linux meshes are unchanged. `clippy.toml` bans `from_deg` and `from_rad`.
+fn shape_limit() -> AngleLimit {
+    AngleLimit::from_radius_to_shortest_edge_ratio(0.5 / pmath::sin(MIN_ANGLE_DEG.to_radians()))
+}
+
 /// The surface, for refining where the triangles leave it.
 pub(crate) struct Sag<'a> {
     /// Point and unit normal (when not degenerate) at (u, v).
@@ -106,7 +117,7 @@ pub(crate) fn triangulate(boundary: &[[f64; 2]], loops: &[std::ops::Range<usize>
             let params = RefinementParameters::<f64>::new()
                 .keep_constraint_edges()
                 .exclude_outer_faces(true)
-                .with_angle_limit(AngleLimit::from_deg(MIN_ANGLE_DEG))
+                .with_angle_limit(shape_limit())
                 .with_max_additional_vertices(budget.saturating_sub(added));
             let before = cdt.num_vertices();
             cdt.refine(params);
@@ -220,7 +231,7 @@ fn refine_sag(cdt: &mut Cdt, sag: &Sag, budget: usize, from: &dyn Fn(Point2<f64>
     let mut cache: HashMap<FixedVertexHandle, Option<(Vec3, Option<Vec3>)>> = HashMap::new();
     // The widest turn between two corner normals.
     let spread = |n: [Option<Vec3>; 3]| match n {
-        [Some(a), Some(b), Some(c)] => [(a, b), (b, c), (c, a)].iter().map(|(x, y)| x.dot(*y).clamp(-1.0, 1.0).acos()).fold(0.0, f64::max),
+        [Some(a), Some(b), Some(c)] => [(a, b), (b, c), (c, a)].iter().map(|(x, y)| pmath::acos(x.dot(*y).clamp(-1.0, 1.0))).fold(0.0, f64::max),
         _ => 0.0,
     };
     for _ in 0..SAG_ROUNDS {
@@ -428,7 +439,7 @@ fn dist_to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-    (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
+    pmath::hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy)
 }
 
 #[cfg(test)]
@@ -505,9 +516,28 @@ mod tests {
             assert!(clear(&outer) && clear(&hole), "{p:?}");
         }
         // Nearest neighbours one side apart, six of them in the open.
-        let near = |p: [f64; 2]| seeds.iter().filter(|q| ((q[0] - p[0]).hypot(q[1] - p[1]) - 1.0).abs() < 1e-9).count();
+        let near = |p: [f64; 2]| seeds.iter().filter(|q| (pmath::hypot(q[0] - p[0], q[1] - p[1]) - 1.0).abs() < 1e-9).count();
         assert!(seeds.iter().any(|p| near(*p) == 6));
-        assert!(seeds.iter().all(|p| seeds.iter().all(|q| p == q || (q[0] - p[0]).hypot(q[1] - p[1]) > 1.0 - 1e-9)));
+        assert!(seeds.iter().all(|p| seeds.iter().all(|q| p == q || pmath::hypot(q[0] - p[0], q[1] - p[1]) > 1.0 - 1e-9)));
+    }
+
+    /// Ruppert refinement's threshold is spade's `from_deg(25°)`, 1 / (2 sin 25°), with the
+    /// sine from pmath instead of the platform's inside spade: the correctly rounded value, bit
+    /// for bit, which glibc's sine gives too (so the Linux meshes are the recorded ones).
+    #[test]
+    fn shape_limit_is_spades_angle_limit_from_pmath() {
+        let limit = shape_limit().radius_to_shortest_edge_limit();
+        assert_eq!(limit.to_bits(), (0.5 / pmath::sin(MIN_ANGLE_DEG.to_radians())).to_bits());
+        // 1 / (2 sin 25°) = 1.18310079157624927…, the f64 1.1831007915762493: the sine of the
+        // f64 `25f64.to_radians()` evaluated to 80 digits lies 0.23 ULP from the nearest rounding
+        // boundary, so the correctly rounded sine, and the quotient, are not in doubt.
+        assert_eq!(limit.to_bits(), 0x3FF2_EDFB_187B_1137);
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            #[allow(clippy::disallowed_methods)]
+            let spade = AngleLimit::from_deg(MIN_ANGLE_DEG).radius_to_shortest_edge_limit();
+            assert_eq!(limit.to_bits(), spade.to_bits(), "glibc's sine of 25° is correctly rounded: spade's own threshold is the same bits");
+        }
     }
 
     #[test]

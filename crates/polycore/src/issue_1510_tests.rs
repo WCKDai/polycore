@@ -33,7 +33,7 @@ fn a_split_in_the_plane_of_a_face_keeps_all_of_the_body() {
         let (r, h) = (2.5f64, width / 2.0);
         let hole = std::f64::consts::PI * r * r;
         // The strip 20 <= x <= 40, |y - 10| <= h, less the part of it in the hole.
-        let groove = width * 20.0 - (h * (r * r - h * h).sqrt() + r * r * (h / r).asin());
+        let groove = width * 20.0 - (h * (r * r - h * h).sqrt() + r * r * pmath::asin(h / r));
         let want = [800.0 - hole, 1.5 * (800.0 - hole - groove)];
         for (got, want) in vs.iter().zip(want) {
             assert!((got - want).abs() < 0.05, "{width}: {vs:?} against {want}; {:?}", d.summary());

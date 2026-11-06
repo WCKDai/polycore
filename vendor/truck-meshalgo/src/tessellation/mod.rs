@@ -171,7 +171,7 @@ impl Deflection {
     #[doc(hidden)]
     pub fn turn2(&self) -> f64 {
         match self.angular() && self.angle < std::f64::consts::PI {
-            true => (f64::tan(self.angle / 4.0) / 2.0).powi(2),
+            true => (pmath::tan(self.angle / 4.0) / 2.0).powi(2),
             false => f64::INFINITY,
         }
     }

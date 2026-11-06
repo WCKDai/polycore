@@ -428,19 +428,19 @@ pub(crate) fn curve(cx: &Ctx, id: u64, depth: usize) -> R<CurveGeo> {
 pub(crate) fn conic_arc(f: &Frame, a: f64, b: f64, t0: f64, sweep: f64) -> mt::NurbsCurve<mt::Vector4> {
     let n = ((sweep / FRAC_PI_2).ceil() as usize).clamp(1, 8);
     let dt = sweep / n as f64;
-    let w = (dt * 0.5).cos();
+    let w = pmath::cos(dt * 0.5);
     let at = |c: f64, s: f64| f.at(a * c, b * s, 0.0);
     let mut ctrl = Vec::with_capacity(2 * n + 1);
-    let p0 = at(t0.cos(), t0.sin());
+    let p0 = at(pmath::cos(t0), pmath::sin(t0));
     ctrl.push(p0.to_homogeneous());
     let mut knots = vec![0.0, 0.0, 0.0];
     for i in 0..n {
         let ta = t0 + dt * i as f64;
         let tm = ta + dt * 0.5;
         let tb = ta + dt;
-        let m = at(tm.cos() / w, tm.sin() / w);
+        let m = at(pmath::cos(tm) / w, pmath::sin(tm) / w);
         ctrl.push(mt::Vector4::new(m.x * w, m.y * w, m.z * w, w));
-        ctrl.push(at(tb.cos(), tb.sin()).to_homogeneous());
+        ctrl.push(at(pmath::cos(tb), pmath::sin(tb)).to_homogeneous());
         let k = (i + 1) as f64 / n as f64;
         knots.push(k);
         knots.push(k);
@@ -460,18 +460,18 @@ const HYPERBOLA_STEP: f64 = 1.0;
 pub(crate) fn hyperbola_arc(f: &Frame, a: f64, b: f64, t0: f64, t1: f64) -> mt::NurbsCurve<mt::Vector4> {
     let n = (((t1 - t0).abs() / HYPERBOLA_STEP).ceil() as usize).clamp(1, 64);
     let dt = (t1 - t0) / n as f64;
-    let w = (dt * 0.5).cosh();
+    let w = pmath::cosh(dt * 0.5);
     let at = |c: f64, s: f64| f.at(a * c, b * s, 0.0);
     let mut ctrl = Vec::with_capacity(2 * n + 1);
-    ctrl.push(at(t0.cosh(), t0.sinh()).to_homogeneous());
+    ctrl.push(at(pmath::cosh(t0), pmath::sinh(t0)).to_homogeneous());
     let mut knots = vec![0.0, 0.0, 0.0];
     for i in 0..n {
         let ta = t0 + dt * i as f64;
         let tm = ta + dt * 0.5;
         let tb = ta + dt;
-        let m = at(tm.cosh() / w, tm.sinh() / w);
+        let m = at(pmath::cosh(tm) / w, pmath::sinh(tm) / w);
         ctrl.push(mt::Vector4::new(m.x * w, m.y * w, m.z * w, w));
-        ctrl.push(at(tb.cosh(), tb.sinh()).to_homogeneous());
+        ctrl.push(at(pmath::cosh(tb), pmath::sinh(tb)).to_homogeneous());
         let k = (i + 1) as f64 / n as f64;
         knots.push(k);
         knots.push(k);
@@ -492,8 +492,8 @@ pub(crate) fn parabola_arc(f: &Frame, focal: f64, t0: f64, t1: f64) -> mt::BSpli
 fn open_conic_param(g: &CurveGeo, p: mt::Point3, tol: f64) -> R<f64> {
     let (t, q) = match g {
         CurveGeo::Hyperbola { f, a, b } => {
-            let t = ((p - f.o).dot(f.y) / b).asinh();
-            (t, f.at(a * t.cosh(), b * t.sinh(), 0.0))
+            let t = pmath::asinh((p - f.o).dot(f.y) / b);
+            (t, f.at(a * pmath::cosh(t), b * pmath::sinh(t), 0.0))
         }
         CurveGeo::Parabola { f, focal } => {
             let t = (p - f.o).dot(f.y) / (2.0 * focal);
@@ -522,7 +522,7 @@ fn open_conic_curve(g: &CurveGeo, t0: f64, t1: f64) -> R<mt::Curve> {
 
 fn conic_angle(f: &Frame, a: f64, b: f64, p: mt::Point3) -> f64 {
     let d = p - f.o;
-    (d.dot(f.y) / b).atan2(d.dot(f.x) / a)
+    pmath::atan2(d.dot(f.y) / b, d.dot(f.x) / a)
 }
 
 /// Parameter of the curve point nearest to `p`, and its distance.
@@ -719,7 +719,7 @@ fn bounded_curve(g: &CurveGeo, extent: &[mt::Point3]) -> R<mt::Curve> {
         CurveGeo::Hyperbola { f, .. } | CurveGeo::Parabola { f, .. } => {
             // Bounded by the face's points (their parameters along the curve), with a margin.
             let along = |q: &mt::Point3| match g {
-                CurveGeo::Hyperbola { b, .. } => ((q - f.o).dot(f.y) / b).asinh(),
+                CurveGeo::Hyperbola { b, .. } => pmath::asinh((q - f.o).dot(f.y) / b),
                 CurveGeo::Parabola { focal, .. } => (q - f.o).dot(f.y) / (2.0 * focal),
                 _ => 0.0,
             };
@@ -756,15 +756,15 @@ fn common_angle(angles: impl Iterator<Item = f64>) -> Option<f64> {
     let (mut sx, mut sy, mut n) = (0.0, 0.0, 0usize);
     let mut all = Vec::new();
     for a in angles {
-        sx += a.cos();
-        sy += a.sin();
+        sx += pmath::cos(a);
+        sy += pmath::sin(a);
         n += 1;
         all.push(a);
     }
     if n == 0 {
         return None;
     }
-    let m = sy.atan2(sx);
+    let m = pmath::atan2(sy, sx);
     let close = all.iter().all(|a| {
         let d = (a - m).rem_euclid(TAU);
         d.min(TAU - d) < 1e-4
@@ -798,9 +798,9 @@ fn seam_frame(f: &Frame, extent: &[mt::Point3], seam: &[mt::Point3]) -> Frame {
     if let Some(m) = common_angle(seam.iter().filter_map(|p| {
         let d = p - f.o;
         let (x, y) = (d.dot(f.x), d.dot(f.y));
-        (x.hypot(y) > 1e-6 * (1.0 + d.magnitude())).then(|| y.atan2(x))
+        (pmath::hypot(x, y) > 1e-6 * (1.0 + d.magnitude())).then(|| pmath::atan2(y, x))
     })) {
-        let x = f.x * m.cos() + f.y * m.sin();
+        let x = f.x * pmath::cos(m) + f.y * pmath::sin(m);
         return Frame { o: f.o, x, y: f.z.cross(x), z: f.z };
     }
     let az: Vec<f64> = extent
@@ -808,12 +808,12 @@ fn seam_frame(f: &Frame, extent: &[mt::Point3], seam: &[mt::Point3]) -> Frame {
         .filter_map(|p| {
             let d = p - f.o;
             let (x, y) = (d.dot(f.x), d.dot(f.y));
-            (x.hypot(y) > 1e-9).then(|| y.atan2(x))
+            (pmath::hypot(x, y) > 1e-9).then(|| pmath::atan2(y, x))
         })
         .collect();
     match largest_gap(&az) {
         Some((m, gap)) if gap > 1e-3 => {
-            let x = f.x * m.cos() + f.y * m.sin();
+            let x = f.x * pmath::cos(m) + f.y * pmath::sin(m);
             Frame { o: f.o, x, y: f.z.cross(x), z: f.z }
         }
         _ => *f,
@@ -862,7 +862,7 @@ fn sphere_axis(f: &Frame, extent: &[mt::Point3]) -> mt::Vector3 {
         let z = 1.0 - (i as f64 + 0.5) / n as f64;
         let r = (1.0 - z * z).max(0.0).sqrt();
         let t = golden * i as f64;
-        let a = mt::Vector3::new(r * t.cos(), r * t.sin(), z);
+        let a = mt::Vector3::new(r * pmath::cos(t), r * pmath::sin(t), z);
         if concentrated && a.dot(mhat).abs() > 0.35 {
             continue;
         }
@@ -879,7 +879,7 @@ fn tube_angle(f: &Frame, big: f64, p: mt::Point3) -> f64 {
     let d = p - f.o;
     let z = d.dot(f.z);
     let rho = (d - f.z * z).magnitude();
-    z.atan2(rho - big)
+    pmath::atan2(z, rho - big)
 }
 
 /// A seam angle shared by points that run all the way round the other parameter.
@@ -898,13 +898,13 @@ fn full_circle_seam(keys: &[f64], others: &[f64], tol: f64) -> Option<f64> {
             let d = (k - keys[i]).rem_euclid(TAU);
             if d.min(TAU - d) < tol {
                 covered.push(*o);
-                sx += k.cos();
-                sy += k.sin();
+                sx += pmath::cos(*k);
+                sy += pmath::sin(*k);
             }
         }
         let Some((_, gap)) = largest_gap(&covered) else { continue };
         if gap < FRAC_PI_2 && best.is_none_or(|(c, _)| covered.len() > c) {
-            best = Some((covered.len(), sy.atan2(sx)));
+            best = Some((covered.len(), pmath::atan2(sy, sx)));
         }
     }
     best.map(|(_, mean)| mean)
@@ -1078,7 +1078,9 @@ fn offset_basis(cx: &Ctx, id: u64, depth: usize) -> R<(u64, f64)> {
         "CONICAL_SURFACE" => {
             let radius = length(cx, p.get(2), "radius")?;
             let angle = num(p.get(3), "semi angle")? * cx.ang;
-            if radius < 0.0 || !(angle.abs() > 1e-9 && angle.abs() < FRAC_PI_2 - 1e-9) || !(0.0..MAX_COORD).contains(&(radius + offset / angle.cos()))
+            if radius < 0.0
+                || !(angle.abs() > 1e-9 && angle.abs() < FRAC_PI_2 - 1e-9)
+                || !(0.0..MAX_COORD).contains(&(radius + offset / pmath::cos(angle)))
             {
                 return Err("offset cone has an invalid reference radius or angle".into());
             }
@@ -1138,11 +1140,11 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
             let f = seam_frame(&placement()?, extent, seam);
             let basis_r = length(cx, p.get(2), "radius")?;
             let a = num(p.get(3), "semi angle")? * cx.ang;
-            let r = basis_r + offset / a.cos();
+            let r = basis_r + offset / pmath::cos(a);
             if r < 0.0 || !(a.abs() > 1e-9 && a.abs() < FRAC_PI_2 - 1e-9) {
                 return Err("bad cone".into());
             }
-            let t = a.tan();
+            let t = pmath::tan(a);
             let (mut lo, mut hi) = span_along(extent, f.o, f.z);
             // Stop at the apex.
             let apex = -r / t;
@@ -1155,7 +1157,7 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
                 return Err("cone face has no extent".into());
             }
             let line = mt::Curve::Line(mt::Line(f.at(r + lo * t, 0.0, lo), f.at(r + hi * t, 0.0, hi)));
-            Ok(revolved_oriented(line, f.o, f.z, 0.5, (f.x * a.cos() - f.z * a.sin()) * sign))
+            Ok(revolved_oriented(line, f.o, f.z, 0.5, (f.x * pmath::cos(a) - f.z * pmath::sin(a)) * sign))
         }
         "SPHERICAL_SURFACE" => {
             let f = placement()?;
@@ -1195,7 +1197,7 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
             for p in seam {
                 let d = *p - f.o;
                 phis.push(tube_angle(&f, big, *p));
-                azs.push(d.dot(f.y).atan2(d.dot(f.x)));
+                azs.push(pmath::atan2(d.dot(f.y), d.dot(f.x)));
             }
             let parallel = full_circle_seam(&phis, &azs, 1e-3);
             let meridian = full_circle_seam(&azs, &phis, 1e-3);
@@ -1224,7 +1226,7 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
             let tube = Frame { o: f.at(big, 0.0, 0.0), x: f.x, y: f.z, z: -f.y };
             let circle = conic_arc(&tube, small, small, phi0, TAU);
             let u0 = circle.range_tuple().0;
-            let outward = f.x * phi0.cos() + f.z * phi0.sin();
+            let outward = f.x * pmath::cos(phi0) + f.z * pmath::sin(phi0);
             Ok(revolved_oriented(mt::Curve::NurbsCurve(circle), f.o, f.z, u0, outward * sign))
         }
         "B_SPLINE_SURFACE_WITH_KNOTS" | "BEZIER_SURFACE" | "UNIFORM_SURFACE" | "QUASI_UNIFORM_SURFACE" => bspline_surface(cx, e).map(flip),
@@ -1252,7 +1254,7 @@ pub(crate) fn surface(cx: &Ctx, id: u64, extent: &[mt::Point3], seam: &[mt::Poin
                     let angle = |p: &mt::Point3| {
                         let q = p - f.o;
                         let q = q - d * (q.dot(f.z) / dz);
-                        (q.dot(f.y) / b).atan2(q.dot(f.x) / a)
+                        pmath::atan2(q.dot(f.y) / b, q.dot(f.x) / a)
                     };
                     let start = common_angle(seam.iter().map(angle))
                         .or_else(|| largest_gap(&extent.iter().map(angle).collect::<Vec<_>>()).map(|(mid, _)| mid))

@@ -964,7 +964,7 @@ fn inside_loop_ray(lp: &Loop2, p: Vec2) -> bool {
                 if !(-1.0..=1.0).contains(&y) {
                     continue;
                 }
-                let a = y.asin();
+                let a = pmath::asin(y);
                 let root = (1.0 - y * y).max(0.0).sqrt();
                 let full = (sweep.abs() - std::f64::consts::TAU).abs() < 1e-12;
                 for (i, (angle, x)) in [(a, center.x + radius * root), (std::f64::consts::PI - a, center.x - radius * root)].into_iter().enumerate() {
@@ -984,7 +984,7 @@ fn inside_loop_ray(lp: &Loop2, p: Vec2) -> bool {
                     if delta > sweep.abs() + 1e-12 {
                         continue;
                     }
-                    let dy = angle.cos() * sweep;
+                    let dy = pmath::cos(angle) * sweep;
                     let tangent = dy.abs() < sweep.abs() * 1e-12;
                     let at_start = delta < 1e-12;
                     let at_end = (delta - sweep.abs()).abs() < 1e-12;
@@ -1042,7 +1042,7 @@ fn closest_param(segment: &Seg2, point: Vec2) -> f64 {
         }
         Seg2::Arc { center, radius, start, sweep } if radius > 0.0 && sweep.abs() > 1e-12 && sweep.abs() <= std::f64::consts::TAU + 1e-9 => {
             let offset = point - center;
-            let delta = ((offset.y.atan2(offset.x) - start) * sweep.signum()).rem_euclid(std::f64::consts::TAU);
+            let delta = ((pmath::atan2(offset.y, offset.x) - start) * sweep.signum()).rem_euclid(std::f64::consts::TAU);
             if delta <= sweep.abs() {
                 (delta / sweep.abs()).clamp(0.0, 1.0)
             } else if segment.start().dist(point) <= segment.end().dist(point) {
@@ -1720,7 +1720,7 @@ fn tightest_left(incoming: &Seg2, out: &[Seg2]) -> Option<usize> {
     let back = incoming.point_at(1.0 - h / incoming.length()) - at;
     let turn = |s: &Seg2| {
         let d = s.point_at(h / s.length()) - at;
-        let a = back.cross(d).atan2(back.dot(d));
+        let a = pmath::atan2(back.cross(d), back.dot(d));
         if a < 0.0 { a + std::f64::consts::TAU } else { a }
     };
     (0..out.len()).max_by(|x, y| turn(&out[*x]).total_cmp(&turn(&out[*y])))
@@ -2643,7 +2643,7 @@ mod planar_tests {
                 let arc = Seg2::Arc { center: Vec2::new(2., -3.), radius: 4., start, sweep };
                 for index in 0..128 {
                     let angle = index as f64 * std::f64::consts::TAU / 128.;
-                    let point = Vec2::new(2., -3.) + Vec2::new(angle.cos(), angle.sin()) * 6.;
+                    let point = Vec2::new(2., -3.) + Vec2::new(pmath::cos(angle), pmath::sin(angle)) * 6.;
                     let nearest = arc.point_at(closest_param(&arc, point));
                     // Includes both signs, sweeps over pi, seam crossings and endpoint clamps.
                     for sample in 0..=128 {
@@ -2667,7 +2667,7 @@ mod planar_tests {
         let points: Vec<_> = (0..count)
             .map(|i| {
                 let angle = std::f64::consts::TAU * i as f64 / count as f64;
-                Vec2::new(radius * angle.cos(), radius * angle.sin())
+                Vec2::new(radius * pmath::cos(angle), radius * pmath::sin(angle))
             })
             .collect();
         let region = Region2 { outer: Loop2::polygon(&points), holes: vec![] };
@@ -2679,7 +2679,7 @@ mod planar_tests {
         assert_eq!(recovered.section.regions.len(), 1);
         assert_eq!(recovered.section.regions[0].outer.segs.len(), count);
         assert!(recovered.section.regions[0].outer.segs.iter().all(|s| matches!(s, Seg2::Line { .. })));
-        let area = count as f64 * radius * radius * (std::f64::consts::TAU / count as f64).sin() / 2.;
+        let area = count as f64 * radius * radius * pmath::sin(std::f64::consts::TAU / count as f64) / 2.;
         assert!((recovered.section.regions[0].area() - area).abs() < area * 1e-12);
         assert!((recovered.lo - 0.).abs() < 1e-8 && (recovered.hi - 2.).abs() < 1e-8);
         let cutter = crate::box_solid(Vec3::new(-1001., -1001., -1.), Vec3::new(1001., 1001., 3.)).unwrap();
@@ -3413,7 +3413,7 @@ mod planar_tests {
     /// corners: an arc of radius `r` tangent to both edges there, closed by two lines that meet
     /// `reach` out past the corner.
     fn plate_and_corner_fillet(theta: f64, r: f64, reach: f64) -> (Region2, Region2) {
-        let (sn, cs) = theta.sin_cos();
+        let (sn, cs) = pmath::sin_cos(theta);
         let rot = |x: f64, y: f64| Vec2::new(x * cs - y * sn, x * sn + y * cs);
         let (w, lo, hi) = (200.0, -40.25, -3.25);
         let plate = Region2 { outer: Loop2::polygon(&[rot(0.0, hi), rot(0.0, lo), rot(w, lo), rot(w, hi)]), holes: vec![] };
@@ -3462,7 +3462,7 @@ mod planar_tests {
     /// lies against its base: the strip's corners on that edge rounded to the nanometre, as a
     /// flange keeps them, and moved by `off`. Both turned by `theta` about the origin.
     fn plate_and_strip_by_a_bent_edge(theta: f64, slope: f64, off: Vec2) -> (Region2, Region2) {
-        let (sn, cs) = theta.sin_cos();
+        let (sn, cs) = pmath::sin_cos(theta);
         let rot = |x: f64, y: f64| Vec2::new(x * cs - y * sn, x * sn + y * cs);
         let nm = |p: Vec2| Vec2::new((p.x * 1e9).round() / 1e9, (p.y * 1e9).round() / 1e9) + off;
         let plate = [rot(95.0, 50.0 + 5.0 * slope), rot(100.0, 50.0), rot(150.0, 50.0), rot(150.0, 80.0), rot(95.0, 80.0)];

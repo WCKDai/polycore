@@ -151,7 +151,7 @@ fn extrude_sides_follow_profile_segments_in_any_order() {
 /// A big arc is built as two edges: both faces come from it.
 #[test]
 fn extrude_a_big_arc_gives_two_faces_of_one_segment() {
-    let (a, b) = (Vec2::new(10.0 * (0.3f64).cos(), -10.0 * (0.3f64).sin()), Vec2::new(10.0 * (0.3f64).cos(), 10.0 * (0.3f64).sin()));
+    let (a, b) = (Vec2::new(10.0 * pmath::cos(0.3f64), -10.0 * pmath::sin(0.3f64)), Vec2::new(10.0 * pmath::cos(0.3f64), 10.0 * pmath::sin(0.3f64)));
     let arc = Seg2::Arc { center: Vec2::ZERO, radius: 10.0, start: 0.3, sweep: TAU - 0.6 };
     let r = Region2 { outer: Loop2 { segs: vec![arc, Seg2::Line { a, b }] }, holes: vec![] };
     let body = crate::extrude(&Plane::XY, std::slice::from_ref(&r), 0.0, 5.0).unwrap().pop().unwrap();
@@ -199,7 +199,7 @@ fn expected_revolution(b: &Body, r: &Region2) -> Vec<Vec<FaceOrigin>> {
     expected_swept(
         b,
         r,
-        |p| Vec2::new(p.x.hypot(p.y), p.z),
+        |p| Vec2::new(pmath::hypot(p.x, p.y), p.z),
         1e-6,
         |pts| Some(if pts.iter().all(|p| p.y.abs() < 1e-9 && p.x > -1e-9) { START } else { END }),
     )
@@ -254,7 +254,7 @@ fn clockwise_loops_and_a_reseamed_circle_keep_their_numbers() {
         let (_, centres) = mesh_points(&b);
         let mut halves = [0, 0];
         for ((g, w), centres) in got.iter().zip(&want).zip(&centres) {
-            let flat: Vec<Vec2> = centres.iter().map(|p| Vec2::new(p.x.hypot(p.y), p.z)).collect();
+            let flat: Vec<Vec2> = centres.iter().map(|p| Vec2::new(pmath::hypot(p.x, p.y), p.z)).collect();
             if flat.iter().all(|q| (q.dist(c) - rad).abs() < 0.1) {
                 let first = flat.iter().all(|q| (0.4142 - 1e-3..=0.4142 + PI + 1e-3).contains(&first_half(*q)));
                 assert_eq!(g, &if first { vec![P(5), P(6)] } else { vec![P(4), P(5), P(6)] }, "angle {angle}");
@@ -449,7 +449,7 @@ fn sweeps_along_paths() {
     let curve: Vec<Vec3> = (0..=40)
         .map(|i| {
             let t = i as f64 / 40.0 * FRAC_PI_2;
-            Vec3::new(30.0 * t.sin(), 30.0 * (1.0 - t.cos()), 10.0 * t)
+            Vec3::new(30.0 * pmath::sin(t), 30.0 * (1.0 - pmath::cos(t)), 10.0 * t)
         })
         .collect();
     let plane = Plane::from_normal(curve[0], (curve[1] - curve[0]).normalized().unwrap()).unwrap();
@@ -553,7 +553,7 @@ fn emboss_reports_kept_trimmed_and_profile_faces() {
         // Each wall over its segment: the sketch's y is the cylinder's z, its x the arc length.
         for (pts, f) in points(&e).iter().zip(&h.faces) {
             let [FaceOrigin::Profile { segment }] = f.origins.as_slice() else { continue };
-            let back: Vec<Vec2> = pts.iter().map(|p| Vec2::new(10.0 * (-p.x).atan2(p.y), p.z)).collect();
+            let back: Vec<Vec2> = pts.iter().map(|p| Vec2::new(10.0 * pmath::atan2(-p.x, p.y), p.z)).collect();
             assert_eq!(under(&[&profile.outer], &back, 1e-6), [*segment]);
         }
     }

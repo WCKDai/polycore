@@ -810,8 +810,8 @@ pub fn network_surface(u: Vec<NetworkCurve>, v: Vec<NetworkCurve>, tol: Toleranc
             if !(len > 0.0) {
                 return invalid(format!("{vl} has no direction where it meets {ul}"));
             }
-            if d1.dot(frame.n).abs() > TANGENT_TOL.sin() * len {
-                let deg = (d1.dot(frame.n).abs() / len).clamp(0.0, 1.0).asin().to_degrees();
+            if d1.dot(frame.n).abs() > pmath::sin(TANGENT_TOL) * len {
+                let deg = pmath::asin((d1.dot(frame.n).abs() / len).clamp(0.0, 1.0)).to_degrees();
                 return invalid(format!(
                     "{vl} meets the {} boundary {ul} at {deg:.2}° to its face: it must leave the face tangent to it there",
                     if end_order[end] == 1 { "G1" } else { "G2" }
@@ -819,7 +819,7 @@ pub fn network_surface(u: Vec<NetworkCurve>, v: Vec<NetworkCurve>, tol: Toleranc
             }
             let a = d1.dot(frame.b);
             let outward = if end == 0 { a } else { -a };
-            if outward <= TANGENT_TOL.sin() * len {
+            if outward <= pmath::sin(TANGENT_TOL) * len {
                 return invalid(format!("{vl} turns back over the face of {ul} where it meets it"));
             }
             let c = d1.dot(frame.t);
@@ -1290,7 +1290,7 @@ mod tests {
         assert!(s.eval(0.5, 0.5).unwrap().dist(p(2.0, 1.5)) < 1e-9, "the middle of the patch");
         // A plane z = 0.3x + 0.2y + 1 bounded by two arcs bulging out and two lines.
         let on = |x: f64, y: f64| Vec3::new(x, y, 0.3 * x + 0.2 * y + 1.0);
-        let arc = |y: f64, sign: f64| move |t: f64| on(10.0 * t, y + sign * 2.0 * (std::f64::consts::PI * t).sin());
+        let arc = |y: f64, sign: f64| move |t: f64| on(10.0 * t, y + sign * 2.0 * pmath::sin(std::f64::consts::PI * t));
         let s = network_surface(
             vec![curve("bottom", arc(0.0, -1.0)), curve("top", arc(8.0, 1.0))],
             vec![line("left", on(0.0, 0.0), on(0.0, 8.0)), line("right", on(10.0, 0.0), on(10.0, 8.0))],
@@ -1340,7 +1340,7 @@ mod tests {
         assert!((tri - 40.0).abs() < 1e-3, "triangle area {tri}");
         // The quarter disc of radius 10 about the origin.
         let r = 10.0;
-        let arc = move |t: f64| Vec3::new(r * (std::f64::consts::FRAC_PI_2 * t).cos(), r * (std::f64::consts::FRAC_PI_2 * t).sin(), 0.0);
+        let arc = move |t: f64| Vec3::new(r * pmath::cos(std::f64::consts::FRAC_PI_2 * t), r * pmath::sin(std::f64::consts::FRAC_PI_2 * t), 0.0);
         let s = network_surface(
             vec![curve("arc", arc), apex("centre", Vec3::ZERO)],
             vec![line("x", Vec3::ZERO, Vec3::X * r), line("y", Vec3::Y * r, Vec3::ZERO)],
@@ -1412,7 +1412,7 @@ mod tests {
         for q in grid(&ruled, 10) {
             assert!((q.z - 0.4 * q.y).abs() < 1e-9, "{q:?}: a flat strip, not twisted");
         }
-        let arc = |z: f64, r: f64| move |t: f64| Vec3::new(r * (std::f64::consts::PI * t).cos(), r * (std::f64::consts::PI * t).sin(), z);
+        let arc = |z: f64, r: f64| move |t: f64| Vec3::new(r * pmath::cos(std::f64::consts::PI * t), r * pmath::sin(std::f64::consts::PI * t), z);
         let fs: Vec<(f64, f64)> = vec![(0.0, 5.0), (4.0, 6.0), (8.0, 5.5), (12.0, 7.0)];
         let s = network_surface(fs.iter().enumerate().map(|(k, &(z, r))| curve(&format!("c{k}"), arc(z, r))).collect(), vec![], TOL).unwrap();
         // Every section lies on the surface: its iso-curve at the section's parameter is close.
@@ -1510,7 +1510,7 @@ mod tests {
         for k in 0..=10 {
             let u = k as f64 / 10.0;
             let (d1, _) = deriv_v(&s, u, 1e-5);
-            let angle = (d1.z / d1.len()).asin().to_degrees().abs();
+            let angle = pmath::asin(d1.z / d1.len()).to_degrees().abs();
             assert!(angle < 1e-3 && d1.y > 0.0, "u = {u}: leaves the plane at {angle}°");
         }
         let r = 10.0;
@@ -1550,14 +1550,14 @@ mod tests {
         let side = |x: f64| {
             move |t: f64| {
                 let a = -std::f64::consts::FRAC_PI_2 + t * 0.927_295_218_001_612_2;
-                Vec3::new(x, 12.5 * a.cos(), 12.5 + 12.5 * a.sin())
+                Vec3::new(x, 12.5 * pmath::cos(a), 12.5 + 12.5 * pmath::sin(a))
             }
         };
         let far = line("far", Vec3::new(0.0, 10.0, 5.0), Vec3::new(10.0, 10.0, 5.0));
         let s = network_surface(vec![edge(), far], vec![curve("left", side(0.0)), curve("right", side(10.0))], TOL).unwrap();
         for k in 0..=10 {
             let (d1, _) = deriv_v(&s, k as f64 / 10.0, 1e-5);
-            let angle = (d1.z / d1.len()).asin().to_degrees().abs();
+            let angle = pmath::asin(d1.z / d1.len()).to_degrees().abs();
             assert!(angle < 0.01, "leaves the plane at {angle}°");
         }
         let far = line("far", Vec3::new(0.0, 10.0, 5.0), Vec3::new(10.0, 10.0, 5.0));
@@ -1581,7 +1581,7 @@ mod tests {
         let one = network_surface(vec![l("a", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0])], vec![], TOL);
         assert!(one.is_err());
         assert!(network_surface(vec![], vec![], TOL).is_err());
-        let circle = curve("ring", |t: f64| Vec3::new((6.3 * t).cos(), (6.3 * t).sin(), 0.0).lerp(Vec3::X, if t >= 1.0 { 1.0 } else { 0.0 }));
+        let circle = curve("ring", |t: f64| Vec3::new(pmath::cos(6.3 * t), pmath::sin(6.3 * t), 0.0).lerp(Vec3::X, if t >= 1.0 { 1.0 } else { 0.0 }));
         let closed = network_surface(vec![circle, l("b", [0.0, 0.0, 1.0], [1.0, 0.0, 1.0])], vec![], TOL).unwrap_err();
         assert!(closed.to_string().contains("closed"), "{closed}");
         let zero = network_surface(vec![l("a", [0.0; 3], [0.0; 3]), l("b", [0.0, 0.0, 1.0], [1.0, 0.0, 1.0])], vec![], TOL).unwrap_err();

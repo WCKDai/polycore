@@ -31,7 +31,7 @@ fn scaled_arc_part(k: f64) -> Body {
 const LONG: Vec3 = Vec3::new(20.0, -21.0, 10.0);
 fn arc_top() -> Vec3 {
     let a = std::f64::consts::FRAC_PI_4;
-    Vec3::new(CX - 21.0 * a.cos(), -21.0 + 21.0 * a.sin(), 10.0)
+    Vec3::new(CX - 21.0 * pmath::cos(a), -21.0 + 21.0 * pmath::sin(a), 10.0)
 }
 const BACK: Vec3 = Vec3::new(30.0, 0.0, 10.0);
 const UPRIGHT: Vec3 = Vec3::new(X0, -21.0, 5.0);
@@ -54,13 +54,16 @@ fn removed(round: bool, pts: &[Vec3]) -> f64 {
 
 /// The part's material at `p`.
 fn in_part(p: Vec3) -> bool {
-    (0.0..=CX).contains(&p.x) && (-21.0..=0.0).contains(&p.y) && (0.0..=10.0).contains(&p.z) && (p.x <= X0 || (p.x - CX).hypot(p.y + 21.0) >= 21.0)
+    (0.0..=CX).contains(&p.x)
+        && (-21.0..=0.0).contains(&p.y)
+        && (0.0..=10.0).contains(&p.z)
+        && (p.x <= X0 || pmath::hypot(p.x - CX, p.y + 21.0) >= 21.0)
 }
 
 /// Rounds of radius 2 about the top front corner of the arc: what each edge's round alone
 /// takes off there (between the edge and the ball, on the edge's side of its contacts).
 fn off_long(p: Vec3) -> bool {
-    in_part(p) && p.y < -19.0 && p.z > 8.0 && (p.y + 19.0).hypot(p.z - 8.0) > 2.0
+    in_part(p) && p.y < -19.0 && p.z > 8.0 && pmath::hypot(p.y + 19.0, p.z - 8.0) > 2.0
 }
 /// The upright's ball, 2 from the front and 23 from the arc's axis.
 fn upright_centre() -> f64 {
@@ -68,23 +71,23 @@ fn upright_centre() -> f64 {
 }
 fn off_upright(p: Vec3) -> bool {
     let (dx, dy) = (p.x - upright_centre(), p.y + 19.0);
-    let a = dy.atan2(dx);
-    in_part(p) && a >= -std::f64::consts::FRAC_PI_2 && a <= (-2.0f64).atan2(CX - upright_centre()) && dx.hypot(dy) > 2.0
+    let a = pmath::atan2(dy, dx);
+    in_part(p) && a >= -std::f64::consts::FRAC_PI_2 && a <= pmath::atan2(-2.0f64, CX - upright_centre()) && pmath::hypot(dx, dy) > 2.0
 }
 fn off_arc(p: Vec3) -> bool {
-    let rho = (p.x - CX).hypot(p.y + 21.0);
-    in_part(p) && p.y >= -21.0 && rho < 23.0 && p.z > 8.0 && (rho - 23.0).hypot(p.z - 8.0) > 2.0
+    let rho = pmath::hypot(p.x - CX, p.y + 21.0);
+    in_part(p) && p.y >= -21.0 && rho < 23.0 && p.z > 8.0 && pmath::hypot(rho - 23.0, p.z - 8.0) > 2.0
 }
 /// Kept when all three are rounded and the corner with them: within 2 of a ball centre 2 from
 /// all three faces (z ≤ 8, y ≥ −19, 23 from the arc's axis), the nearest on a face, an edge
 /// or the corner of that region.
 fn kept_by_balls(p: Vec3) -> bool {
     let c = Vec3::new(upright_centre(), -19.0, 8.0);
-    let inside = |q: Vec3| q.z <= 8.0 + 1e-12 && q.y >= -19.0 - 1e-12 && (q.x - CX).hypot(q.y + 21.0) >= 23.0 - 1e-12;
+    let inside = |q: Vec3| q.z <= 8.0 + 1e-12 && q.y >= -19.0 - 1e-12 && pmath::hypot(q.x - CX, q.y + 21.0) >= 23.0 - 1e-12;
     let mut near =
         vec![c, Vec3::new(p.x.min(c.x), -19.0, 8.0), Vec3::new(c.x, -19.0, p.z.min(8.0)), Vec3::new(p.x, p.y, 8.0), Vec3::new(p.x, -19.0, p.z)];
     let (dx, dy) = (p.x - CX, p.y + 21.0);
-    let d = dx.hypot(dy);
+    let d = pmath::hypot(dx, dy);
     if d > 1e-9 {
         let (ux, uy) = (dx / d, dy / d);
         near.push(Vec3::new(CX + ux * 23.0, -21.0 + uy * 23.0, p.z));
@@ -162,8 +165,8 @@ fn over_cusp(x0: f64, f: impl Fn(f64, f64) -> f64) -> f64 {
 /// tip's side of its contacts.
 fn off_tip(x: f64, y: f64) -> bool {
     let k = tip_ball();
-    let a = (y - k.y).atan2(x - k.x);
-    (x - k.x).hypot(y - k.y) > 2.0 && a >= (-21.0 - k.y).atan2(CX - k.x) && a <= std::f64::consts::FRAC_PI_2
+    let a = pmath::atan2(y - k.y, x - k.x);
+    pmath::hypot(x - k.x, y - k.y) > 2.0 && a >= pmath::atan2(-21.0 - k.y, CX - k.x) && a <= std::f64::consts::FRAC_PI_2
 }
 
 /// The knife-edge tip (the arc and the top line meeting at no angle) rounds to the ball 2 from
@@ -189,7 +192,7 @@ fn a_knife_edge_tip_rounds_where_the_ball_fits() {
 fn rounds_meeting_at_a_knife_edge_tip() {
     let k = tip_ball();
     let tip = removed(true, &[TIP]);
-    let arc_d = |x: f64, y: f64| 23.0 - (x - CX).hypot(y + 21.0);
+    let arc_d = |x: f64, y: f64| 23.0 - pmath::hypot(x - CX, y + 21.0);
     let back_d = |_: f64, y: f64| y + 2.0;
     for (edge, d) in [(arc_top(), &arc_d as &dyn Fn(f64, f64) -> f64), (BACK, &back_d)] {
         let both = over_cusp(k.x - 1.0, |x, y| {
@@ -212,7 +215,7 @@ fn chamfers_meeting_at_a_corner_of_an_arc_wall() {
     for i in 0..((44.0 - 36.0) / h) as usize {
         for j in 0..(3.0 / h) as usize {
             let (x, y) = (36.0 + (i as f64 + 0.5) * h, -21.0 + (j as f64 + 0.5) * h);
-            let rho = (x - CX).hypot(y + 21.0);
+            let rho = pmath::hypot(x - CX, y + 21.0);
             if in_part(Vec3::new(x, y, 9.99)) && y < -19.0 && rho < 23.0 {
                 both += (2.0 - (y + 21.0).max(rho - 21.0)).max(0.0) * h * h;
             }

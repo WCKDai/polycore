@@ -606,7 +606,7 @@ mod tests {
             let n = s.normal(u, v);
             Vec3::new(n.x, n.y, n.z)
         };
-        n(a).dot(n(b)).abs().clamp(0.0, 1.0).acos().to_degrees()
+        pmath::acos(n(a).dot(n(b)).abs().clamp(0.0, 1.0)).to_degrees()
     }
 
     /// G1 against a flat sheet's open edge: a loft from the edge to a line above, and a patch

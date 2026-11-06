@@ -259,7 +259,7 @@ impl Field {
                 if w.dot(out + n) < 0.0 {
                     w = -w;
                 }
-                r * angle.cos() + w * angle.sin()
+                r * pmath::cos(angle) + w * pmath::sin(angle)
             }
             RuledMode::Direction(v) => v,
         };
@@ -557,7 +557,7 @@ impl Joint {
             .or_else(|| ea.ruling.cross(eb.ruling).normalized())
             .ok_or_else(|| refuse("the strips turn back on each other"))?;
         let (pa, pb) = (flat(ea.ruling, axis), flat(eb.ruling, axis));
-        let turn = pa.cross(pb).dot(axis).atan2(pa.dot(pb));
+        let turn = pmath::atan2(pa.cross(pb).dot(axis), pa.dot(pb));
         let (axis, turn) = if turn < 0.0 { (-axis, -turn) } else { (axis, turn) };
         if !(turn > 1e-9 && turn < std::f64::consts::PI - 1e-6) {
             return Err(refuse("the strips turn back on each other"));
@@ -662,8 +662,8 @@ mod tests {
     fn a_straight_edge_in_every_mode() {
         let b = box_solid(Vec3::ZERO, Vec3::new(10.0, 10.0, 10.0)).unwrap();
         let (edge, top, front) = ([Vec3::new(5.0, 0.0, 10.0)], Vec3::new(5.0, 5.0, 10.0), Vec3::new(5.0, 0.0, 5.0));
-        let (s30, c30) = (30f64.to_radians().sin(), 30f64.to_radians().cos());
-        let (s10, c10) = (10f64.to_radians().sin(), 10f64.to_radians().cos());
+        let (s30, c30) = (pmath::sin(30f64.to_radians()), pmath::cos(30f64.to_radians()));
+        let (s10, c10) = (pmath::sin(10f64.to_radians()), pmath::cos(10f64.to_radians()));
         let cases: [(Ruled, Vec3, Vec3); 7] = [
             // Up the top's normal.
             (ruled(RuledMode::Normal, 4.0, top), Vec3::new(0.0, 0.0, 10.0), Vec3::new(10.0, 0.0, 14.0)),
@@ -805,7 +805,7 @@ mod tests {
         let cup = crate::boolean(&b, &tool, crate::BoolOp::Cut).unwrap().unwrap();
         let z = 50.0 - (1600.0f64 - 0.0).sqrt();
         let (rim, side, cut) = ([Vec3::new(0.0, -14.0, z)], Vec3::new(0.0, -14.0, 5.0), Vec3::new(0.0, 0.0, z));
-        let want = 3.0 * 80.0 * (14.0f64 / 40.0).asin();
+        let want = 3.0 * 80.0 * pmath::asin(14.0f64 / 40.0);
         for r in [ruled(RuledMode::Normal, 3.0, side), ruled(RuledMode::Tangent, 3.0, cut)] {
             let s = ruled_surface(&cup, &rim, &r).unwrap();
             assert!(rel(area(&s), want) < 2e-3, "{r:?}: {} vs {want}", area(&s)); // (measured on meshes)

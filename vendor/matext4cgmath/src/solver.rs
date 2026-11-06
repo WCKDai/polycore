@@ -1,4 +1,30 @@
 use crate::*;
+use cgmath::num_traits::NumCast;
+
+// SolidCraft: the roots are computed through `pmath` (IEEE 754 arithmetic alone), never the
+// platform's libm or num_complex's polar form, so every platform gets the same bits. The scalar
+// is generic; the kernel runs it on f64, where the conversions are exact.
+fn to64<F: BaseFloat>(x: F) -> f64 { x.to_f64().unwrap_or(f64::NAN) }
+fn from64<F: BaseFloat>(x: f64) -> F { <F as NumCast>::from(x).unwrap_or_else(F::nan) }
+/// The real cube root, with the sign of `x`.
+fn cbrt_f<F: BaseFloat>(x: F) -> F { from64(pmath::cbrt(to64(x))) }
+/// `|z|`.
+fn norm_c<F: BaseFloat>(z: Complex<F>) -> F { from64(pmath::hypot(to64(z.re), to64(z.im))) }
+/// The principal cube root of `z` (the argument in (−π, π] divided by three).
+fn cbrt_c<F: BaseFloat>(z: Complex<F>) -> Complex<F> {
+    let (re, im) = (to64(z.re), to64(z.im));
+    let r = pmath::cbrt(pmath::hypot(re, im));
+    let (s, c) = pmath::sin_cos(pmath::atan2(im, re) / 3.0);
+    Complex::new(from64(r * c), from64(r * s))
+}
+/// The principal square root of `z`: `√((|z| + re)/2) + i·sign(im)·√((|z| − re)/2)`.
+fn sqrt_c<F: BaseFloat>(z: Complex<F>) -> Complex<F> {
+    let (re, im) = (to64(z.re), to64(z.im));
+    let r = pmath::hypot(re, im);
+    let x = ((r + re) / 2.0).sqrt();
+    let y = ((r - re) / 2.0).sqrt();
+    Complex::new(from64(x), from64(if im.is_sign_negative() { -y } else { y }))
+}
 
 #[cfg_attr(doc, katexit::katexit)]
 /// Solve equation: $x^2 + ax + b = 0$.
@@ -69,21 +95,15 @@ pub fn pre_solve_cubic<F: BaseFloat>(p: F, q: F) -> [Complex<F>; 3] {
             let tmpx = -q_2 - alpha;
             let tmpy = -q_2 + alpha;
             (
-                Complex::new(
-                    F::signum(tmpx) * F::powf(F::abs(tmpx), F::one() / three),
-                    F::zero(),
-                ),
-                Complex::new(
-                    F::signum(tmpy) * F::powf(F::abs(tmpy), F::one() / three),
-                    F::zero(),
-                ),
+                Complex::new(cbrt_f(tmpx), F::zero()),
+                Complex::new(cbrt_f(tmpy), F::zero()),
             )
         }
         false => {
             let alphai = F::sqrt(-alpha2);
             (
-                Complex::powf(Complex::new(-q_2, alphai), F::one() / three),
-                Complex::powf(Complex::new(-q_2, -alphai), F::one() / three),
+                cbrt_c(Complex::new(-q_2, alphai)),
+                cbrt_c(Complex::new(-q_2, -alphai)),
             )
         }
     };
@@ -95,9 +115,9 @@ pub fn pre_solve_cubic<F: BaseFloat>(p: F, q: F) -> [Complex<F>; 3] {
         // SolidCraft: at most 100 steps. Near a double root (the eigenvalues of a
         // translation matrix) the iteration can cycle forever without meeting the tolerance.
         let mut steps = 0;
-        while f.norm() > eps_2 * f_prime.norm() && steps < 100 {
+        while norm_c(f) > eps_2 * norm_c(f_prime) && steps < 100 {
             steps += 1;
-            if f_prime.norm() < eps_2 {
+            if norm_c(f_prime) < eps_2 {
                 return;
             }
             *x -= f / f_prime;
@@ -167,9 +187,9 @@ pub fn pre_solve_quartic<F: BaseFloat>(p: F, q: F, r: F) -> [Complex<F>; 4] {
     let b = p * p - four * r;
     let c = -q * q;
     let f = solve_cubic(a, b, c);
-    let a = f[0].sqrt() / two;
-    let b = f[1].sqrt() / two;
-    let c = f[2].sqrt() / two;
+    let a = sqrt_c(f[0]) / two;
+    let b = sqrt_c(f[1]) / two;
+    let c = sqrt_c(f[2]) / two;
 
     let mut res = (0..8)
         .map(|i| {
@@ -196,9 +216,9 @@ pub fn pre_solve_quartic<F: BaseFloat>(p: F, q: F, r: F) -> [Complex<F>; 4] {
         // SolidCraft: at most 100 steps. Near a double root (the eigenvalues of a
         // translation matrix) the iteration can cycle forever without meeting the tolerance.
         let mut steps = 0;
-        while f.norm() > eps_2 * f_prime.norm() && steps < 100 {
+        while norm_c(f) > eps_2 * norm_c(f_prime) && steps < 100 {
             steps += 1;
-            if f_prime.norm() < eps_2 {
+            if norm_c(f_prime) < eps_2 {
                 return;
             }
             *x -= f / f_prime;

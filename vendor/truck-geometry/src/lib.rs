@@ -41,6 +41,10 @@ pub mod specifieds;
 /// Declares some decorators
 pub mod decorators;
 
+/// SolidCraft: sine, cosine, the angle of two vectors and the rotation about an axis from IEEE
+/// 754 arithmetic alone, the same bits on every platform.
+pub mod portable_trig;
+
 /// re-export all modules.
 pub mod prelude {
     use crate::*;

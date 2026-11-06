@@ -43,7 +43,7 @@ fn curve_shape(d1: Vec3, d2: Vec3, d3: Vec3) -> (Vec3, Vec3, Vec3) {
 
 /// The angle between two vectors, in degrees.
 fn angle_deg(a: Vec3, b: Vec3) -> f64 {
-    (a.normalized().unwrap().dot(b.normalized().unwrap())).clamp(-1.0, 1.0).acos().to_degrees()
+    pmath::acos((a.normalized().unwrap().dot(b.normalized().unwrap())).clamp(-1.0, 1.0)).to_degrees()
 }
 
 /// A circle of radius `r` at height `z` about the run (the z axis), sampled at `n` stations. Each
@@ -54,7 +54,7 @@ fn circle_section(r: f64, z: f64, n: usize, leave: Vec3, bend: impl Fn(Vec3) -> 
     (0..n)
         .map(|s| {
             let a = std::f64::consts::TAU * s as f64 / n as f64;
-            let p = Vec3::new(r * a.cos(), r * a.sin(), z);
+            let p = Vec3::new(r * pmath::cos(a), r * pmath::sin(a), z);
             Frame { p, leave, bend: bend(Vec3::new(p.x / r, p.y / r, 0.0)), bend_change: change }
         })
         .collect()
@@ -90,7 +90,7 @@ fn rounded_rect_at(a: f64, b: f64, r: f64, s: f64) -> Vec3 {
     let f = if segs[k] > 0.0 { left / segs[k] } else { 0.0 };
     let arc = |centre: Vec3, from: f64| {
         let ang = from + quarter * f;
-        Vec3::new(centre.x + r * ang.cos(), centre.y + r * ang.sin(), 0.0)
+        Vec3::new(centre.x + r * pmath::cos(ang), centre.y + r * pmath::sin(ang), 0.0)
     };
     match k {
         0 => Vec3::new(a, -sb + 2.0 * sb * f, 0.0),
@@ -177,7 +177,7 @@ fn three_sections_run_through_every_station() {
         let v = s as f64 / (n - 1) as f64;
         // The stations run round the circle at even angles.
         let angle = std::f64::consts::TAU * s as f64 / n as f64;
-        let radial = Vec3::new(angle.cos(), angle.sin(), 0.0);
+        let radial = Vec3::new(pmath::cos(angle), pmath::sin(angle), 0.0);
         let (_, d1, d2, d3) = run_derivs(&body, 0.0, v, false, 1e-3);
         let (t, bend, _) = curve_shape(d1, d2, d3);
         assert!(angle_deg(t, Vec3::new(0.0, 0.0, 1.0)) < 0.01, "the face leaves along +z: {t:?}");

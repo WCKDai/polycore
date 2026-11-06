@@ -310,7 +310,7 @@ mod tests {
         let tool = SplitTool::Curves { plane: front, curves: vec![slot], along: None };
         // The round ends: x = a·sin φ, the disc's height 2a·cos φ, dx = a·cos φ dφ (Simpson).
         let n = 4000;
-        let f = |phi: f64| 2.0 * a * a * phi.cos().powi(2) * r / (r * r - (a * phi.sin()).powi(2)).sqrt();
+        let f = |phi: f64| 2.0 * a * a * pmath::cos(phi).powi(2) * r / (r * r - (a * pmath::sin(phi)).powi(2)).sqrt();
         let h = PI / n as f64;
         let ends = (0..=n)
             .map(|k| {
@@ -326,7 +326,7 @@ mod tests {
             .sum::<f64>()
             * h
             / 3.0;
-        let inside = 16.0 * 2.0 * r * (a / r).asin() + ends;
+        let inside = 16.0 * 2.0 * r * pmath::asin(a / r) + ends;
         let on = Vec3::new(0.0, r, 20.0);
         let kept = trim(&half, &tool, on).unwrap();
         eprintln!("slot on the cylinder: {} measured, {inside} analytic", area(&kept));

@@ -8,29 +8,35 @@ impl Revolution {
             axis: axis.normalize(),
         }
     }
+    // PolyCore: the sine and cosine of `v` come from `portable_trig::sin_cos_memo`, the same bits
+    // as `sin_cos`'s from a per-thread memo, since `presearch` evaluates `subs` on a grid of a
+    // hundred angles a hundred times each for every point of an intersection curve.
     #[inline(always)]
     fn point_rotation_matrix(self, v: f64) -> Matrix4 {
         Matrix4::from_translation(self.origin.to_vec())
-            * Matrix4::from_axis_angle(self.axis, Rad(v))
+            * portable_trig::rotation_memo(self.axis, Rad(v))
             * Matrix4::from_translation(-self.origin.to_vec())
     }
     #[inline(always)]
     fn vector_rotation_matrix(self, v: f64) -> Matrix4 {
-        Matrix4::from_axis_angle(self.axis, Rad(v))
+        portable_trig::rotation_memo(self.axis, Rad(v))
     }
     #[inline(always)]
     fn derivation_rotation_matrix(self, v: f64) -> Matrix4 {
         let n = self.axis;
+        // PolyCore: one sine and cosine instead of fourteen (the same bits: `pmath::sin` and
+        // `pmath::cos` are `sin_cos`'s parts).
+        let (s, c) = portable_trig::sin_cos_memo(v);
         Matrix3::new(
-            n[0] * n[0] * f64::sin(v) - f64::sin(v),
-            n[0] * n[1] * f64::sin(v) + n[2] * f64::cos(v),
-            n[0] * n[2] * f64::sin(v) - n[1] * f64::cos(v),
-            n[0] * n[1] * f64::sin(v) - n[2] * f64::cos(v),
-            n[1] * n[1] * f64::sin(v) - f64::sin(v),
-            n[1] * n[2] * f64::sin(v) + n[0] * f64::cos(v),
-            n[0] * n[2] * f64::sin(v) + n[1] * f64::cos(v),
-            n[1] * n[2] * f64::sin(v) - n[0] * f64::cos(v),
-            n[2] * n[2] * f64::sin(v) - f64::sin(v),
+            n[0] * n[0] * s - s,
+            n[0] * n[1] * s + n[2] * c,
+            n[0] * n[2] * s - n[1] * c,
+            n[0] * n[1] * s - n[2] * c,
+            n[1] * n[1] * s - s,
+            n[1] * n[2] * s + n[0] * c,
+            n[0] * n[2] * s + n[1] * c,
+            n[1] * n[2] * s - n[0] * c,
+            n[2] * n[2] * s - s,
         )
         .into()
     }
@@ -74,7 +80,7 @@ impl Revolution {
         let (p, q) = (p - self.origin, q - self.origin);
         let hp = (p - p.dot(self.axis) * self.axis).normalize();
         let hq = (q - q.dot(self.axis) * self.axis).normalize();
-        let t = f64::acos(f64::clamp(hp.dot(hq), -1.0, 1.0));
+        let t = pmath::acos(f64::clamp(hp.dot(hq), -1.0, 1.0));
         match hp.cross(hq).dot(self.axis) < 0.0 {
             false => t,
             true => 2.0 * PI - t,
@@ -527,7 +533,7 @@ where C: ParametricCurve3D + ParameterDivision1D<Point = Point3>
                 f64::max(max2, h)
             })
             .sqrt();
-        let acos = f64::acos(1.0 - tol / max);
+        let acos = pmath::acos(1.0 - tol / max);
         let div: usize = 1 + ((vrange.1 - vrange.0) / acos).floor() as usize;
         let circle_division = (0..=div)
             .map(|j| vrange.0 + (vrange.1 - vrange.0) * j as f64 / div as f64)
@@ -549,20 +555,20 @@ fn revolve_test() {
             let v = 2.0 * PI * j as f64 / N as f64;
             let res = surface.subs(u, v);
             let ans = Point3::new(
-                u * f64::cos(v) + (1.0 - u) * f64::sin(v),
+                u * pmath::cos(v) + (1.0 - u) * pmath::sin(v),
                 2.0 * (1.0 - u),
-                -u * f64::sin(v) + (1.0 - u) * f64::cos(v),
+                -u * pmath::sin(v) + (1.0 - u) * pmath::cos(v),
             );
             assert_near!(res, ans);
             let res_uder = surface.uder(u, v);
             let ans_uder =
-                Vector3::new(f64::cos(v) - f64::sin(v), -2.0, -f64::sin(v) - f64::cos(v));
+                Vector3::new(pmath::cos(v) - pmath::sin(v), -2.0, -pmath::sin(v) - pmath::cos(v));
             assert_near!(res_uder, ans_uder);
             let res_vder = surface.vder(u, v);
             let ans_vder = Vector3::new(
-                -u * f64::sin(v) + (1.0 - u) * f64::cos(v),
+                -u * pmath::sin(v) + (1.0 - u) * pmath::cos(v),
                 0.0,
-                -u * f64::cos(v) - (1.0 - u) * f64::sin(v),
+                -u * pmath::cos(v) - (1.0 - u) * pmath::sin(v),
             );
             assert_near!(res_vder, ans_vder);
             let res_uuder = surface.uuder(u, v);
@@ -570,13 +576,13 @@ fn revolve_test() {
             assert_near!(res_uuder, ans_uuder);
             let res_uvder = surface.uvder(u, v);
             let ans_uvder =
-                Vector3::new(-f64::sin(v) - f64::cos(v), 0.0, -f64::cos(v) + f64::sin(v));
+                Vector3::new(-pmath::sin(v) - pmath::cos(v), 0.0, -pmath::cos(v) + pmath::sin(v));
             assert_near!(res_uvder, ans_uvder);
             let res_vvder = surface.vvder(u, v);
             let ans_vvder = Vector3::new(
-                -u * f64::cos(v) - (1.0 - u) * f64::sin(v),
+                -u * pmath::cos(v) - (1.0 - u) * pmath::sin(v),
                 0.0,
-                u * f64::sin(v) - (1.0 - u) * f64::cos(v),
+                u * pmath::sin(v) - (1.0 - u) * pmath::cos(v),
             );
             assert_near!(res_vvder, ans_vvder);
             let normal = surface.normal(u, v);

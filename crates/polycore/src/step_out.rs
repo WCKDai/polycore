@@ -211,7 +211,7 @@ impl Out {
                 let ring = |k: usize| {
                     let ang = std::f64::consts::FRAC_PI_4 * k as f64;
                     let (scale, w) = if k % 2 == 1 { (std::f64::consts::SQRT_2, std::f64::consts::FRAC_1_SQRT_2) } else { (1.0, 1.0) };
-                    (ang.cos() * scale, ang.sin() * scale, w)
+                    (pmath::cos(ang) * scale, pmath::sin(ang) * scale, w)
                 };
                 let (mut rows, mut weights) = (Vec::new(), Vec::new());
                 for i in 0..9 {
@@ -655,9 +655,9 @@ fn analytic_revolution(ex: &p21::Exchange, e: &p21::Entity) -> Option<Analytic> 
             } else {
                 // Open the cone along +z: the radius grows that way.
                 let z = if dr * da > 0.0 { a } else { mul(a, -1.0) };
-                let angle = (dr.abs() / da.abs()).atan();
+                let angle = pmath::atan(dr.abs() / da.abs());
                 let r = norm(radial(q));
-                let n = sub(mul(eq, angle.cos()), mul(z, angle.sin()));
+                let n = sub(mul(eq, pmath::cos(angle)), mul(z, pmath::sin(angle)));
                 (AnalyticKind::Cone { o: on_axis(q), z, x: eq, r, angle }, n)
             }
         }
@@ -706,7 +706,7 @@ fn same_analytic(a: &AnalyticKind, b: &AnalyticKind) -> bool {
         }
         (AnalyticKind::Cone { o, z, r, angle, .. }, AnalyticKind::Cone { o: o2, z: z2, r: r2, angle: a2, .. }) => {
             // Same apex, axis direction and angle.
-            let apex = |o: V3, z: V3, r: f64, an: f64| sub(o, mul(z, r / an.tan()));
+            let apex = |o: V3, z: V3, r: f64, an: f64| sub(o, mul(z, r / pmath::tan(an)));
             dot(*z, *z2) > 1.0 - 1e-9 && close(*angle, *a2) && same_pt(apex(*o, *z, *r, *angle), apex(*o2, *z2, *r2, *a2))
         }
         (AnalyticKind::Sphere { o, r, .. }, AnalyticKind::Sphere { o: o2, r: r2, .. }) => same_pt(*o, *o2) && close(*r, *r2),
@@ -821,11 +821,11 @@ fn ruled_bspline(ex: &p21::Exchange, e: &p21::Entity) -> Option<Analytic> {
         let (o, z, r, angle) = if (r1 - r0).abs() <= tol {
             (c0, axis, r0, 0.0)
         } else if r1 > r0 {
-            (c1, axis, r1, ((r1 - r0) / height).atan())
+            (c1, axis, r1, pmath::atan((r1 - r0) / height))
         } else {
-            (c0, mul(axis, -1.0), r0, ((r0 - r1) / height).atan())
+            (c0, mul(axis, -1.0), r0, pmath::atan((r0 - r1) / height))
         };
-        let radius_at = |q: V3| r + dot(sub(q, o), z) * angle.tan();
+        let radius_at = |q: V3| r + dot(sub(q, o), z) * pmath::tan(angle);
         let radial = |q: V3| {
             let v = sub(q, o);
             sub(v, mul(z, dot(v, z)))
@@ -838,7 +838,7 @@ fn ruled_bspline(ex: &p21::Exchange, e: &p21::Entity) -> Option<Analytic> {
         let nn = s.normal(um, vm);
         let q = at(um, vm);
         let eq = unit(radial(q))?;
-        let outward = sub(mul(eq, angle.cos()), mul(z, angle.sin()));
+        let outward = sub(mul(eq, pmath::cos(angle)), mul(z, pmath::sin(angle)));
         let flip = dot([nn.x, nn.y, nn.z], outward) < 0.0;
         // The parameter seam opposite the middle of the sheet, away from its edges.
         let x = mul(eq, -1.0);
@@ -860,7 +860,7 @@ fn analytic_bspline(ex: &p21::Exchange, e: &p21::Entity) -> Option<Analytic> {
 fn square_or_ruled(ex: &p21::Exchange, fe: &p21::Entity, kind: &AnalyticKind) -> bool {
     let (z, apex) = match *kind {
         AnalyticKind::Cylinder { z, .. } => (z, None),
-        AnalyticKind::Cone { o, z, r, angle, .. } if angle.tan() > 1e-12 => (z, Some(sub(o, mul(z, r / angle.tan())))),
+        AnalyticKind::Cone { o, z, r, angle, .. } if pmath::tan(angle) > 1e-12 => (z, Some(sub(o, mul(z, r / pmath::tan(angle))))),
         _ => return false,
     };
     face_edges(ex, fe).is_some_and(|ls| {
@@ -1628,7 +1628,7 @@ fn gap_middle(ex: &p21::Exchange, loops: &[Vec<(u64, bool)>], z: V3, radial: &im
     }
     let e1 = edges.first()?.0;
     let e2 = unit(cross(z, e1))?;
-    let angle = |d: V3| dot(d, e2).atan2(dot(d, e1)).rem_euclid(TAU);
+    let angle = |d: V3| pmath::atan2(dot(d, e2), dot(d, e1)).rem_euclid(TAU);
     let close = |a: f64, b: f64| {
         let d = (a - b).rem_euclid(TAU);
         d < 1e-6 || TAU - d < 1e-6
@@ -1655,7 +1655,7 @@ fn gap_middle(ex: &p21::Exchange, loops: &[Vec<(u64, bool)>], z: V3, radial: &im
     let gaps: Vec<(f64, f64)> = (0..n).filter_map(|i| Some((*angles.get(i)?, *angles.get((i + 1) % n)?))).filter(|(s, t)| !joined(*s, *t)).collect();
     let [(s, t)] = gaps[..] else { return None };
     let m = s + (t - s).rem_euclid(TAU) / 2.0;
-    unit(add(mul(e1, m.cos()), mul(e2, m.sin())))
+    unit(add(mul(e1, pmath::cos(m)), mul(e2, pmath::sin(m))))
 }
 
 /// Margin left round a face when its sheet is cut down to it, as a share of the face's own

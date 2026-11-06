@@ -174,7 +174,7 @@ fn blend_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, shape: Shape) ->
     let (Some(t1), Some(t2)) = (into(f1, n1), into(f2, n2)) else { return Err(KernelError::Failed("blend: edge direction".into())) };
     // Convex edge: each face's outward normal points away from the other face; concave: toward.
     let cos_phi = t1.dot(t2).clamp(-1.0, 1.0);
-    let phi = cos_phi.acos();
+    let phi = pmath::acos(cos_phi);
     let convex = n1.dot(t2) < -1e-9 && n2.dot(t1) < -1e-9;
     let concave = n1.dot(t2) > 1e-9 && n2.dot(t1) > 1e-9;
     if !(phi > 1e-3 && phi < std::f64::consts::PI - 1e-3) || !(convex || concave) {
@@ -188,7 +188,7 @@ fn blend_one(solid: &Solid, edge: &mt::Edge, size: f64, r: f64, shape: Shape) ->
 /// Distance along each face from the edge to the blend boundary.
 fn setback(r: f64, phi: f64, shape: Shape) -> f64 {
     match shape {
-        Shape::Round | Shape::Curvature => r / (phi / 2.0).tan(),
+        Shape::Round | Shape::Curvature => r / pmath::tan(phi / 2.0),
         Shape::Flat => r,
     }
 }
@@ -522,7 +522,9 @@ fn blend_geometry(
                 match shape {
                     Shape::Flat => sa + (sb - sa) * f,
                     // G2 rejects curved end faces before entering this branch.
-                    Shape::Round | Shape::Curvature => c0 + ((sa - c0) * ((1.0 - f) * theta).sin() + (sb - c0) * (f * theta).sin()) / theta.sin(),
+                    Shape::Round | Shape::Curvature => {
+                        c0 + ((sa - c0) * pmath::sin((1.0 - f) * theta) + (sb - c0) * pmath::sin(f * theta)) / pmath::sin(theta)
+                    }
                 }
             };
             // A rail's end: on the side edge, else on its continuation within the side face.
@@ -543,7 +545,7 @@ fn blend_geometry(
             let perp = |x: Vec3| x - d * (x - p).dot(d);
             let theta_ab = {
                 let (u, w) = (sa - c0, sb - c0);
-                (u.dot(w) / (u.len() * w.len()).max(1e-300)).clamp(-1.0, 1.0).acos()
+                pmath::acos((u.dot(w) / (u.len() * w.len()).max(1e-300)).clamp(-1.0, 1.0))
             };
             let fraction = |x: Vec3| -> f64 {
                 let x = perp(x);
@@ -551,7 +553,7 @@ fn blend_geometry(
                     Shape::Flat => (x - sa).dot(sb - sa) / (sb - sa).len2().max(1e-300),
                     Shape::Round | Shape::Curvature => {
                         let (u, w) = (sa - c0, x - c0);
-                        let ang = (u.dot(w) / (u.len() * w.len()).max(1e-300)).clamp(-1.0, 1.0).acos();
+                        let ang = pmath::acos((u.dot(w) / (u.len() * w.len()).max(1e-300)).clamp(-1.0, 1.0));
                         ang / theta_ab.max(1e-300)
                     }
                 }
@@ -824,7 +826,7 @@ fn blend_geometry(
                 return Err(unsupported("the blend does not cross the edge between the end faces"));
             }
             let (ra, rb) = (perp(p + t1 * s - c0), perp(p + t2 * s - c0));
-            let angle = |x: Vec3, y: Vec3| (x.dot(y) / (x.len() * y.len()).max(1e-300)).clamp(-1.0, 1.0).acos();
+            let angle = |x: Vec3, y: Vec3| pmath::acos((x.dot(y) / (x.len() * y.len()).max(1e-300)).clamp(-1.0, 1.0));
             let between = |x: Vec3| (angle(ra, x) + angle(x, rb) - angle(ra, rb)).abs() < 1e-6;
             let root = [(-qb - disc.sqrt()) / (2.0 * qa), (-qb + disc.sqrt()) / (2.0 * qa)]
                 .into_iter()
@@ -2002,7 +2004,7 @@ pub fn fillet_g2_corners(body: &Body, edges: &[Vec3], radius: f64) -> Result<Bod
 
 /// The step of the radius search: three significant digits of the requested radius.
 fn radius_step(radius: f64) -> f64 {
-    10f64.powf(radius.log10().floor() - 3.0)
+    pmath::powf(10f64, pmath::log10(radius).floor() - 3.0)
 }
 
 /// The largest radius below `radius` (to three significant digits) at which the fillet of
@@ -2639,12 +2641,12 @@ fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, b
                 ChamferSide::Distance(d) => d,
                 ChamferSide::Angle(a) => {
                     // The triangle edge–A–B: angle φ at the edge, `a` at A (on face 1).
-                    let phi = f.t1.dot(f.t2).clamp(-1.0, 1.0).acos();
-                    let den = (phi + a).sin();
+                    let phi = pmath::acos(f.t1.dot(f.t2).clamp(-1.0, 1.0));
+                    let den = pmath::sin(phi + a);
                     if den <= 1e-9 {
                         return Err(KernelError::Invalid("that chamfer angle runs past the other face".into()));
                     }
-                    s * a.sin() / den
+                    s * pmath::sin(a) / den
                 }
             };
             (s, s2)
@@ -3127,7 +3129,7 @@ mod tests {
         let vol = |b: &Body| b.tessellate(1e-4).unwrap().measure().volume;
         // About the triangle (sides 1 and 1 at 120°) along the mitre; its ends slant.
         let removed = vol(&c) - vol(&out);
-        let along = 0.5 * 120f64.to_radians().sin() * k * 3f64.sqrt();
+        let along = 0.5 * pmath::sin(120f64.to_radians()) * k * 3f64.sqrt();
         assert!(removed > along * 0.8 && removed < along * 1.2, "{removed} vs {along}");
     }
 

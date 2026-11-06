@@ -114,7 +114,7 @@ fn the_largest_loop_is_triangulated() {
         .map(|i| {
             let t = std::f64::consts::TAU * i as f64 / n as f64;
             let r = if i % 16 == 0 { 0.6 } else { 1.0 };
-            [r * t.cos(), r * t.sin()]
+            [r * pmath::cos(t), r * pmath::sin(t)]
         })
         .collect();
     assert_covers_once(&points);

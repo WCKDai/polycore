@@ -1,0 +1,21 @@
+[package]
+name = "polycore-pmath"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+description = "PolyCore portable math: the transcendental functions from IEEE 754 arithmetic alone, the same bits on every platform"
+repository = "https://github.com/WCKDai/polycore"
+authors = ["PolyCore contributors"]
+autotests = false
+autoexamples = false
+autobenches = false
+
+[lib]
+name = "pmath"
+path = "src/lib.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"

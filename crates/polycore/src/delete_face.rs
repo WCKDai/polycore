@@ -380,7 +380,7 @@ mod tests {
         let plate = box_solid(Vec3::ZERO, Vec3::new(100.0, 100.0, 10.0)).unwrap();
         let tool = cylinder(Vec3::new(50.0, 50.0, 9.5), Vec3::Z, 7.5, 2.0).unwrap();
         let pocketed = boolean(&plate, &tool, BoolOp::Cut).unwrap().unwrap();
-        let pocket = faces_where(&pocketed, |p| (p.x - 50.0).hypot(p.y - 50.0) < 7.5 + 1e-3 && p.z > 9.5 - 1e-6);
+        let pocket = faces_where(&pocketed, |p| pmath::hypot(p.x - 50.0, p.y - 50.0) < 7.5 + 1e-3 && p.z > 9.5 - 1e-6);
         assert!(!pocket.is_empty());
         let mut bowed = 0;
         for e in pocketed.solid.edge_iter() {
@@ -424,20 +424,20 @@ mod tests {
         let plate = box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 10.0)).unwrap();
         let pin = cylinder(Vec3::new(20.0, 15.0, -1.0), Vec3::Z, 4.0, 12.0).unwrap();
         let holed = boolean(&plate, &pin, BoolOp::Cut).unwrap().unwrap();
-        let wall = faces_where(&holed, |p| ((p.x - 20.0).hypot(p.y - 15.0) - 4.0).abs() < 1e-2);
+        let wall = faces_where(&holed, |p| (pmath::hypot(p.x - 20.0, p.y - 15.0) - 4.0).abs() < 1e-2);
         assert!(!wall.is_empty());
         let filled = delete_faces(&holed, &wall).unwrap();
         assert!((volume(&filled) - 12000.0).abs() < 1e-9 * 12000.0, "{}", volume(&filled));
         // A blind hole: its wall and floor.
         let drill = cylinder(Vec3::new(20.0, 15.0, 4.0), Vec3::Z, 3.0, 7.0).unwrap();
         let blind = boolean(&plate, &drill, BoolOp::Cut).unwrap().unwrap();
-        let hole = faces_where(&blind, |p| (p.x - 20.0).hypot(p.y - 15.0) < 3.0 + 1e-3 && p.z > 4.0 - 1e-6);
+        let hole = faces_where(&blind, |p| pmath::hypot(p.x - 20.0, p.y - 15.0) < 3.0 + 1e-3 && p.z > 4.0 - 1e-6);
         let filled = delete_faces(&blind, &hole).unwrap();
         assert!((volume(&filled) - 12000.0).abs() < 1e-9 * 12000.0, "{}", volume(&filled));
         // A boss on the plate: deleting its wall and top takes it off.
         let boss = cylinder(Vec3::new(10.0, 10.0, 10.0), Vec3::Z, 3.0, 5.0).unwrap();
         let bossed = boolean(&plate, &boss, BoolOp::Union).unwrap().unwrap();
-        let bf = faces_where(&bossed, |p| p.z > 10.0 - 1e-9 && (p.x - 10.0).hypot(p.y - 10.0) < 3.0 + 1e-6);
+        let bf = faces_where(&bossed, |p| p.z > 10.0 - 1e-9 && pmath::hypot(p.x - 10.0, p.y - 10.0) < 3.0 + 1e-6);
         let off = delete_faces(&bossed, &bf).unwrap();
         assert!((volume(&off) - 12000.0).abs() < 1e-9 * 12000.0, "{}", volume(&off));
         // Errors name what is wrong.

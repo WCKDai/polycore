@@ -1296,7 +1296,7 @@ pub fn extrude_tapered_between(plane: &Plane, region: &Region2, from: f64, to: f
         return Err(KernelError::Invalid("taper must be between −90° and 90°".into()));
     }
     region_ok(region)?;
-    let (t, sign) = (taper.tan(), dir_sign.signum());
+    let (t, sign) = (pmath::tan(taper), dir_sign.signum());
     let (bottom_plane, top_plane) = (plane.offset(from * sign), plane.offset(to * sign));
     // A side drawn in collinear pieces slopes as one face over all of them, as a straight
     // extrude's does (#1788).
@@ -1500,7 +1500,9 @@ fn revolve_on_axis(plane: &Plane, numbered: &NumberedLoop, axis_origin: Vec2, d:
     let local = Plane { origin: plane.origin - shift, ..*plane };
     let plane = &local;
     let axis = plane.dir_to_world(d);
-    let turned = |by: f64| mt::Matrix4::from_axis_angle(v3(axis), mt::Rad(by));
+    // The platform-independent rotation (cgmath's takes the libm's sine and cosine, which differ
+    // by an ULP between platforms at a third of a turn).
+    let turned = |by: f64| mt::portable_trig::rotation(v3(axis), mt::Rad(by));
     let turn = |m: &mt::Matrix4, p: Vec3| from_p3(mt::EuclideanSpace::from_vec((m * p3(p).to_homogeneous()).truncate()));
     guard("revolve", || {
         let fail = |m: &str| KernelError::Failed(format!("revolve: {m}"));
@@ -2274,7 +2276,7 @@ impl PathSeg {
             PathSeg::Arc { a, center, axis, angle } => {
                 let Some(k) = axis.normalized() else { return vec![a] };
                 let r = (a - center).len();
-                let step = if r > tol { 2.0 * (1.0 - tol / r).acos() } else { angle.abs() };
+                let step = if r > tol { 2.0 * pmath::acos(1.0 - tol / r) } else { angle.abs() };
                 let n = ((angle.abs() / step.max(1e-6)).ceil() as usize).clamp(1, 512);
                 (1..=n).map(|i| rotate_about(a, center, k, angle * i as f64 / n as f64)).collect()
             }
@@ -2285,7 +2287,7 @@ impl PathSeg {
 /// `p` turned by `angle` about the unit axis `k` through `center` (right hand).
 pub(crate) fn rotate_about(p: Vec3, center: Vec3, k: Vec3, angle: f64) -> Vec3 {
     let v = p - center;
-    let (s, c) = angle.sin_cos();
+    let (s, c) = pmath::sin_cos(angle);
     center + v * c + k.cross(v) * s + k * (k.dot(v) * (1.0 - c))
 }
 
@@ -2333,7 +2335,7 @@ pub fn sweep(plane: &Plane, region: &Region2, path: &[PathSeg]) -> Result<Body> 
     // joint: at a corner the next line would slide the profile within its own plane.
     let ends: Vec<(Vec3, Vec3)> =
         path.iter().map(PathSeg::tangents).collect::<Option<_>>().ok_or_else(|| KernelError::Invalid("a path segment has no direction".into()))?;
-    let corner = ends.windows(2).any(|w| w[0].1.dot(w[1].0) < (1e-3f64).cos());
+    let corner = ends.windows(2).any(|w| w[0].1.dot(w[1].0) < pmath::cos(1e-3f64));
     if corner {
         return crate::sweep_path::sweep_path(plane, region, &path_polyline(path)?);
     }

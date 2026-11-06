@@ -174,8 +174,9 @@ fn segment_same(a: &Seg2, b: &Seg2, tolerance: f64) -> bool {
             center.dist(c) <= tolerance
                 && (radius - r).abs() <= tolerance
                 && (sweep.abs() - s.abs()).abs() * radius <= tolerance
-                && ((Vec2::new(start.cos(), start.sin()) * radius).dist(Vec2::new(t.cos(), t.sin()) * r) <= tolerance
-                    || (Vec2::new(start.cos(), start.sin()) * radius).dist(Vec2::new((t + s).cos(), (t + s).sin()) * r) <= tolerance)
+                && ((Vec2::new(pmath::cos(start), pmath::sin(start)) * radius).dist(Vec2::new(pmath::cos(t), pmath::sin(t)) * r) <= tolerance
+                    || (Vec2::new(pmath::cos(start), pmath::sin(start)) * radius).dist(Vec2::new(pmath::cos(t + s), pmath::sin(t + s)) * r)
+                        <= tolerance)
         }
         _ => false,
     }
@@ -448,7 +449,7 @@ fn separated_material(loops: &[CapLoop], clearance: f64, work: &mut usize) -> Op
             };
             let x = b - a;
             let y = next.end() - next.start();
-            turn += x.cross(y).atan2(x.dot(y));
+            turn += pmath::atan2(x.cross(y), x.dot(y));
             angular_error += clearance * 8. / x.len() + 256. * f64::EPSILON;
             for (j, t) in outer.segments.iter().enumerate() {
                 if i != j && a.dist(t.start()) <= clearance {
@@ -890,7 +891,7 @@ mod tests {
         let mut edges = Vec::new();
         for i in 0..4 {
             let angle = (i as f64 + 0.5) * std::f64::consts::FRAC_PI_2;
-            edges.push(builder::circle_arc(&vertices[i], &vertices[(i + 1) % 4], mt::Point3::new(r * angle.cos(), r * angle.sin(), 0.)));
+            edges.push(builder::circle_arc(&vertices[i], &vertices[(i + 1) % 4], mt::Point3::new(r * pmath::cos(angle), r * pmath::sin(angle), 0.)));
         }
         let wire: mt::Wire = edges.into();
         let cap = cap_loop(&wire, &Plane::XY, 3e-9, &mut 2_000_000).unwrap();

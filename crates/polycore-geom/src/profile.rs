@@ -449,7 +449,7 @@ impl Seg2 {
             Seg2::Arc { radius, sweep, .. } => {
                 let (a, b) = (self.start(), self.end());
                 // Chord term plus the circular segment between chord and arc.
-                0.5 * a.cross(b) + 0.5 * radius * radius * (sweep - sweep.sin())
+                0.5 * a.cross(b) + 0.5 * radius * radius * (sweep - pmath::sin(sweep))
             }
             Seg2::Cubic { .. } | Seg2::Conic { .. } | Seg2::Bezier { .. } => self.integrate(|s, t| 0.5 * s.point_at(t).cross(s.derivative(t))),
         }
@@ -460,7 +460,7 @@ impl Seg2 {
             Seg2::Line { a, b } => vec![a, b],
             Seg2::Arc { radius, sweep, .. } => {
                 let tol = tol.max(radius.abs() * 1e-6).max(1e-9);
-                let step = if tol < radius { 2.0 * (1.0 - tol / radius).clamp(-1.0, 1.0).acos() } else { TAU / 8.0 };
+                let step = if tol < radius { 2.0 * pmath::acos((1.0 - tol / radius).clamp(-1.0, 1.0)) } else { TAU / 8.0 };
                 let n = ((sweep.abs() / step.max(1e-6)).ceil() as usize).clamp(2, 4096);
                 (0..=n).map(|i| self.point_at(i as f64 / n as f64)).collect()
             }

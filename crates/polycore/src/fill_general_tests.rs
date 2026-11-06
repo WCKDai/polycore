@@ -90,7 +90,7 @@ fn along_the_loop(fill: &Body, normal: &dyn Fn(Vec3) -> Vec3, curvature: &dyn Fn
         gap = gap.max(from_p3(s.subs(u, v)).dist(*p));
         let n = patch_normal((u, v));
         let want = normal(*p) * sign;
-        angle = angle.max(n.dot(want).clamp(-1.0, 1.0).acos().to_degrees());
+        angle = angle.max(pmath::acos(n.dot(want).clamp(-1.0, 1.0)).to_degrees());
         // Across the loop: the tangent-plane direction square to the rim.
         let next = pts.get(k + 1).or(pts.get(k.wrapping_sub(1))).copied().unwrap();
         let t = (next - *p).normalized().unwrap();
@@ -298,7 +298,7 @@ fn an_opened_tube_end_capped_g1_and_g2_meets_the_wall() {
 /// window's edges bound only the wall), and a point on each of the window's edges.
 fn windowed(half: f64) -> (Body, Body, Vec<Vec3>) {
     let solid = cylinder(Vec3::ZERO, Vec3::Z, 10.0, 40.0).unwrap();
-    let x = 10.0 * half.cos();
+    let x = 10.0 * pmath::cos(half);
     let tool = box_solid(Vec3::new(x, -11.0, 15.0), Vec3::new(11.0, 11.0, 25.0)).unwrap();
     let cut = boolean(&solid, &tool, BoolOp::Cut).unwrap().unwrap();
     let open = curved_and_ends(&cut, &[0.0, 40.0]);
@@ -327,7 +327,7 @@ fn a_window_cut_through_a_cylinder_wall_past_half_way_fills_g1_close_to_the_cyli
         for i in 0..=40 {
             for j in 0..=40 {
                 let p = from_p3(s.subs(u0 + (u1 - u0) * i as f64 / 40.0, v0 + (v1 - v0) * j as f64 / 40.0));
-                let ang = p.y.atan2(p.x);
+                let ang = pmath::atan2(p.y, p.x);
                 if ang.abs() < half - 0.05 && p.z > 15.5 && p.z < 24.5 {
                     stray = stray.max((Vec2::new(p.x, p.y).len() - 10.0).abs());
                 }
