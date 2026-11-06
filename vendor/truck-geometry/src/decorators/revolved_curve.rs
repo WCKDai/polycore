@@ -8,22 +8,25 @@ impl Revolution {
             axis: axis.normalize(),
         }
     }
+    // PolyCore: the sine and cosine of `v` come from `portable_trig::sin_cos_memo`, the same bits
+    // as `sin_cos`'s from a per-thread memo, since `presearch` evaluates `subs` on a grid of a
+    // hundred angles a hundred times each for every point of an intersection curve.
     #[inline(always)]
     fn point_rotation_matrix(self, v: f64) -> Matrix4 {
         Matrix4::from_translation(self.origin.to_vec())
-            * portable_trig::rotation(self.axis, Rad(v))
+            * portable_trig::rotation_memo(self.axis, Rad(v))
             * Matrix4::from_translation(-self.origin.to_vec())
     }
     #[inline(always)]
     fn vector_rotation_matrix(self, v: f64) -> Matrix4 {
-        portable_trig::rotation(self.axis, Rad(v))
+        portable_trig::rotation_memo(self.axis, Rad(v))
     }
     #[inline(always)]
     fn derivation_rotation_matrix(self, v: f64) -> Matrix4 {
         let n = self.axis;
         // PolyCore: one sine and cosine instead of fourteen (the same bits: `pmath::sin` and
         // `pmath::cos` are `sin_cos`'s parts).
-        let (s, c) = pmath::sin_cos(v);
+        let (s, c) = portable_trig::sin_cos_memo(v);
         Matrix3::new(
             n[0] * n[0] * s - s,
             n[0] * n[1] * s + n[2] * c,

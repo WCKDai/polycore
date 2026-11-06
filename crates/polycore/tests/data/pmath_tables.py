@@ -2,11 +2,12 @@
 """Generates the tables of `pmath`'s fast paths (vendor/pmath/src/fast.rs) from a 70-digit
 decimal reference (Python's `decimal`; never the platform's libm): the sine and cosine of
 k·π/256 for k = 0..=64 and the arc tangent of k/32 for k = 0..=32, each as a double-double (the nearest
-float and the nearest float to the rest), and the pieces of π/128 for the argument reduction.
+float and the nearest float to the rest), and the bit counts of the pieces of π/2 (which the
+argument reduction scales to π/256).
 
     python3 -I pmath_tables.py
 
-Prints the Rust constants; `pmath_tests::fast_path_tables_match_the_reference` checks the ones
+Prints the Rust constants; `pmath_tests::fast_path_tables_match_the_double_double_series` checks the ones
 in the crate against the same reference arithmetic (the slow double-double path, which
 `pmath_tests` proves against this script's `pmath_reference.txt`).
 """

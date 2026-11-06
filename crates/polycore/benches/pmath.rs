@@ -3,7 +3,9 @@
 //! `asin`, points across the quadrants for `atan2` and `hypot`, square-root-like ranges for
 //! `cbrt`, `ln` and `powf`, and modest arguments for the exponentials and hyperbolics. For the
 //! functions with a fast path it also times the double-double path alone and counts the
-//! arguments the fast path leaves to it.
+//! arguments the fast path leaves to it. The first two rows time `portable_trig::sin_cos_memo`
+//! (the revolved surface's sine and cosine) on the presearch grid it serves and on angles that
+//! all miss its memo.
 //!
 //!     cargo bench -p polycore --bench pmath
 //!
@@ -201,7 +203,34 @@ fn main() {
     let above_one: Vec<f64> = (0..N).map(|_| rng.log_uniform(1.0, 30.0)).collect();
     let unit: Vec<f64> = (0..N).map(|_| rng.uniform(-0.999, 0.999)).collect();
 
+    // `presearch`'s pattern on a revolved surface: a grid of 101 angles over a range, each
+    // taken 101 times in turn (`sin_cos_memo` exists for it); the ranges alternate between the
+    // full turn and a hinted part of it, as the intersection curves' projections do.
+    let grid: Vec<f64> = (0..N)
+        .map(|i| {
+            let (call, j) = (i / (101 * 101), (i % 101) as f64 / 100.0);
+            let (v0, v1) = if call % 2 == 0 { (0.0, tau) } else { (0.3 + call as f64, 0.9 + call as f64) };
+            v0 * (1.0 - j) + v1 * j
+        })
+        .collect();
+
     let rows = vec![
+        row(
+            "sin_cos_memo, presearch grid",
+            time(&grid, |x| {
+                let (s, c) = truck_modeling::portable_trig::sin_cos_memo(x);
+                s + c
+            }),
+            time(&grid, platform_sin_cos),
+        ),
+        row(
+            "sin_cos_memo [-2π, 2π] (misses)",
+            time(&angles, |x| {
+                let (s, c) = truck_modeling::portable_trig::sin_cos_memo(x);
+                s + c
+            }),
+            time(&angles, platform_sin_cos),
+        ),
         row_with_paths(
             "sin [-2π, 2π]",
             time(&angles, pmath::sin),

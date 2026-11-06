@@ -12,7 +12,7 @@
 
 use std::cmp::Ordering;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
-use truck_modeling::portable_trig::{angle, atan2, rotation, sin_cos};
+use truck_modeling::portable_trig::{angle, atan2, rotation, rotation_memo, sin_cos, sin_cos_memo};
 use truck_modeling::{self as mt, InnerSpace, Rad, builder};
 
 /// A signed fixed-point number of 7 limbs of 64 bits, 6 of them (384 bits) below the point:
@@ -404,6 +404,77 @@ fn sin_cos_special_values() {
     // Tiny angles: the sine is the angle, the cosine one.
     assert_eq!(sin_cos(1e-20), (1e-20, 1.0));
     assert_eq!(sin_cos(-1e-300), (-1e-300, 1.0));
+}
+
+/// `sin_cos_memo` returns `sin_cos`'s bits whatever the memo holds: at every kernel angle, on
+/// the presearch pattern it exists for (a grid of 101 angles swept 101 times, over several
+/// ranges in turn, so sets fill, overflow and are evicted), on angles that share a set with
+/// another, on the special values, and on pseudo-random angles repeated out of order; and the
+/// rotations built from it are `rotation`'s, bit for bit.
+#[test]
+fn sin_cos_memo_is_sin_cos() {
+    let same = |x: f64| {
+        let (s, c) = sin_cos(x);
+        let (ms, mc) = sin_cos_memo(x);
+        assert_eq!((ms.to_bits(), mc.to_bits()), (s.to_bits(), c.to_bits()), "sin_cos_memo({x:e}, {:016x})", x.to_bits());
+    };
+    let kernel: Vec<f64> = kernel_angles().into_iter().map(|(_, x)| x).collect();
+    for &x in &kernel {
+        same(x);
+        same(x); // warm
+        same(-x);
+    }
+    // The presearch pattern over the full turn, hinted sub-ranges and the angles' negatives.
+    let mut ranges = vec![(0.0, TAU)];
+    let mut state = 0x5EED_u64;
+    let mut next = move || {
+        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for _ in 0..12 {
+        let a = next() * TAU;
+        ranges.push((a, a + next()));
+        ranges.push((-a, a));
+    }
+    for &(v0, v1) in &ranges {
+        for _ in 0..=100 {
+            for j in 0..=100 {
+                let q = j as f64 / 100.0;
+                same(v0 * (1.0 - q) + v1 * q);
+            }
+        }
+    }
+    // Angles of one set: the memo's hash sends these to the same two entries, so the third
+    // evicts the first, and each is right whether it hits or misses.
+    let set = |x: f64| x.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56;
+    let mut by_set: std::collections::BTreeMap<u64, Vec<f64>> = std::collections::BTreeMap::new();
+    for k in 0..20_000 {
+        let x = k as f64 * 1e-3;
+        by_set.entry(set(x)).or_default().push(x);
+    }
+    let crowded: Vec<f64> = by_set.values().filter(|v| v.len() >= 3).take(8).flat_map(|v| v[..3].to_vec()).collect();
+    assert!(crowded.len() >= 9, "no crowded sets among 20 000 angles");
+    for _ in 0..3 {
+        for &x in &crowded {
+            same(x);
+        }
+    }
+    for x in [0.0, -0.0, f64::NAN, -f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e-20, -1e-300, 5e-324, f64::MAX, f64::MIN_POSITIVE] {
+        let (s, c) = sin_cos(x);
+        let (ms, mc) = sin_cos_memo(x);
+        assert_eq!((ms.to_bits(), mc.to_bits()), (s.to_bits(), c.to_bits()), "sin_cos_memo({x:e})");
+        assert_eq!((sin_cos_memo(x).0.to_bits(), sin_cos_memo(x).1.to_bits()), (s.to_bits(), c.to_bits()), "sin_cos_memo({x:e}), warm");
+    }
+    let random: Vec<f64> = (0..50_000).map(|_| (next() - 0.5) * 4.0 * TAU).collect();
+    for &x in random.iter().chain(random.iter().rev()).chain(random.iter().step_by(7)) {
+        same(x);
+    }
+    let tilted = mt::Vector3::new(1.0, 2.0, 3.0).normalize();
+    for &x in kernel.iter().chain(random.iter().take(1000)) {
+        for axis in [mt::Vector3::new(0.0, 0.0, 1.0), tilted] {
+            assert_eq!(bits(rotation_memo(axis, Rad(x))), bits(rotation(axis, Rad(x))), "rotation_memo by {x:e}");
+        }
+    }
 }
 
 /// The columns of a matrix as bit patterns.
