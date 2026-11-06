@@ -17,7 +17,10 @@ Every transcendental function in these crates (`f64::sin`, `cos`, `tan`, `asin`,
 builds the same bits on every platform (PC-12). The rerouting is mechanical (`x.sin()` to
 `pmath::sin(x)`, `f64::sin(x)` to `pmath::sin(x)`) and is not marked line by line; the
 kernel's `clippy.toml` disallows the platform's methods, and `crates/polycore/tests/pmath_gate.rs`
-lints every crate here with it.
+lints every crate here with it, as the kernel compiles them (its features, the dependency versions
+of the repository's `Cargo.lock`, offline). The rest of the kernel's dependency closure is
+accounted for in pmath's module documentation (spade's angle limit is the one platform call, and
+the kernel computes it from pmath).
 
 ## pmath 0.1.0 (Apache-2.0, PolyCore; first-party, not vendored)
 

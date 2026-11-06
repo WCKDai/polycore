@@ -19,6 +19,29 @@
 //! kernel's `clippy.toml` disallows the platform's methods everywhere; this crate is the one
 //! place that computes them, and it calls none of them.
 //!
+//! `f64::powi` is kept on purpose: it lowers to the `llvm.powi` intrinsic, compiler-rt's
+//! square-and-multiply (`__powidf2`) on every target, not a libm call, so its bits are the same
+//! everywhere; `sqrt`, `abs`, `floor`, `round`, `to_radians` (one multiplication) and the
+//! arithmetic are IEEE 754 and stay as well.
+//!
+//! The rest of the kernel's dependency closure computes no transcendental at runtime either
+//! (`cargo tree -p polycore -e normal`, every crate's sources searched for the methods
+//! `clippy.toml` bans; checked for PC-12 r5 at spade 2.15.1, robust 1.2.0, cgmath 0.18.0,
+//! num-traits 0.2.19, num-complex 0.4.6, rand 0.8.8, serde_json 1.0.151, chrono 0.4.45):
+//! cgmath's, num-traits' and num-complex's methods run only when called, and the kernel and
+//! the vendored crates call none (`polycore`'s `pmath_gate` test); rand's `powf` is in its
+//! weighted sampling, which nothing calls; `robust` is exact arithmetic; the other crates hold
+//! no floating point. spade is the exception. `AngleLimit::from_deg` and `from_rad` take the
+//! platform's sine, so the kernel builds its Ruppert threshold from `pmath::sin`
+//! (`tess::cdt::shape_limit`, tested bit for bit) and `clippy.toml` bans both. `AngleLimit`'s
+//! `Debug` output takes an `asin`, which the kernel never formats. And its refinement rounds a
+//! split point to a power of two with `log2` and `exp2` (`nearest_power_of_two`), which with
+//! the kernel's `keep_constraint_edges` can run only for a convex-hull edge that is not a
+//! constraint (a chord across a concavity of the face, outside the triangles the kernel keeps)
+//! being split a second time: that vertex lies outside the kept region, `round` absorbs any
+//! ULP of `log2` unless the half length is within an ULP of √2·2ᵏ, and `exp2` of an integer is
+//! exact on every libm. spade is not vendored, so that call stays as it is.
+//!
 //! Special values follow the libm (zeros, infinities, NaNs, the sign of zero). Subnormal results
 //! are deterministic but may be an ULP off correctly rounded (the second rounding of the
 //! scaling). The argument reduction of the trigonometric functions is exact below `|x| < 2³⁰`;
