@@ -17,8 +17,12 @@
 //! (`cargo tree -e normal,dev`, so the test hooks are linted too): the lint covers exactly the
 //! code the kernel compiles, and the test checks that nothing outside the repository's lockfile
 //! was resolved. The crates' own `deny(clippy::all)` would fail on lints a newer Clippy adds, so
-//! every lint is capped to a warning and the `disallowed_methods` diagnostics are read from the
-//! output: any one of them fails this test.
+//! every lint is capped to a warning. The run is read from cargo's JSON messages
+//! (`--message-format=json`), not from its human output, whose wording and colouring vary (CI
+//! sets `CARGO_TERM_COLOR=always`): a `compiler-artifact` for a member shows it was linted, and a
+//! `compiler-message` with the code `clippy::disallowed_methods` names the method and the place;
+//! any one of them in a vendored crate fails this test. Each test builds in its own target
+//! directory, so the two run in parallel without waiting on each other's build lock.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -294,49 +298,78 @@ static WORKSPACE: LazyLock<PathBuf> = LazyLock::new(|| {
     ws
 });
 
-fn clippy(args: &[&str]) -> (bool, String) {
+/// One `cargo clippy` run of the temporary workspace, read from its JSON messages.
+struct Lint {
+    /// Cargo exited successfully and reported the build finished.
+    ok: bool,
+    /// The manifests of the packages that produced an artifact (checked, or compiled for a
+    /// proc-macro crate; a fresh one too, whose cached diagnostics cargo replays).
+    checked: BTreeSet<PathBuf>,
+    /// The `disallowed_methods` diagnostics: the method and its place as `file:line:column`.
+    flagged: Vec<(String, String)>,
+    /// The rendered diagnostics and cargo's stderr, for the failure messages.
+    text: String,
+}
+
+impl Lint {
+    fn checked(&self, manifest: &Path) -> bool {
+        self.checked.iter().any(|m| m.ends_with(manifest))
+    }
+}
+
+/// `cargo clippy <args> --lib` on the temporary workspace with the kernel's `clippy.toml`,
+/// building under `target/<target>` so that the tests need not wait on each other's build lock.
+fn clippy(target: &str, args: &[&str]) -> Lint {
     let ws = &*WORKSPACE;
     let mut c = cargo();
     c.current_dir(ws)
         .env("CLIPPY_CONF_DIR", root())
-        .env("CARGO_TARGET_DIR", ws.join("target"))
+        .env("CARGO_TARGET_DIR", ws.join("target").join(target))
         .env_remove("RUSTFLAGS")
-        .args(["clippy", "--offline", "--manifest-path"])
+        .args(["clippy", "--offline", "--message-format=json", "--manifest-path"])
         .arg(ws.join("Cargo.toml"))
         .args(args)
         .args(["--lib", "--", "--cap-lints", "warn", "-W", "clippy::disallowed_methods"]);
     eprintln!("$ {c:?}");
     let out = c.output().unwrap();
-    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    (out.status.success(), text)
-}
-
-/// The methods and places clippy named in `use of a disallowed method` diagnostics.
-fn flagged(text: &str) -> Vec<(String, String)> {
-    let mut found = Vec::new();
-    let lines: Vec<&str> = text.lines().collect();
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(rest) = line.split("use of a disallowed method `").nth(1) {
-            let method = rest.split('`').next().unwrap_or("").to_string();
-            let at = lines[i + 1..].iter().take(4).find_map(|l| l.trim().strip_prefix("--> ")).unwrap_or("").to_string();
-            found.push((method, at));
+    let mut lint = Lint { ok: false, checked: BTreeSet::new(), flagged: Vec::new(), text: String::new() };
+    let mut finished = false;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Ok(m) = serde_json::from_str::<Value>(line) else { continue };
+        match m["reason"].as_str() {
+            Some("compiler-artifact") => {
+                lint.checked.insert(PathBuf::from(m["manifest_path"].as_str().unwrap_or("")));
+            }
+            Some("compiler-message") => {
+                let msg = &m["message"];
+                lint.text += msg["rendered"].as_str().unwrap_or("");
+                if msg["code"]["code"] == "clippy::disallowed_methods" {
+                    // "use of a disallowed method `f64::sin`"
+                    let method = msg["message"].as_str().unwrap_or("").split('`').nth(1).unwrap_or("").to_string();
+                    let spans = msg["spans"].as_array().cloned().unwrap_or_default();
+                    let span = spans.iter().find(|s| s["is_primary"] == true).or(spans.first());
+                    let at = span
+                        .map_or(String::new(), |s| format!("{}:{}:{}", s["file_name"].as_str().unwrap_or(""), s["line_start"], s["column_start"]));
+                    lint.flagged.push((method, at));
+                }
+            }
+            Some("build-finished") => finished = m["success"] == true,
+            _ => {}
         }
     }
-    found
+    lint.ok = out.status.success() && finished;
+    lint.text += &String::from_utf8_lossy(&out.stderr);
+    lint
 }
 
 /// The vendored crates and `pmath` itself call no platform transcendental, linted offline at the
 /// versions the repository's lockfile pins.
 #[test]
 fn vendored_crates_call_no_platform_transcendental() {
-    let (ok, text) = clippy(&["--workspace", "--exclude", PROBE]);
-    let found = flagged(&text);
-    assert!(ok && found.is_empty(), "clippy on the vendored crates: ok = {ok}, flagged {found:?}\n{text}");
-    assert!(text.contains("Finished"), "{text}");
+    let lint = clippy("vendor", &["--workspace", "--exclude", PROBE]);
+    assert!(lint.ok && lint.flagged.is_empty(), "clippy on the vendored crates: ok = {}, flagged {:?}\n{}", lint.ok, lint.flagged, lint.text);
     for c in VENDOR {
-        // A proc-macro crate is compiled, the others checked.
-        let linted = text.contains(&format!("Checking polycore-{c} ")) || text.contains(&format!("Compiling polycore-{c} "));
-        assert!(linted, "{c} was not linted:\n{text}");
+        assert!(lint.checked(&Path::new("vendor").join(c).join("Cargo.toml")), "{c} was not linted; checked {:?}\n{}", lint.checked, lint.text);
     }
     // Everything the workspace resolved is in the repository's lockfile, at the same version.
     let repo = repo_lock();
@@ -348,12 +381,12 @@ fn vendored_crates_call_no_platform_transcendental() {
 /// A new platform call is caught: each planted call is named with its line in the probe.
 #[test]
 fn a_new_platform_call_fails_the_lint() {
-    let (ok, text) = clippy(&["-p", PROBE]);
-    assert!(ok, "the probe did not compile:\n{text}");
-    let found = flagged(&text);
+    let lint = clippy("probe", &["-p", PROBE]);
+    assert!(lint.ok, "the probe did not compile:\n{}", lint.text);
+    assert!(lint.checked(&Path::new("probe").join("Cargo.toml")), "the probe was not linted; checked {:?}\n{}", lint.checked, lint.text);
     for (i, (_, method)) in PLANTED.iter().enumerate() {
-        let hit = found.iter().find(|(m, at)| m == method && at.contains(&format!("lib.rs:{}:", i + 1)));
-        assert!(hit.is_some(), "{method} on probe line {} was not flagged; flagged {found:?}\n{text}", i + 1);
+        let hit = lint.flagged.iter().find(|(m, at)| m == method && at.contains(&format!("lib.rs:{}:", i + 1)));
+        assert!(hit.is_some(), "{method} on probe line {} was not flagged; flagged {:?}\n{}", i + 1, lint.flagged, lint.text);
     }
-    assert!(found.iter().all(|(_, at)| at.contains("probe")), "flagged outside the probe: {found:?}");
+    assert!(lint.flagged.iter().all(|(_, at)| at.contains("probe")), "flagged outside the probe: {:?}", lint.flagged);
 }

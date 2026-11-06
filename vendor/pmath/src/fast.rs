@@ -117,7 +117,7 @@ impl Approx {
 /// u = 2⁻⁵³, and the relative bounds of the sine, cosine and arc tangent paths.
 const U: f64 = 1.110_223_024_625_156_5e-16;
 const E_SIN: f64 = 1.084_202_172_485_504_4e-19; // 2⁻⁶³
-const E_ATAN: f64 = 2.168_404_344_971_008_9e-19; // 2⁻⁶²
+const E_ATAN: f64 = 2.168_404_344_971_009e-19; // 2⁻⁶²
 /// 2⁻¹⁰⁰: the second-order terms of a quotient's Dekker correction, relative to it.
 const E_QUOTIENT: f64 = 7.888_609_052_210_118e-31;
 /// 2⁻⁶⁵: the composition with π/2 or π, relative to the result.
@@ -150,6 +150,9 @@ const A4: f64 = 0.111_111_111_111_111_1;
 const A5: f64 = -0.090_909_090_909_090_91;
 
 /// sin(k·π/256), cos(k·π/256) for k = 0..=64 as (hi, lo) double-doubles (pmath_tables.py).
+// The last entry is sin(π/4) = cos(π/4): its leading part is `FRAC_1_SQRT_2` to the bit, kept as
+// the literal the script prints (`pmath_tests::fast_path_tables_match_the_double_double_series`).
+#[allow(clippy::approx_constant)]
 #[rustfmt::skip]
 pub(crate) const SIN_COS_TABLE: [((f64, f64), (f64, f64)); 65] = [
     ((0.0, 0.0), (1.0, 0.0)),
@@ -219,6 +222,9 @@ pub(crate) const SIN_COS_TABLE: [((f64, f64), (f64, f64)); 65] = [
     ((0.7071067811865476, -4.833646656726457e-17), (0.7071067811865476, -4.833646656726457e-17)),
 ];
 /// atan(k/32) for k = 0..=32 as (hi, lo) double-doubles (pmath_tables.py).
+// The last entry is atan 1 = π/4: its leading part is `FRAC_PI_4` to the bit, kept as the
+// literal the script prints (`pmath_tests::fast_path_tables_match_the_double_double_series`).
+#[allow(clippy::approx_constant)]
 #[rustfmt::skip]
 pub(crate) const ATAN_TABLE: [(f64, f64); 33] = [
     (0.0, 0.0),
