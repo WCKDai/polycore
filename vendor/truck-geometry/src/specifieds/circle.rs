@@ -11,11 +11,22 @@ impl ParametricCurve for UnitCircle<Point2> {
     type Point = Point2;
     type Vector = Vector2;
     #[inline]
-    fn subs(&self, t: f64) -> Self::Point { Point2::new(pmath::cos(t), pmath::sin(t)) }
+    // PolyCore: one `sin_cos` instead of a sine and a cosine (the same bits: `pmath::sin` and
+    // `pmath::cos` are `sin_cos`'s parts).
+    fn subs(&self, t: f64) -> Self::Point {
+        let (s, c) = pmath::sin_cos(t);
+        Point2::new(c, s)
+    }
     #[inline]
-    fn der(&self, t: f64) -> Self::Vector { Vector2::new(-pmath::sin(t), pmath::cos(t)) }
+    fn der(&self, t: f64) -> Self::Vector {
+        let (s, c) = pmath::sin_cos(t);
+        Vector2::new(-s, c)
+    }
     #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { Vector2::new(-pmath::cos(t), -pmath::sin(t)) }
+    fn der2(&self, t: f64) -> Self::Vector {
+        let (s, c) = pmath::sin_cos(t);
+        Vector2::new(-c, -s)
+    }
     #[inline]
     fn parameter_range(&self) -> ParameterRange {
         (Bound::Included(0.0), Bound::Excluded(2.0 * PI))
@@ -28,11 +39,20 @@ impl ParametricCurve for UnitCircle<Point3> {
     type Point = Point3;
     type Vector = Vector3;
     #[inline]
-    fn subs(&self, t: f64) -> Self::Point { Point3::new(pmath::cos(t), pmath::sin(t), 0.0) }
+    fn subs(&self, t: f64) -> Self::Point {
+        let (s, c) = pmath::sin_cos(t);
+        Point3::new(c, s, 0.0)
+    }
     #[inline]
-    fn der(&self, t: f64) -> Self::Vector { Vector3::new(-pmath::sin(t), pmath::cos(t), 0.0) }
+    fn der(&self, t: f64) -> Self::Vector {
+        let (s, c) = pmath::sin_cos(t);
+        Vector3::new(-s, c, 0.0)
+    }
     #[inline]
-    fn der2(&self, t: f64) -> Self::Vector { Vector3::new(-pmath::cos(t), -pmath::sin(t), 0.0) }
+    fn der2(&self, t: f64) -> Self::Vector {
+        let (s, c) = pmath::sin_cos(t);
+        Vector3::new(-c, -s, 0.0)
+    }
     #[inline]
     fn period(&self) -> Option<f64> { Some(2.0 * PI) }
     #[inline]

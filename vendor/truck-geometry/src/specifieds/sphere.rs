@@ -22,27 +22,29 @@ impl ParametricSurface for Sphere {
     #[inline(always)]
     fn subs(&self, u: f64, v: f64) -> Point3 { self.center() + self.radius * self.normal(u, v) }
     #[inline(always)]
+    // PolyCore: one `sin_cos` per angle instead of a sine and a cosine (the same bits:
+    // `pmath::sin` and `pmath::cos` are `sin_cos`'s parts).
     fn uder(&self, u: f64, v: f64) -> Vector3 {
-        self.radius
-            * Vector3::new(
-                pmath::cos(u) * pmath::cos(v),
-                pmath::cos(u) * pmath::sin(v),
-                -pmath::sin(u),
-            )
+        let (su, cu) = pmath::sin_cos(u);
+        let (sv, cv) = pmath::sin_cos(v);
+        self.radius * Vector3::new(cu * cv, cu * sv, -su)
     }
     #[inline(always)]
     fn vder(&self, u: f64, v: f64) -> Vector3 {
-        self.radius * pmath::sin(u) * Vector3::new(-pmath::sin(v), pmath::cos(v), 0.0)
+        let (sv, cv) = pmath::sin_cos(v);
+        self.radius * pmath::sin(u) * Vector3::new(-sv, cv, 0.0)
     }
     #[inline(always)]
     fn uuder(&self, u: f64, v: f64) -> Vector3 { -self.radius * self.normal(u, v) }
     #[inline(always)]
     fn uvder(&self, u: f64, v: f64) -> Vector3 {
-        self.radius * pmath::cos(u) * Vector3::new(-pmath::sin(v), pmath::cos(v), 0.0)
+        let (sv, cv) = pmath::sin_cos(v);
+        self.radius * pmath::cos(u) * Vector3::new(-sv, cv, 0.0)
     }
     #[inline(always)]
     fn vvder(&self, u: f64, v: f64) -> Vector3 {
-        -self.radius * pmath::sin(u) * Vector3::new(pmath::cos(v), pmath::sin(v), 0.0)
+        let (sv, cv) = pmath::sin_cos(v);
+        -self.radius * pmath::sin(u) * Vector3::new(cv, sv, 0.0)
     }
     #[inline(always)]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
@@ -58,11 +60,9 @@ impl ParametricSurface for Sphere {
 impl ParametricSurface3D for Sphere {
     #[inline(always)]
     fn normal(&self, u: f64, v: f64) -> Vector3 {
-        Vector3::new(
-            pmath::sin(u) * pmath::cos(v),
-            pmath::sin(u) * pmath::sin(v),
-            pmath::cos(u),
-        )
+        let (su, cu) = pmath::sin_cos(u);
+        let (sv, cv) = pmath::sin_cos(v);
+        Vector3::new(su * cv, su * sv, cu)
     }
 }
 

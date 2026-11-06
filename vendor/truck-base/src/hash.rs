@@ -368,5 +368,7 @@ pub fn take_one_unit<G: HashGen<f64>>(gen: G) -> Vector3<f64> {
     let theta = 2.0 * std::f64::consts::PI * u[0];
     let z = 2.0 * u[1] - 1.0;
     let r = f64::sqrt(1.0 - z * z);
-    Vector3::new(r * pmath::cos(theta), r * pmath::sin(theta), z)
+    // PolyCore: one `sin_cos` (the same bits as `pmath::cos` and `pmath::sin`).
+    let (s, c) = pmath::sin_cos(theta);
+    Vector3::new(r * c, r * s, z)
 }

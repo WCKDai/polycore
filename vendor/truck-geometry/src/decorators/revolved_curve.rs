@@ -21,16 +21,19 @@ impl Revolution {
     #[inline(always)]
     fn derivation_rotation_matrix(self, v: f64) -> Matrix4 {
         let n = self.axis;
+        // PolyCore: one sine and cosine instead of fourteen (the same bits: `pmath::sin` and
+        // `pmath::cos` are `sin_cos`'s parts).
+        let (s, c) = pmath::sin_cos(v);
         Matrix3::new(
-            n[0] * n[0] * pmath::sin(v) - pmath::sin(v),
-            n[0] * n[1] * pmath::sin(v) + n[2] * pmath::cos(v),
-            n[0] * n[2] * pmath::sin(v) - n[1] * pmath::cos(v),
-            n[0] * n[1] * pmath::sin(v) - n[2] * pmath::cos(v),
-            n[1] * n[1] * pmath::sin(v) - pmath::sin(v),
-            n[1] * n[2] * pmath::sin(v) + n[0] * pmath::cos(v),
-            n[0] * n[2] * pmath::sin(v) + n[1] * pmath::cos(v),
-            n[1] * n[2] * pmath::sin(v) - n[0] * pmath::cos(v),
-            n[2] * n[2] * pmath::sin(v) - pmath::sin(v),
+            n[0] * n[0] * s - s,
+            n[0] * n[1] * s + n[2] * c,
+            n[0] * n[2] * s - n[1] * c,
+            n[0] * n[1] * s - n[2] * c,
+            n[1] * n[1] * s - s,
+            n[1] * n[2] * s + n[0] * c,
+            n[0] * n[2] * s + n[1] * c,
+            n[1] * n[2] * s - n[0] * c,
+            n[2] * n[2] * s - s,
         )
         .into()
     }

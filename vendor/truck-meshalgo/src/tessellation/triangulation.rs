@@ -852,7 +852,11 @@ impl PolyBoundary {
     /// whether `c` is included in the domain with boundary = `self`.
     fn include(&self, c: Point2) -> bool {
         let t = 2.0 * std::f64::consts::PI * HashGen::hash1(c);
-        let r = Vector2::new(pmath::cos(t), pmath::sin(t));
+        let r = {
+            // PolyCore: one `sin_cos` (the same bits as `pmath::cos` and `pmath::sin`).
+            let (s, c) = pmath::sin_cos(t);
+            Vector2::new(c, s)
+        };
         // SolidCraft: a closed loop whose box is clear of `c` winds zero times around it, and
         // no crossing with it lies within the tolerance of `c`: it changes nothing here.
         let margin = 2.0 * TOLERANCE;

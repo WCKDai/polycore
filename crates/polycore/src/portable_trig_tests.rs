@@ -272,7 +272,7 @@ fn rephase_angle(v: f64) -> f64 {
 /// quarter and half turns, a partial revolve's bands (the angle over 2 or 3), `revolve_on_axis`'s
 /// pieces from `FULL_TURN_START` and the arcs' transits halfway, the three recorded rephase turns,
 /// and a circular pattern's instances k·2π/n for n up to 64, in both spellings of the product.
-fn kernel_angles() -> Vec<(String, f64)> {
+pub(crate) fn kernel_angles() -> Vec<(String, f64)> {
     let mut out: Vec<(String, f64)> = vec![
         ("2π/3 as whole_rsweep: PI * 2 / 3".into(), (Rad(PI) * 2.0 / 3.0).0),
         ("2π/3 as TAU / 3".into(), TAU / 3.0),

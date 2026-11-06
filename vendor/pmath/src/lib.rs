@@ -14,6 +14,15 @@
 //! against a 70-digit reference. Results that are exactly representable (`cbrt(27.0)`,
 //! `hypot(3.0, 4.0)`, `exp2(-3.0)`, `powf(10.0, 3.0)`) come out exact.
 //!
+//! The sine, cosine, tangent and arc functions take a fast path first (`fast.rs`, PC-12.perf):
+//! a table-driven approximation in plain arithmetic with a proven error bound of 2⁻⁶³ or 2⁻⁶²
+//! of the result, returned only when every value within the bound rounds to the same float,
+//! which is then the correctly rounded value. About one argument in a thousand is left to the
+//! double-double path, among them every one it could misround, so the two paths return the
+//! same bits everywhere (`polycore`'s `pmath_tests` compare them over the reference cases, the
+//! kernel's angles and large random sets, and check the bounds). `paths` exposes each path for
+//! those tests and the `pmath` benchmark (`cargo bench -p polycore --bench pmath`).
+//!
 //! The arithmetic must stay plain: no `f64::mul_add` (the platform's, and contracted or not by
 //! hardware), and Rust does not contract `a * b + c` into a fused multiply-add on its own. The
 //! kernel's `clippy.toml` disallows the platform's methods everywhere; this crate is the one
@@ -50,6 +59,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::f64::consts::{FRAC_2_PI, FRAC_PI_2, FRAC_PI_4, PI as PI_F64};
+
+mod fast;
+pub mod paths;
 
 /// An unevaluated sum `hi + lo` with `|lo| ≤ ulp(hi) / 2` (a double-double).
 #[derive(Clone, Copy, Debug)]
@@ -320,6 +332,7 @@ fn sin_cos_dd(x: f64) -> (Dd, Dd) {
 /// The sine and cosine of `x`, correctly rounded for the kernel's angles (see the crate
 /// documentation), from IEEE 754 arithmetic alone: the same bits on every platform. Not finite
 /// gives NaNs.
+#[inline]
 pub fn sin_cos(x: f64) -> (f64, f64) {
     if !x.is_finite() {
         return (f64::NAN, f64::NAN);
@@ -327,18 +340,44 @@ pub fn sin_cos(x: f64) -> (f64, f64) {
     if x == 0.0 {
         return (x, 1.0); // keeps the sign of zero, as libm does
     }
+    if let Some((s, c)) = fast::sin_cos(x)
+        && let Some(s) = s.round()
+        && let Some(c) = c.round()
+    {
+        return (s, c);
+    }
     let (s, c) = sin_cos_dd(x);
     (s.round(), c.round())
 }
 
 /// The sine of `x` (see [`sin_cos`]).
+#[inline]
 pub fn sin(x: f64) -> f64 {
-    sin_cos(x).0
+    if !x.is_finite() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return x;
+    }
+    if let Some(s) = fast::sin(x).and_then(fast::Approx::round) {
+        return s;
+    }
+    sin_cos_dd(x).0.round()
 }
 
 /// The cosine of `x` (see [`sin_cos`]).
+#[inline]
 pub fn cos(x: f64) -> f64 {
-    sin_cos(x).1
+    if !x.is_finite() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 1.0;
+    }
+    if let Some(c) = fast::cos(x).and_then(fast::Approx::round) {
+        return c;
+    }
+    sin_cos_dd(x).1.round()
 }
 
 /// The tangent of `x`: the sine over the cosine, both in double-double, rounded once.
@@ -348,6 +387,9 @@ pub fn tan(x: f64) -> f64 {
     }
     if x == 0.0 {
         return x;
+    }
+    if let Some(t) = fast::tan(x).and_then(fast::Approx::round) {
+        return t;
     }
     let (s, c) = sin_cos_dd(x);
     s.div(c).round()
@@ -431,6 +473,9 @@ pub fn atan2(y: f64, x: f64) -> f64 {
         };
         return a.copysign(y);
     }
+    if let Some(a) = fast::atan2(Dd::from_f64(y), Dd::from_f64(x)).and_then(fast::Approx::round) {
+        return a;
+    }
     atan2_dd(Dd::from_f64(y), Dd::from_f64(x)).round()
 }
 
@@ -444,6 +489,9 @@ pub fn atan(x: f64) -> f64 {
     }
     if x.is_infinite() {
         return PIO2.hi.copysign(x);
+    }
+    if let Some(a) = fast::atan2(Dd::from_f64(x), Dd::ONE).and_then(fast::Approx::round) {
+        return a;
     }
     atan2_dd(Dd::from_f64(x), Dd::ONE).round()
 }
@@ -464,6 +512,9 @@ pub fn asin(x: f64) -> f64 {
     if x.abs() < 3.725_290_298_461_914e-9 {
         return x; // 2⁻²⁸: the cubic term is below half an ULP
     }
+    if let Some(a) = fast::atan2(Dd::from_f64(x), fast::cos_of_asin(x)).and_then(fast::Approx::round) {
+        return a;
+    }
     atan2_dd(Dd::from_f64(x), cos_of_asin(x)).round()
 }
 
@@ -477,6 +528,9 @@ pub fn acos(x: f64) -> f64 {
     }
     if x == -1.0 {
         return PI.hi;
+    }
+    if let Some(a) = fast::atan2(fast::cos_of_asin(x), Dd::from_f64(x)).and_then(fast::Approx::round) {
+        return a;
     }
     atan2_dd(cos_of_asin(x), Dd::from_f64(x)).round()
 }

@@ -32,38 +32,49 @@ impl ParametricSurface for Torus {
     type Point = Point3;
     type Vector = Vector3;
     #[inline(always)]
+    // PolyCore: one `sin_cos` per angle instead of a sine and a cosine (the same bits:
+    // `pmath::sin` and `pmath::cos` are `sin_cos`'s parts).
     fn subs(&self, u: f64, v: f64) -> Point3 {
-        let sr = self.small_radius() * Vector2::new(pmath::cos(v), pmath::sin(v));
-        let lr = (self.large_radius() + sr.x) * Vector2::new(pmath::cos(u), pmath::sin(u));
+        let (sv, cv) = pmath::sin_cos(v);
+        let (su, cu) = pmath::sin_cos(u);
+        let sr = self.small_radius() * Vector2::new(cv, sv);
+        let lr = (self.large_radius() + sr.x) * Vector2::new(cu, su);
         self.center() + Vector3::new(lr.x, lr.y, sr.y)
     }
     #[inline(always)]
     fn uder(&self, u: f64, v: f64) -> Vector3 {
+        let (su, cu) = pmath::sin_cos(u);
         let sr = self.small_radius() * pmath::cos(v);
-        let lr = (self.large_radius() + sr) * Vector2::new(pmath::cos(u), pmath::sin(u));
+        let lr = (self.large_radius() + sr) * Vector2::new(cu, su);
         Vector3::new(-lr.y, lr.x, 0.0)
     }
     #[inline(always)]
     fn vder(&self, u: f64, v: f64) -> Vector3 {
-        let sv = self.small_radius() * Vector2::new(-pmath::sin(v), pmath::cos(v));
-        Vector3::new(sv.x * pmath::cos(u), sv.x * pmath::sin(u), sv.y)
+        let (sv, cv) = pmath::sin_cos(v);
+        let (su, cu) = pmath::sin_cos(u);
+        let sv = self.small_radius() * Vector2::new(-sv, cv);
+        Vector3::new(sv.x * cu, sv.x * su, sv.y)
     }
     #[inline(always)]
     fn uuder(&self, u: f64, v: f64) -> Vector3 {
+        let (su, cu) = pmath::sin_cos(u);
         let sr = self.small_radius() * pmath::cos(v);
-        let lr = (self.large_radius() + sr) * Vector2::new(pmath::cos(u), pmath::sin(u));
+        let lr = (self.large_radius() + sr) * Vector2::new(cu, su);
         Vector3::new(-lr.x, -lr.y, 0.0)
     }
     #[inline(always)]
     fn uvder(&self, u: f64, v: f64) -> Vector3 {
+        let (su, cu) = pmath::sin_cos(u);
         let sr = -self.small_radius() * pmath::sin(v);
-        let lr = sr * Vector2::new(pmath::cos(u), pmath::sin(u));
+        let lr = sr * Vector2::new(cu, su);
         Vector3::new(-lr.y, lr.x, 0.0)
     }
     #[inline(always)]
     fn vvder(&self, u: f64, v: f64) -> Vector3 {
-        let sv = -self.small_radius() * Vector2::new(pmath::cos(v), pmath::sin(v));
-        Vector3::new(sv.x * pmath::cos(u), sv.x * pmath::sin(u), sv.y)
+        let (sv, cv) = pmath::sin_cos(v);
+        let (su, cu) = pmath::sin_cos(u);
+        let sv = -self.small_radius() * Vector2::new(cv, sv);
+        Vector3::new(sv.x * cu, sv.x * su, sv.y)
     }
     #[inline(always)]
     fn parameter_range(&self) -> (ParameterRange, ParameterRange) {
@@ -78,8 +89,10 @@ impl ParametricSurface for Torus {
 
 impl ParametricSurface3D for Torus {
     fn normal(&self, u: f64, v: f64) -> Vector3 {
-        let sv = Vector2::new(pmath::cos(v), pmath::sin(v));
-        Vector3::new(sv.x * pmath::cos(u), sv.x * pmath::sin(u), sv.y)
+        let (sv, cv) = pmath::sin_cos(v);
+        let (su, cu) = pmath::sin_cos(u);
+        let sv = Vector2::new(cv, sv);
+        Vector3::new(sv.x * cu, sv.x * su, sv.y)
     }
 }
 

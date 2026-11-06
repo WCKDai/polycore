@@ -31,7 +31,12 @@ the same bits. It lives here, beside the Truck closure, because the vendored cra
 and it must not depend on the public kernel crates. `crates/polycore/src/pmath_tests.rs` checks
 every function against a 70-digit reference (`crates/polycore/tests/data/pmath_reference.txt`),
 and `portable_trig_tests.rs` proves the sine, cosine and arc tangent correctly rounded at the
-kernel's angles with exact integer arithmetic.
+kernel's angles with exact integer arithmetic. The sine, cosine, tangent and arc functions take
+a fast path first (`src/fast.rs`, PC-12.perf): a table-driven approximation in plain arithmetic
+with a proven error bound, returned only when the bound decides the rounding; the double-double
+path answers the rest (about one argument in a thousand), so the bits are the same as before.
+`pmath_tests` compares the two paths, and `crates/polycore/benches/pmath.rs` times every
+function against the platform's libm.
 
 ## truck-shapeops 0.4.0 (Apache-2.0, © RICOS Co. Ltd., https://github.com/ricosjp/truck)
 

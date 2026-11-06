@@ -210,3 +210,267 @@ fn the_recorded_band_bits_stay() {
     assert_eq!(pmath::cos(std::f64::consts::PI), -1.0);
     assert_eq!(pmath::sin(std::f64::consts::PI), 1.2246467991473532e-16);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The fast paths (PC-12.perf): a cheap approximation with a proven error bound, taken only
+// when the bound decides the rounding, otherwise the double-double path. The two must agree
+// bit for bit everywhere, and the bound must hold against the double-double value.
+
+use pmath::paths::{self, Approx, Pair};
+
+/// A pseudo-random source of the tests' own (splitmix64), so the sets are the same everywhere.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * ((self.next() >> 11) as f64 / (1u64 << 53) as f64)
+    }
+
+    /// Log-uniform in `[lo, hi]` (positive).
+    fn log_uniform(&mut self, lo: f64, hi: f64) -> f64 {
+        pmath::exp(self.uniform(pmath::ln(lo), pmath::ln(hi)))
+    }
+}
+
+/// `|(fast.hi + fast.lo) − (slow.hi + slow.lo)|`, the leading parts cancelled exactly.
+fn deviation(fast: &Approx, slow: Pair) -> f64 {
+    ((fast.hi - slow.0) + (fast.lo - slow.1)).abs()
+}
+
+/// One function's two paths: the public function (fast first), the fast path alone and the
+/// double-double path, on one argument (the second of `atan2` is fixed per case).
+struct Paths {
+    name: &'static str,
+    public: fn(f64) -> f64,
+    fast: fn(f64) -> Option<Approx>,
+    slow: fn(f64) -> Pair,
+}
+
+const SIN: Paths = Paths { name: "sin", public: pmath::sin, fast: paths::sin_fast, slow: |x| paths::sin_cos_slow(x).0 };
+const COS: Paths = Paths { name: "cos", public: pmath::cos, fast: paths::cos_fast, slow: |x| paths::sin_cos_slow(x).1 };
+
+/// `sin_cos` is its parts, bit for bit (the call sites that take one `sin_cos` instead of a
+/// sine and a cosine rely on it).
+fn sin_cos_is_its_parts(x: f64) {
+    let (s, c) = pmath::sin_cos(x);
+    assert_eq!((s.to_bits(), c.to_bits()), (pmath::sin(x).to_bits(), pmath::cos(x).to_bits()), "sin_cos({x:e}) is not (sin, cos)");
+}
+const TAN: Paths = Paths { name: "tan", public: pmath::tan, fast: paths::tan_fast, slow: paths::tan_slow };
+const ASIN: Paths = Paths { name: "asin", public: pmath::asin, fast: paths::asin_fast, slow: paths::asin_slow };
+const ACOS: Paths = Paths { name: "acos", public: pmath::acos, fast: paths::acos_fast, slow: paths::acos_slow };
+const ATAN: Paths = Paths { name: "atan", public: pmath::atan, fast: paths::atan_fast, slow: paths::atan_slow };
+
+/// What a set of arguments showed: how many the fast path decided, the largest deviation from
+/// the double-double value as a fraction of the bound, and the mismatches of the public value
+/// against the double-double path's rounding.
+#[derive(Default)]
+struct Tally {
+    cases: usize,
+    decided: usize,
+    worst_ratio: f64,
+    worst_case: String,
+    mismatches: Vec<String>,
+}
+
+impl Tally {
+    fn check(&mut self, label: &str, public: f64, fast: Option<Approx>, slow: Pair) {
+        self.cases += 1;
+        let want = slow.0 + slow.1;
+        if public.to_bits() != want.to_bits() {
+            self.mismatches.push(format!(
+                "{label}: fast path gave {public:e} ({:016x}), the double-double path {want:e} ({:016x})",
+                public.to_bits(),
+                want.to_bits()
+            ));
+        }
+        if let Some(a) = fast {
+            let ratio = deviation(&a, slow) / a.err;
+            if ratio > self.worst_ratio {
+                self.worst_ratio = ratio;
+                self.worst_case = label.to_string();
+            }
+            if a.round().is_some() {
+                self.decided += 1;
+            }
+        }
+    }
+
+    fn report(&self, what: &str) {
+        println!(
+            "{what}: {} cases, the fast path decided {} ({:.2} %); the worst deviation from the double-double value is {:.3} of the bound at {}",
+            self.cases,
+            self.decided,
+            100.0 * self.decided as f64 / self.cases.max(1) as f64,
+            self.worst_ratio,
+            self.worst_case
+        );
+        assert!(self.mismatches.is_empty(), "{what}: {} mismatches between the paths:\n{}", self.mismatches.len(), self.mismatches.join("\n"));
+        assert!(self.worst_ratio <= 1.0, "{what}: the fast path's error bound does not hold ({} of it at {})", self.worst_ratio, self.worst_case);
+    }
+}
+
+fn check_one(tally: &mut Tally, p: &Paths, x: f64) {
+    tally.check(&format!("{}({x:e}, {:016x})", p.name, x.to_bits()), (p.public)(x), (p.fast)(x), (p.slow)(x));
+}
+
+fn check_atan2(tally: &mut Tally, y: f64, x: f64) {
+    tally.check(&format!("atan2({y:e}, {x:e})"), pmath::atan2(y, x), paths::atan2_fast(y, x), paths::atan2_slow(y, x));
+}
+
+/// Over every reference case of the functions with a fast path (the kernel's angles and the
+/// pseudo-random arguments of `pmath_reference.txt`, 9 389 lines, among them the hard cases
+/// near a rounding boundary), the public value is the double-double path's, bit for bit, and
+/// the fast path's bound holds.
+#[test]
+fn fast_and_slow_paths_agree_on_the_reference_cases() {
+    let mut tally = Tally::default();
+    for line in REFERENCE.lines().filter(|l| !l.trim().is_empty()) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let args: Vec<f64> = fields[1..fields.len() - 2].iter().map(|h| f64::from_bits(u64::from_str_radix(h, 16).unwrap())).collect();
+        match (fields[0], args.as_slice()) {
+            ("sin", [x]) if *x != 0.0 => {
+                check_one(&mut tally, &SIN, *x);
+                sin_cos_is_its_parts(*x);
+            }
+            ("cos", [x]) if *x != 0.0 => check_one(&mut tally, &COS, *x),
+            ("tan", [x]) if *x != 0.0 => check_one(&mut tally, &TAN, *x),
+            ("asin", [x]) if x.abs() < 1.0 && x.abs() >= 3.725_290_298_461_914e-9 => check_one(&mut tally, &ASIN, *x),
+            ("acos", [x]) if x.abs() < 1.0 => check_one(&mut tally, &ACOS, *x),
+            ("atan", [x]) if *x != 0.0 => check_one(&mut tally, &ATAN, *x),
+            ("atan2", [y, x]) if *x != 0.0 && *y != 0.0 => check_atan2(&mut tally, *y, *x),
+            _ => {}
+        }
+    }
+    tally.report("reference cases");
+    assert!(tally.cases > 5000, "{} cases", tally.cases);
+}
+
+/// At every angle the kernel builds with (`portable_trig_tests::kernel_angles`: the revolve
+/// bands, quarter and half turns, the rephase turns, a pattern's k·2π/n for n ≤ 64), every
+/// 977th snapped rephase angle, and the angles' doubles, halves and negatives, the sine,
+/// cosine and tangent of the two paths agree bit for bit.
+#[test]
+fn fast_and_slow_paths_agree_at_the_kernels_angles() {
+    let mut angles: Vec<f64> = crate::portable_trig_tests::kernel_angles().into_iter().map(|(_, x)| x).collect();
+    let kmax = (std::f64::consts::PI * 1048576.0) as i64;
+    angles.extend((-kmax..=kmax).step_by(977).map(|k| crate::body::snap_angle(k as f64 / 1048576.0)));
+    let mut tally = Tally::default();
+    for &x in &angles {
+        for x in [x, -x, 2.0 * x, 0.5 * x, x + std::f64::consts::PI] {
+            if x != 0.0 {
+                check_one(&mut tally, &SIN, x);
+                check_one(&mut tally, &COS, x);
+                check_one(&mut tally, &TAN, x);
+                sin_cos_is_its_parts(x);
+            }
+        }
+    }
+    tally.report("the kernel's angles");
+    assert!(tally.cases > 100_000, "{} cases", tally.cases);
+}
+
+/// Over large pseudo-random sets in each function's realistic range (angles in [−2π, 2π] and
+/// up to the fast path's limit, arguments near the multiples of π/2 where the reduction
+/// cancels, cosines in [−1, 1] and near ±1, ratios across the quadrants and near the axes),
+/// the two paths agree bit for bit, the fast path's bound holds, and it decides at least
+/// 99 % of the arguments.
+#[test]
+fn fast_and_slow_paths_agree_on_random_arguments() {
+    const N: usize = 200_000;
+    let mut rng = Rng(0x005E_ED12);
+    let tau = std::f64::consts::TAU;
+    let pio2 = std::f64::consts::FRAC_PI_2;
+    for p in [&SIN, &COS, &TAN] {
+        let mut tally = Tally::default();
+        for i in 0..N {
+            let x = match i % 5 {
+                0 => rng.uniform(-tau, tau),
+                1 => rng.uniform(-0.01, 0.01),
+                2 => rng.uniform(-20000.0, 20000.0),
+                3 => rng.uniform(-8.0, 8.0).round() * pio2 + rng.uniform(-1e-6, 1e-6),
+                _ => rng.log_uniform(1e-30, 1.0),
+            };
+            if x != 0.0 {
+                check_one(&mut tally, p, x);
+                sin_cos_is_its_parts(x);
+            }
+        }
+        tally.report(p.name);
+        assert!(tally.decided * 100 >= tally.cases * 99, "{}: the fast path decided only {} of {}", p.name, tally.decided, tally.cases);
+    }
+    for p in [&ASIN, &ACOS] {
+        let mut tally = Tally::default();
+        for i in 0..N {
+            let x = match i % 4 {
+                0 => rng.uniform(-1.0, 1.0),
+                1 => 1.0 - rng.log_uniform(1e-16, 1e-3),
+                2 => -1.0 + rng.log_uniform(1e-16, 1e-3),
+                _ => rng.uniform(-1e-3, 1e-3),
+            };
+            if x != 0.0 && x.abs() < 1.0 && x.abs() >= 3.725_290_298_461_914e-9 {
+                check_one(&mut tally, p, x);
+            }
+        }
+        tally.report(p.name);
+        assert!(tally.decided * 100 >= tally.cases * 99, "{}: the fast path decided only {} of {}", p.name, tally.decided, tally.cases);
+    }
+    let mut tally = Tally::default();
+    for i in 0..N {
+        let x = match i % 3 {
+            0 => rng.uniform(-20.0, 20.0),
+            1 => rng.uniform(-1.0, 1.0),
+            _ => rng.log_uniform(1e-6, 1e6) * if rng.next().is_multiple_of(2) { 1.0 } else { -1.0 },
+        };
+        if x != 0.0 {
+            check_one(&mut tally, &ATAN, x);
+        }
+    }
+    tally.report("atan");
+    assert!(tally.decided * 100 >= tally.cases * 99, "atan: the fast path decided only {} of {}", tally.decided, tally.cases);
+    let mut tally = Tally::default();
+    for i in 0..N {
+        let (y, x) = match i % 4 {
+            0 => (rng.uniform(-5.0, 5.0), rng.uniform(-5.0, 5.0)),
+            1 => (rng.uniform(-1.0, 1.0), rng.uniform(-1e-6, 1e-6)),
+            2 => (rng.uniform(-1e-6, 1e-6), rng.uniform(-1.0, 1.0)),
+            _ => (rng.log_uniform(1e-60, 1e60) * if rng.next().is_multiple_of(2) { 1.0 } else { -1.0 }, rng.log_uniform(1e-60, 1e60)),
+        };
+        if y != 0.0 && x != 0.0 {
+            check_atan2(&mut tally, y, x);
+        }
+    }
+    tally.report("atan2");
+    assert!(tally.decided * 100 >= tally.cases * 99, "atan2: the fast path decided only {} of {}", tally.decided, tally.cases);
+}
+
+/// The fast paths' tables (pmath_tables.py, from the 70-digit reference) agree with the
+/// double-double series to 2⁻¹⁰⁰: the sine and cosine of k·π/256, the arc tangent of k/32.
+#[test]
+fn fast_path_tables_match_the_double_double_series() {
+    fn close(a: Pair, b: Pair, scale: f64) -> bool {
+        ((a.0 - b.0) + (a.1 - b.1)).abs() <= 2f64.powi(-100) * scale
+    }
+    for k in 0..=64 {
+        let (s, c) = paths::sin_cos_table(k);
+        let (es, ec) = paths::sin_cos_of_table_angle(k);
+        assert!(close(s, es, 1.0), "sin({k}π/256): table {s:?}, series {es:?}");
+        assert!(close(c, ec, 1.0), "cos({k}π/256): table {c:?}, series {ec:?}");
+        assert!(s.1.abs() <= 2f64.powi(-53) * s.0.abs() && c.1.abs() <= 2f64.powi(-53) * c.0, "entry {k} is not normalized");
+    }
+    for k in 0..=32 {
+        let a = paths::atan_table(k);
+        let ea = paths::atan_of_table_argument(k);
+        assert!(close(a, ea, 1.0), "atan({k}/32): table {a:?}, series {ea:?}");
+        assert!(a.1.abs() <= 2f64.powi(-53) * a.0.abs().max(1.0), "entry {k} is not normalized");
+    }
+    assert_eq!(paths::sin_cos_table(0), ((0.0, 0.0), (1.0, 0.0)));
+    assert_eq!(paths::atan_table(32).0, std::f64::consts::FRAC_PI_4);
+}

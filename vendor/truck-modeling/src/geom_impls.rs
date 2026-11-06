@@ -131,7 +131,9 @@ mod test_geom_impl {
         let theta = PI * pole[0];
         let z = pole[1];
         let zi = f64::sqrt(f64::max(1.0 - z * z, 0.0));
-        Vector3::new(pmath::cos(theta) * zi, pmath::sin(theta) * zi, z)
+        // PolyCore: one `sin_cos` (the same bits as `pmath::cos` and `pmath::sin`).
+        let (s, c) = pmath::sin_cos(theta);
+        Vector3::new(c * zi, s * zi, z)
     }
 
     fn complex_boundary(angles: [f64; 10]) -> Vec<Point3> {
@@ -148,7 +150,8 @@ mod test_geom_impl {
                 (0..=divs).map(move |i| {
                     let t = i as f64 / divs as f64;
                     let theta = (1.0 - t) * prev_angle + t * angle;
-                    Point3::new(r * pmath::cos(theta), r * pmath::sin(theta), 0.0)
+                    let (s, c) = pmath::sin_cos(theta);
+                    Point3::new(r * c, r * s, 0.0)
                 })
             })
             .chain([Point3::origin(), Point3::new(10.0, 0.0, 0.0)])
