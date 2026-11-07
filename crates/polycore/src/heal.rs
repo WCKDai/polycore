@@ -2,6 +2,7 @@
 //! edges meeting in line at a vertex nothing else uses become one edge (they are kept as one).
 
 use std::collections::{BTreeSet, HashMap};
+use std::f64::consts::{PI, TAU};
 
 use polycore_geom::{Ring, Vec3};
 use truck_modeling::{self as mt, builder};
@@ -362,10 +363,48 @@ fn fit_exact(e: &mt::Edge, tol: f64) -> Option<mt::Edge> {
     let w = ab.cross(am);
     let centre = a + (am.cross(w) * ab.len2() + w.cross(ab) * am.len2()) * (1.0 / d);
     let r = centre.dist(a);
-    if pts.iter().all(|p| (p.dist(centre) - r).abs() < tol && (*p - a).dot(n).abs() < tol) {
-        return Some(builder::circle_arc(e.absolute_front(), e.absolute_back(), mt::Point3::new(m.x, m.y, m.z)));
+    if !(r > 0.0) || !pts.iter().all(|p| (p.dist(centre) - r).abs() < tol && (*p - a).dot(n).abs() < tol) {
+        return None;
     }
-    None
+    // The turn the samples make about the centre from `a` to `b`, unwrapped along them, so the
+    // arc is the one they trace. An intersection curve's polyline can fold back on itself by a
+    // few microns at a vertex it was cut at, and then the sample at the middle of the parameter
+    // range lies just past that vertex: the arc through it ran the long way round the circle,
+    // and a join of two spheres kept nearly both whole (PC-18). That sample is the transit, as
+    // before, where it lies within the turn; the arc's own middle is otherwise.
+    let e1 = (a - centre) * (1.0 / r);
+    let e2 = n.cross(e1);
+    let angle = |p: Vec3| pmath::atan2((p - centre).dot(e2), (p - centre).dot(e1));
+    let wrap = |x: f64| {
+        if x > PI {
+            x - TAU
+        } else if x <= -PI {
+            x + TAU
+        } else {
+            x
+        }
+    };
+    let mut turned = Vec::with_capacity(pts.len());
+    let (mut total, mut prev) = (0.0, 0.0);
+    for p in &pts {
+        let th = angle(*p);
+        total += wrap(th - prev);
+        prev = th;
+        turned.push(total);
+    }
+    let sweep = total + wrap(angle(b) - total);
+    if !(sweep.abs() > tol / r && sweep.abs() < TAU) {
+        return None;
+    }
+    let within = |t: f64| if sweep > 0.0 { t > 0.0 && t < sweep } else { t < 0.0 && t > sweep };
+    let transit = match (pts.get(8), turned.get(8)) {
+        (Some(p), Some(t)) if within(*t) => *p,
+        _ => {
+            let (s, c) = pmath::sin_cos(sweep / 2.0);
+            centre + e1 * (r * c) + e2 * (r * s)
+        }
+    };
+    Some(builder::circle_arc(e.absolute_front(), e.absolute_back(), mt::Point3::new(transit.x, transit.y, transit.z)))
 }
 
 /// Replace approximate edges that are really lines or arcs with exact ones.
@@ -719,5 +758,70 @@ mod tests {
         let (t0, t1) = c.range_tuple();
         let mid = c.subs((t0 + t1) / 2.0);
         assert!(((mid.x * mid.x + mid.y * mid.y).sqrt() - 10.0).abs() < 1e-9, "{mid:?}");
+    }
+
+    /// A polyline (a degree-1 B-spline) through the points at `angles` (radians) on the circle
+    /// of radius 10 about the origin in the XY plane, as an edge from its first point to its last.
+    fn polyline_on_circle(angles: &[f64]) -> mt::Edge {
+        let at = |t: f64| {
+            let (s, c) = pmath::sin_cos(t);
+            mt::Point3::new(10.0 * c, 10.0 * s, 0.0)
+        };
+        let pts: Vec<mt::Point3> = angles.iter().map(|t| at(*t)).collect();
+        let (a, b) = (builder::vertex(pts[0]), builder::vertex(pts[pts.len() - 1]));
+        let curve = mt::BSplineCurve::new(mt::KnotVec::uniform_knot(1, pts.len() - 1), pts);
+        mt::Edge::new(&a, &b, mt::Curve::BSplineCurve(curve))
+    }
+
+    /// The angle (radians, in [0, 2π)) of the middle of an arc edge on that circle, and its length
+    /// in angle: the arc's samples at the quarter points, which tell the short way from the long.
+    fn arc_middle_and_sweep(e: &mt::Edge) -> (f64, f64) {
+        use mt::{BoundedCurve, ParametricCurve};
+        let c = e.curve();
+        let (t0, t1) = c.range_tuple();
+        let at = |k: f64| {
+            let p = c.subs(t0 + (t1 - t0) * k);
+            assert!(((p.x * p.x + p.y * p.y).sqrt() - 10.0).abs() < 1e-9 && p.z.abs() < 1e-9, "{p:?} is not on the circle");
+            pmath::atan2(p.y, p.x).rem_euclid(TAU)
+        };
+        let step = |x: f64, y: f64| (y - x).rem_euclid(TAU);
+        let sweep = (0..8).map(|k| step(at(k as f64 / 8.0), at((k + 1) as f64 / 8.0))).sum::<f64>();
+        (at(0.5), sweep)
+    }
+
+    /// An intersection edge cut from a longer curve can keep a point of that curve a few microns
+    /// past the vertex it was cut at, so its polyline folds back there. The arc fitted to it is
+    /// the short one the samples trace, not the long way round through the folded sample (PC-18:
+    /// a 0.3 mm edge of the circle two spheres meet in, whose arc went 6.26 rad round).
+    #[test]
+    fn a_folded_intersection_edge_fits_the_short_arc() {
+        // The fold is the sample at the middle of the parameter range (the fourth of eight
+        // segments ends there), 0.0006 rad (6 µm) past the back vertex at 0.030.
+        let e = polyline_on_circle(&[0.0, 0.0075, 0.015, 0.0225, 0.0306, 0.0304, 0.0302, 0.0301, 0.030]);
+        let fitted = fit_exact(&e, 3e-4).expect("an arc");
+        assert!(matches!(fitted.curve(), mt::Curve::NurbsCurve(_)), "an arc, not a line");
+        let (middle, sweep) = arc_middle_and_sweep(&fitted);
+        assert!((middle - 0.015).abs() < 1e-9 && (sweep - 0.030).abs() < 1e-9, "middle {middle}, sweep {sweep}");
+    }
+
+    /// Samples that go most of the way round the circle fit the long arc they trace (its middle
+    /// sample lies within the turn, and stays the transit, as before).
+    #[test]
+    fn samples_round_most_of_a_circle_fit_the_long_arc() {
+        let angles: Vec<f64> = (0..=16).map(|k| 5.5 * k as f64 / 16.0).collect();
+        let fitted = fit_exact(&polyline_on_circle(&angles), 1e-6).expect("an arc");
+        let (middle, sweep) = arc_middle_and_sweep(&fitted);
+        assert!((middle - 2.75).abs() < 1e-9 && (sweep - 5.5).abs() < 1e-9, "middle {middle}, sweep {sweep}");
+    }
+
+    /// A sample that jumps along the circle and back (where the surfaces' intersection was
+    /// solved from a poor seed) still gives the arc the rest trace.
+    #[test]
+    fn a_sample_jumping_along_the_circle_does_not_turn_the_arc() {
+        let mut angles: Vec<f64> = (0..=16).map(|k| 0.5 * k as f64 / 16.0).collect();
+        angles[8] = 3.0;
+        let fitted = fit_exact(&polyline_on_circle(&angles), 1e-6).expect("an arc");
+        let (middle, sweep) = arc_middle_and_sweep(&fitted);
+        assert!((middle - 0.25).abs() < 1e-9 && (sweep - 0.5).abs() < 1e-9, "middle {middle}, sweep {sweep}");
     }
 }

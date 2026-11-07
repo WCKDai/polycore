@@ -485,16 +485,39 @@ fn coaxial_cylinders_closed_form() {
 }
 
 /// Two spheres on the grid, overlapping deeply (centres 17 mm apart, radii 15 and 12.5): the
-/// union keeps nearly both volumes (22314.8 mm³ against 20256.5 mm³ for A + B - A∩B) though it
-/// is one sound shell. Found by `identity_on_grid` at `PROPTEST_CASES=200` while #32 was fixed
-/// (PC-10); its seed is saved beside the others. Ignored until the kernel is fixed; needs its
-/// own issue.
+/// union kept nearly both volumes (22314.8 mm³ against 20256.5 mm³ for A + B - A∩B) though it
+/// was one sound shell. Found by `identity_on_grid` at `PROPTEST_CASES=200` while #32 was fixed
+/// (PC-10); its seed is saved beside the others. Healing fitted an exact arc to a 0.3 mm edge
+/// of the circle the spheres meet in, whose intersection curve folds back a few microns past
+/// its end, and the arc through that fold ran the long way round the circle, so two faces
+/// were drawn whole again (PC-18).
+fn grid_spheres() -> (Prim, Prim) {
+    (Prim::Sph { at: [7.5, 25.0, 22.5], r: 15.0 }, Prim::Sph { at: [5.0, 10.0, 15.0], r: 12.5 })
+}
+
 #[test]
-#[ignore = "union of two overlapping grid spheres keeps nearly both volumes (found fixing #32, PC-10)"]
 fn grid_spheres_union_identity() {
-    let a = Prim::Sph { at: [7.5, 25.0, 22.5], r: 15.0 };
-    let b = Prim::Sph { at: [5.0, 10.0, 15.0], r: 12.5 };
+    let (a, b) = grid_spheres();
     check(identity(&a, &b));
+    check(identity(&b, &a));
+}
+
+/// The PC-18 pair against its closed forms: the lens the spheres share (centres `d` apart,
+/// radii `r1` and `r2`: π (r1 + r2 − d)² (d² + 2d (r1 + r2) − 3 (r1 − r2)²) / 12d), the union
+/// A + B − lens, the cut A − lens; and the union is one closed, consistently oriented shell.
+#[test]
+fn grid_spheres_closed_form() {
+    let (a, b) = grid_spheres();
+    let (Prim::Sph { at: ca, r: r1 }, Prim::Sph { at: cb, r: r2 }) = (&a, &b) else { panic!("spheres") };
+    let d = Vec3::new(ca[0], ca[1], ca[2]).dist(Vec3::new(cb[0], cb[1], cb[2]));
+    assert!(d < r1 + r2 && d > (r1 - r2).abs(), "the spheres overlap without one inside the other");
+    let lens = PI * (r1 + r2 - d).powi(2) * (d * d + 2.0 * d * (r1 + r2) - 3.0 * (r1 - r2).powi(2)) / (12.0 * d);
+    let (va, vb) = (4.0 / 3.0 * PI * r1.powi(3), 4.0 / 3.0 * PI * r2.powi(3));
+    closed_form(&a, &b, [lens, va + vb - lens, va - lens]);
+    let body = boolean(&a.body(), &b.body(), BoolOp::Union).unwrap().expect("the spheres share material");
+    let bad = body.validity();
+    assert!(bad.is_empty(), "the union is not a closed manifold solid: {}", bad.join("; "));
+    assert_eq!(body.shell_count(), 1);
 }
 
 /// The same case must fail cleanly: on the sliver where the cylinders touch, truck's face division
